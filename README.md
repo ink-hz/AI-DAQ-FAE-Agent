@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-`feat/full-daq-fae-parity` 已有可运行的**本机 Dev 实例**。当前知识发布 `empty-dev-v0` 没有已审核数采事实，因此产品参数、兼容性、操作步骤和下载链接应明确缺证。当前共享 `src/` 是 [upstream-source.json](upstream-source.json) 记录的集成快照；上游集成分支已推送远端，但尚未核实受保护的持久 Git ref，因此不是正式依赖 pin。
+`master`（2026-10-08 核对：`8cea98b`，已在 `origin/master`）包含可运行的**本机 Dev 实例**。当前知识发布 `empty-dev-v0` 没有已审核数采事实，因此产品参数、兼容性、操作步骤和下载链接应明确缺证。当前共享 `src/` 是 [upstream-source.json](upstream-source.json) 记录的集成快照；上游集成分支已推送远端，但尚未核实受保护的持久 Git ref，因此不是正式依赖 pin。
 
 | 能力 | 当前接入情况 |
 | --- | --- |
@@ -16,7 +16,7 @@
 | Platform 身份、Postgres 会话/反馈、review、HTTP Task | 已装配可选内部认证模式；数采 Agent ID、任务签名 audience、会话和资料隔离；真实 Platform 联调未完成 |
 | 数采事实、关系、权限和知识发布 | 空知识；待资料归档、裁决、可见性与发布清单 |
 
-**尚不能宣布完整能力等价或试点可发布。** 共享源码虽已推送远端集成分支，受保护依赖 pin 尚未核实；真实 Opus 网关有一次 476 秒传输失败，相机 Dev 回归有一个硬失败和一个答案矛盾；数采真实知识、Platform 实例联调和部署回滚仍未验收。[迁移计划](docs/superpowers/plans/2026-10-08-full-runtime-parity-migration.md)与[完整设计](docs/2026-10-08-数采FAE完整设计.md)记录发布门。
+**尚不能宣布完整能力等价或试点可发布。** 共享源码虽已推送远端集成分支，受保护依赖 pin 尚未核实；真实 Opus 网关有一次 476 秒传输失败，相机 Dev 回归有一个硬失败和一个答案矛盾；数采真实知识、Platform 实例联调和部署回滚仍未验收。原始数采资料已有本机受限归档候选和逐文件哈希，但持久存储与资料裁决尚未验收，不进入当前知识发布。[接管门禁核查](docs/reviews/2026-10-08-daq-takeover-gate-audit.md)、[迁移计划](docs/superpowers/plans/2026-10-08-full-runtime-parity-migration.md)与[完整设计](docs/2026-10-08-数采FAE完整设计.md)记录发布门。
 
 ## 本机启动
 
@@ -49,7 +49,7 @@ curl -fsSN -H 'content-type: application/json' \
 cd webui && npm test && npm run build
 ```
 
-源码核验会读取 `upstream-source.json` 中的完整提交 SHA，比对两仓的 `src/` Git tree 和 `requirements.txt` blob，并拒绝未提交的共享源码改动。GitHub CI 也执行此门，私有上游仓需配置只读 `FAE_UPSTREAM_READ_TOKEN`。当前数采仓尚无远端、上游 ref 的保护设置未核实，因此 CI 配置存在不代表远端流水线已运行或正式依赖 pin 已完成。
+源码核验会读取 `upstream-source.json` 中的完整提交 SHA，比对两仓的 `src/` Git tree 和 `requirements.txt` blob，并拒绝未提交的共享源码改动。GitHub CI 定义也包含此门，私有上游仓需配置只读 `FAE_UPSTREAM_READ_TOKEN`。数采仓已有 `origin/master`；本次未取得远端 CI 运行结果和上游 ref 保护设置的核验证据，因此不能把本机测试或已推送代码计为正式依赖 pin、CI 通过或生产部署。
 
 正式依赖 pin 之前还需完成旧 FAE Dev 回归、双服务合同、上游受保护 ref、数采真实 Dev 回放与独立答案复审。数采资料和用户附件不能自动进入知识库；发布仍受来源、事实裁决和角色权限约束。
 

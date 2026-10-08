@@ -4,7 +4,7 @@
 
 **日期**：2026-10-08
 
-**状态**：正式 M0/K/A/P/V 任务待执行；数采仓已有空知识本地 Dev 烟测版，但未达到非知识能力等价，详见[能力对照审查](../../reviews/2026-10-08-bootstrap-capability-parity-audit.md)。
+**状态**：本任务书保留原始验收门；截至 2026-10-08，M0 与 A/P 的部分代码已在空知识本机 Dev 装配，但完整门禁均未通过，K 的真实资料发布和 V 的试点验收仍待完成。逐门实测状态见[接管门禁核查](../../reviews/2026-10-08-daq-takeover-gate-audit.md)，早期缺口见[能力对照审查](../../reviews/2026-10-08-bootstrap-capability-parity-audit.md)。
 
 **目标**：交付面向内部 FAE/技术支持的独立数采 Agent，复用固定版本的现有 FAE 通用能力，独立发布知识与服务，并以真实 Dev 验收证明不会损害现有 FAE 的回答质量。
 
@@ -55,7 +55,7 @@ M0 内部顺序是：M0-1 核对基线并确定持久 ref 策略；M0-2/M0-3 完
 
 **输入**：`a6234f6be546efebb230ffc74bd9a00bebdc2814`、发布脚本、只读生产 `/health` 与 release manifest。生产身份已由只读健康、当前发布包和成功发布清单交叉确认；该 SHA 仍不在 `master` 或 tag 上，持久 Git 锚点未完成。核查记录见 `docs/reviews/2026-10-08-upstream-fae-baseline-audit.md`。
 
-**交付物**：核对记录（生产 build SHA、发布清单 SHA/镜像 digest、核查时间）；上游受保护分支或不可改写发布 tag 的落地策略；**把 FAE 设计基线 `881c149` 保存在远端受保护分支，并记录分支保护设置或规则集的核验证据**。`881c149` 已作为 `origin/docs/data-acquisition-fae-design-20261008` 上已推送后继提交的祖先保持可达；本次核查用 `git merge-base --is-ancestor` 与 `git ls-remote` 分别验证历史关系和远端引用。保护设置尚未核实，不能算这一项通过。数采仓目前只有本地 Git、无远端；建立可复取的仓库远端/保护策略也是本任务的一部分。最终源码 tag 和构建锁定在 M0-5 完成。
+**交付物**：核对记录（生产 build SHA、发布清单 SHA/镜像 digest、核查时间）；上游受保护分支或不可改写发布 tag 的落地策略；**把 FAE 设计基线 `881c149` 保存在远端受保护分支，并记录分支保护设置或规则集的核验证据**。`881c149` 已作为 `origin/docs/data-acquisition-fae-design-20261008` 上已推送后继提交的祖先保持可达；既有核查用 `git merge-base --is-ancestor` 与 `git ls-remote` 分别验证历史关系和远端引用。保护设置尚未核实，不能算这一项通过。数采仓 `master` 已在 `origin/master`，但远端保护策略与 CI 结果仍须核验。最终源码 tag 和构建锁定在 M0-5 完成。
 
 **通过条件**：能区分生产部署事实、远端 Git 可达性和分支保护状态；`881c149` 在 FAE 远端受保护分支可取得，保护规则有可核查记录；确认最终上游变更能被持久 ref 保留，且数采仓可建立持久远端。生产核查只读，不发送测试问题。
 
