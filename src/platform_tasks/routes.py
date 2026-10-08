@@ -9,6 +9,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from src.platform_identity.models import DEFAULT_AGENT_ID, validate_agent_id
 from src.platform_tasks.identity import (
     TaskIdentityError,
     TaskTokenVerifier,
@@ -112,9 +113,11 @@ class PlatformTaskCapabilities:
     supported_event_kinds: tuple[str, ...]
 
     @classmethod
-    def fae_v1(cls, *, capability_version: int = 2) -> PlatformTaskCapabilities:
+    def fae_v1(
+        cls, *, capability_version: int = 2, agent_id: str = DEFAULT_AGENT_ID
+    ) -> PlatformTaskCapabilities:
         return cls(
-            agent_id="ai-fae-agent",
+            agent_id=validate_agent_id(agent_id),
             capability_version=capability_version,
             supports_actions=False,
             max_duration_seconds=600,

@@ -18,11 +18,13 @@ import psycopg
 from psycopg.rows import dict_row
 
 from src.platform_identity.models import (
+    DEFAULT_AGENT_ID,
     AuthenticatedAccountProjection,
     AuthenticatedSessionRecord,
     IssuedAuthenticatedSession,
     PlatformIdentityError,
     PlatformSubject,
+    validate_agent_id,
 )
 
 _LAUNCH_CODE = re.compile(r"[A-Za-z0-9_-]{32,256}\Z")
@@ -68,8 +70,8 @@ def _storage_upgrade_required() -> PlatformIdentityError:
     )
 
 
-def _valid_subject_shape(subject: PlatformSubject) -> bool:
-    if subject.agent_id != "ai-fae-agent" or not subject.active:
+def _valid_subject_shape(subject: PlatformSubject, *, agent_id: str) -> bool:
+    if subject.agent_id != agent_id or not subject.active:
         return False
     if subject.subject_type == "enterprise_member":
         return (
@@ -83,7 +85,7 @@ def _valid_subject_shape(subject: PlatformSubject) -> bool:
 
 
 def _subject_matches_record(
-    subject: PlatformSubject, record: AuthenticatedSessionRecord
+    subject: PlatformSubject, record: AuthenticatedSessionRecord, *, agent_id: str
 ) -> bool:
     """One comparison for every path that re-reads a Platform subject."""
     return (
@@ -92,7 +94,7 @@ def _subject_matches_record(
         and subject.internal_user_id == record.internal_user_id
         and subject.identity_binding_id == record.identity_binding_id
         and subject.agent_id == record.agent_id
-        and _valid_subject_shape(subject)
+        and _valid_subject_shape(subject, agent_id=agent_id)
     )
 
 
@@ -385,7 +387,9 @@ class AuthenticatedSessionService:
         absolute_ttl_seconds: int,
         now: Callable[[], datetime] | None = None,
         partner_subject_ownership_ready: bool = False,
+        agent_id: str = DEFAULT_AGENT_ID,
     ) -> None:
+        self._agent_id = validate_agent_id(agent_id)
         if not 0 <= validation_cache_seconds <= 60:
             raise ValueError("enterprise_validation_cache_invalid")
         if idle_ttl_seconds <= 0 or absolute_ttl_seconds < idle_ttl_seconds:
@@ -408,7 +412,7 @@ class AuthenticatedSessionService:
         if not isinstance(code, str) or _LAUNCH_CODE.fullmatch(code) is None:
             raise PlatformIdentityError("launch_code_invalid", status_code=401)
         subject = await self._platform_client.exchange(code)
-        if not _valid_subject_shape(subject):
+        if not _valid_subject_shape(subject, agent_id=self._agent_id):
             raise PlatformIdentityError("identity_binding_invalid", status_code=401)
         self._require_subject_ownership(subject.subject_type)
         now = self._now()
@@ -463,7 +467,7 @@ class AuthenticatedSessionService:
                 if exc.status_code != 503:
                     self._repository.revoke(record.session_id, now=now)
                 raise
-            if not _subject_matches_record(subject, record):
+            if not _subject_matches_record(subject, record, agent_id=self._agent_id):
                 self._repository.revoke(record.session_id, now=now)
                 raise PlatformIdentityError("identity_binding_invalid", status_code=401)
             validated_at = now
@@ -495,7 +499,7 @@ class AuthenticatedSessionService:
                 )
             self._repository.revoke(record.session_id, now=self._now())
             raise
-        if not _subject_matches_record(subject, record):
+        if not _subject_matches_record(subject, record, agent_id=self._agent_id):
             self._repository.revoke(record.session_id, now=self._now())
             raise PlatformIdentityError("identity_binding_invalid", status_code=401)
         return AuthenticatedAccountProjection.from_subject(subject)
@@ -541,7 +545,7 @@ class AuthenticatedSessionService:
         record = self._repository.find_by_token_hash(
             self._tokens.candidate_digests("session", session_token)
         )
-        if record is None:
+        if record is None or record.agent_id != self._agent_id:
             raise PlatformIdentityError("enterprise_session_invalid", status_code=401)
         return record
 

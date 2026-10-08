@@ -7,9 +7,11 @@ from uuid import UUID
 import httpx
 
 from src.platform_identity.models import (
+    DEFAULT_AGENT_ID,
     PlatformIdentityError,
     PlatformSubject,
     safe_display_name,
+    validate_agent_id,
 )
 
 CONTRACT_VERSION = "orbbec-fae-identity/v1"
@@ -38,9 +40,11 @@ class PlatformIdentityClient:
         self,
         base_url: str,
         *,
+        agent_id: str = DEFAULT_AGENT_ID,
         timeout_seconds: float = 5.0,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
+        self._agent_id = validate_agent_id(agent_id)
         parsed = urlsplit(base_url)
         hostname = parsed.hostname or ""
         try:
@@ -85,7 +89,7 @@ class PlatformIdentityClient:
     async def validate(self, binding_id: UUID) -> PlatformSubject:
         return await self._post_subject(
             f"/api/v1/internal/agent-bindings/{binding_id}/validate",
-            {"agent_id": "ai-fae-agent"},
+            {"agent_id": self._agent_id},
             expected_fields=_VALIDATE_FIELDS,
         )
 
@@ -162,6 +166,6 @@ class PlatformIdentityClient:
             raise PlatformIdentityError(
                 "platform_identity_protocol_error", status_code=503
             ) from None
-        if subject.agent_id != "ai-fae-agent" or not subject.active:
+        if subject.agent_id != self._agent_id or not subject.active:
             raise PlatformIdentityError("identity_binding_invalid", status_code=401)
         return subject

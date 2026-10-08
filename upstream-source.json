@@ -1,6 +1,7 @@
 {
   "repository": "AI-FAE-Agent",
-  "revision": "a6234f6be546efebb230ffc74bd9a00bebdc2814",
+  "revision": "3d0b06d8fc2af5fa3c8f3f1597fe97f78e750f24",
+  "deployed_basis_revision": "a6234f6be546efebb230ffc74bd9a00bebdc2814",
   "source": "tracked git archive of src/ and requirements.txt",
-  "purpose": "temporary local Dev bootstrap snapshot; replace with a protected pinned dependency before milestone 0 completion"
+  "purpose": "temporary local Dev integration snapshot with EvidencePolicy and trusted agent identity; replace with a protected pinned dependency after upstream Dev regression before milestone 0 completion"
 }

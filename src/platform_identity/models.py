@@ -17,6 +17,17 @@ _CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f]")
 _DISPLAY_NAME_LIMIT = 64
 
 
+DEFAULT_AGENT_ID = "ai-fae-agent"
+_AGENT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
+
+
+def validate_agent_id(agent_id: str) -> str:
+    """Validate trusted service identity; never derive it from browser input."""
+    if not isinstance(agent_id, str) or _AGENT_ID.fullmatch(agent_id) is None:
+        raise ValueError("agent_id_invalid")
+    return agent_id
+
+
 def authentication_mode_for(subject_type: str) -> AuthenticationMode:
     mode = _AUTHENTICATION_MODES.get(subject_type)
     if mode is None:

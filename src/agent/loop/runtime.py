@@ -14,7 +14,7 @@ import copy
 import json
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
@@ -25,11 +25,17 @@ from src.agent.loop.answer_contract import (
     submit_answer_tool_schema,
     validate_submission,
 )
+from src.agent.loop.evidence_policy import (
+    EvidenceDecision,
+    EvidencePolicy,
+    EvidenceSession,
+    EvidenceSnapshot,
+)
 from src.agent.loop.link_delivery import (
     missing_link_deliveries,
     verified_urls_by_link_type,
 )
-from src.agent.loop.tools import ToolBox
+from src.agent.loop.tools import ToolBox, ToolResult
 from src.agent.official_links import extract_literal_https_urls
 from src.agent.protocol import (
     OUTCOME_BUDGET_EXHAUSTED,
@@ -563,11 +569,13 @@ class LoopConfig:
 
 class LoopRuntime:
     def __init__(self, adapter, toolbox: ToolBox, config: LoopConfig | None = None,
-                 system_prompt_path: Path | None = None):
+                 system_prompt_path: Path | None = None, *,
+                 evidence_policy: EvidencePolicy | None = None):
         self.adapter = adapter
         self.toolbox = toolbox
         self.config = config or LoopConfig()
         self.system_prompt_path = system_prompt_path or _DEFAULT_PROMPT_PATH
+        self.evidence_policy = evidence_policy
 
     def _system_prompt(self, entity_note: str) -> str:
         text = self.system_prompt_path.read_text(encoding="utf-8")
@@ -585,6 +593,7 @@ class LoopRuntime:
             attachment_dependency: str = "unknown",
             required_series_evidence: list[dict] | None = None,
             continuation_guard: Callable[[], None] | None = None,
+            *, evidence_requirements: Mapping[str, object] | None = None,
             ) -> Iterator[dict]:
         cfg = self.config
         if attachment_dependency not in {
@@ -725,7 +734,54 @@ class LoopRuntime:
         provider_transport_rounds: list[dict] = []
         provider_model_rounds: list[dict] = []
 
+        policy_session: EvidenceSession | None = None
+        policy_snapshot: EvidenceSnapshot | None = None
+        policy_failure: str | None = None
+        policy_reason: str | None = None
+        policy_retry_rounds = 0
+
+        def refresh_policy_snapshot() -> None:
+            nonlocal policy_snapshot, policy_failure
+            try:
+                assert policy_session is not None
+                snapshot = policy_session.snapshot()
+                if not isinstance(snapshot, EvidenceSnapshot):
+                    raise TypeError("evidence_policy_snapshot_invalid")
+                policy_snapshot = snapshot
+            except Exception:
+                # Policy errors are protocol failures, not evidence gaps. Never
+                # include exception text: it can contain private evidence.
+                policy_failure = "snapshot_failed"
+
+        def observe_policy(tool_name: str, result: ToolResult) -> None:
+            nonlocal policy_failure
+            try:
+                assert policy_session is not None
+                # A domain policy cannot mutate the model-visible result or sources.
+                policy_session.observe(tool_name, copy.deepcopy(result))
+            except Exception:
+                policy_failure = "observe_failed"
+                return
+            refresh_policy_snapshot()
+
+        if self.evidence_policy is not None:
+            try:
+                policy_session = self.evidence_policy.begin(
+                    copy.deepcopy(dict(evidence_requirements or {})))
+                if not all(callable(getattr(policy_session, name, None))
+                           for name in ("observe", "evaluate", "snapshot")):
+                    raise TypeError("evidence_policy_session_invalid")
+            except Exception:
+                policy_failure = "begin_failed"
+            if policy_failure is None:
+                refresh_policy_snapshot()
+
         while True:
+            if policy_failure is not None:
+                final_outcome = forced_stop or OUTCOME_INVALID_ANSWER_CONTRACT
+                contract_error = "evidence_policy:" + policy_failure
+                final_answer = _FAILURE_ANSWERS[final_outcome]
+                break
             if continuation_guard is not None:
                 continuation_guard()
             self._trim_old_tool_results(messages)
@@ -1170,6 +1226,41 @@ class LoopRuntime:
                     final_answer = _FAILURE_ANSWERS[final_outcome]
                     break
 
+                if policy_session is not None:
+                    try:
+                        decision = policy_session.evaluate(submission)
+                        if not isinstance(decision, EvidenceDecision):
+                            raise TypeError("evidence_policy_decision_invalid")
+                    except Exception:
+                        policy_failure = "evaluate_failed"
+                        continue
+                    refresh_policy_snapshot()
+                    if policy_failure is not None:
+                        continue
+                    policy_reason = decision.reason_code or None
+                    if decision.action != "allow":
+                        error = "evidence_policy:" + decision.reason_code
+                        if (
+                            decision.action == "request_evidence"
+                            and forced_stop is None
+                            and policy_retry_rounds < _MAX_EVIDENCE_RETRY_ROUNDS
+                        ):
+                            policy_retry_rounds += 1
+                            messages.append(_assistant_message(
+                                text, calls, provider_blocks=turn_provider_blocks))
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": submit_calls[0].get("id", ""),
+                                "content": json.dumps({"status": "invalid", "error": error}),
+                            })
+                            messages.append({"role": "user", "content": decision.notice})
+                            continue
+                        policy_failure = decision.reason_code
+                        contract_error = error
+                        final_outcome = forced_stop or OUTCOME_INVALID_ANSWER_CONTRACT
+                        final_answer = _FAILURE_ANSWERS[final_outcome]
+                        break
+
                 submitted_outcome = submission.outcome
                 final_answer = rendered
                 final_outcome = forced_stop or submission.outcome
@@ -1201,7 +1292,10 @@ class LoopRuntime:
                                               verified_urls,
                                               verified_urls_by_type,
                                               provenance_parts,
-                                              read_doc_counts, dup_index)
+                                              read_doc_counts, dup_index,
+                                              observe_policy if policy_session is not None else None)
+                    if policy_failure is not None:
+                        break
                 if len(tool_log) >= cfg.max_tool_calls:
                     forced_stop = OUTCOME_BUDGET_EXHAUSTED
                     messages.append({"role": "user", "content": _BUDGET_NOTICE})
@@ -1219,6 +1313,8 @@ class LoopRuntime:
                         or device_support_evidence_required
                         or required_series_evidence
                         or required_image_source_ids
+                        or (policy_snapshot is not None
+                            and policy_snapshot.has_outstanding_requirements)
                     )
                 ):
                     evidence_wrapup_used_at_request = len(tool_log)
@@ -1453,6 +1549,27 @@ class LoopRuntime:
             })
             if done["vision_invoked"] and self.toolbox.attachment_vision_model:
                 done["vision_model"] = self.toolbox.attachment_vision_model
+        if self.evidence_policy is not None:
+            done["evidence_policy"] = {
+                "retry_rounds": policy_retry_rounds,
+                "reason_code": policy_reason,
+                "failure_reason": policy_failure,
+                "requirement_status": (
+                    dict(policy_snapshot.requirement_status) if policy_snapshot else {}),
+            }
+            if policy_snapshot is not None:
+                done["planned_capabilities"] = list(dict.fromkeys([
+                    *policy_snapshot.planned_capabilities,
+                    *done.get("planned_capabilities", []),
+                ]))
+                done["actual_capabilities"] = list(dict.fromkeys([
+                    *policy_snapshot.actual_capabilities,
+                    *(["user_attachment"] if used_attachment_source_ids else []),
+                ]))
+                done["capability_coverage"] = {
+                    **policy_snapshot.capability_coverage,
+                    **done.get("capability_coverage", {}),
+                }
         provider_transport = aggregate_provider_transport(provider_transport_rounds)
         if provider_transport is not None:
             done["provider_transport"] = provider_transport
@@ -1517,7 +1634,9 @@ class LoopRuntime:
                   verified_urls_by_type: dict[str, set[str]],
                   provenance_parts: list[str],
                   read_doc_counts: dict | None = None,
-                  dup_index: dict | None = None) -> Iterator[dict]:
+                  dup_index: dict | None = None,
+                  evidence_observer: Callable[[str, ToolResult], None] | None = None,
+                  ) -> Iterator[dict]:
         # C2-a 去重反馈:同名同参且原结果仍完整在上下文 → 不执行,回注指引;
         # 原结果已被裁剪(带 _TRIM_MARK)则视为合法重读,放行执行。
         canon = (call["name"],
@@ -1542,6 +1661,8 @@ class LoopRuntime:
         t0 = time.time()
         result = self.toolbox.dispatch(call["name"], call["arguments"])
         duration_ms = int((time.time() - t0) * 1000)
+        if evidence_observer is not None:
+            evidence_observer(call["name"], result)
         if result.status != "tool_error":
             for src in result.sources:
                 key = (

@@ -15,6 +15,8 @@ from typing import Literal
 
 from dotenv import load_dotenv
 
+from src.platform_identity.models import DEFAULT_AGENT_ID, validate_agent_id
+
 load_dotenv()
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -39,6 +41,8 @@ class ResolvedVisionConfig:
 
 @dataclass(frozen=True)
 class Config:
+    # Trusted deployment identity shared by Platform identity and task audiences.
+    agent_id: str
     # LLM provider 抽象
     llm_provider: LLMProvider
     llm_api_key: str
@@ -418,6 +422,7 @@ def load_config() -> Config:
         platform_authenticated_content_keyring_file = conversation_keyring_path
 
     return Config(
+        agent_id=validate_agent_id(os.getenv("AGENT_ID", DEFAULT_AGENT_ID)),
         llm_provider=provider,  # type: ignore
         llm_api_key=llm_api_key,
         llm_base_url=os.getenv("LLM_BASE_URL", ""),

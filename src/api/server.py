@@ -223,9 +223,10 @@ def create_app() -> FastAPI:
         if cfg.platform_authenticated_content_keyring_file is None:
             raise RuntimeError("platform_authenticated_content_keyring_missing")
         platform_identity_client = PlatformIdentityClient(
-            cfg.platform_identity_base_url
+            cfg.platform_identity_base_url, agent_id=cfg.agent_id
         )
         authenticated_session_service = AuthenticatedSessionService(
+            agent_id=cfg.agent_id,
             repository=PostgresAuthenticatedSessionRepository(cfg.database_url),
             platform_client=platform_identity_client,
             token_keyring=SessionTokenKeyring.from_file(
@@ -274,10 +275,11 @@ def create_app() -> FastAPI:
         )
         platform_task_verifier = TaskTokenVerifier.from_files(
             dict(cfg.platform_task_public_key_paths),
-            audience="ai-fae-agent",
+            audience=cfg.agent_id,
         )
         platform_task_capabilities = PlatformTaskCapabilities.fae_v1(
-            capability_version=cfg.platform_task_capability_version
+            capability_version=cfg.platform_task_capability_version,
+            agent_id=cfg.agent_id,
         )
         app.state.platform_task_store = platform_task_store
         app.state.platform_task_capabilities = platform_task_capabilities
