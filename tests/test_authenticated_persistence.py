@@ -33,7 +33,7 @@ class Conversations:
             raise ConversationNotFound('conversation_not_found')
         return session
 
-    def save_turn_and_checkpoint(self, session, *, turn, attachment_relations=()):
+    def save_turn_and_checkpoint(self, session, *, turn, attachment_relations=(), connection=None):
         self.writes.append((session, turn, attachment_relations))
         self.sessions[session.session_id] = session
         return 'turn-1'
@@ -98,6 +98,8 @@ def test_missing_persistence_config_fails_closed(tmp_path, missing):
                                      'postgresql://fae_user@localhost/fae_database',
                                      'postgresql://fae_user@localhost:5432/another_database',
                                      'postgresql://daq_user@localhost/%66ae_database',
+                                     'postgresql://fae_user@127.0.0.1/daq_database',
+                                     'postgresql://daq_user@127.0.0.1/fae_database',
                                      'postgresql://daq_user@localhost/another_database?user=fae_user'])
 def test_database_user_and_domain_must_be_dedicated(tmp_path, database):
     from daq_fae.authenticated_persistence import configure_authenticated_persistence

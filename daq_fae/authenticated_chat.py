@@ -1,6 +1,7 @@
 """Owner-bound DAQ browser turns with durable replay and explicit failures."""
 from __future__ import annotations
 
+import copy
 import time
 import threading
 from datetime import UTC, datetime
@@ -22,6 +23,7 @@ from src.storage.data_flywheel import ChatTurnRecord
 from daq_fae.attachment_evidence import extend_with_attachments
 from daq_fae.domain_evidence import DaqEvidencePolicy
 from daq_fae.domain_tools import DaqToolBox
+from daq_fae.empty_knowledge_synthesis import refine_empty_release_answer
 from daq_fae.durable_state import (
     ContextConflict, DaqContextState, DurableStateError, RequestConflict,
     RequestInterrupted, SessionBusy,
@@ -117,6 +119,13 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
             yield emit("session", {"session_id": session.session_id, "agent_id": agent_id,
                                    "client_request_id": body.client_request_id})
             yield emit("stage", {"stage": "loop", "status": "running"})
+            # Protect local bytes before model latency can outlive processing TTL.
+            # The relation is committed with the turn only after the answer exists.
+            attachment_relations = app.state.attachment_archive_service.prepare_turn(
+                [item.attachment_id for item in session.visible_attachments()],
+                explicit_attachment_ids=body.attachment_ids,
+                answer_at=datetime.now(UTC),
+            )
             refusal = categorize_refusal(body.message)
             if refusal:
                 category, answer = refusal
@@ -206,14 +215,19 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
                          ),
                          "duration_ms": int((time.monotonic() - start) * 1000)})
             done.pop("provenance", None)
+            refine_empty_release_answer(
+                done, planned_capabilities=done["planned_capabilities"],
+                knowledge_release=knowledge_release,
+            )
             if lease_lost.is_set():
                 raise RequestInterrupted("daq_execution_lease_lost")
-            session.append_message("user", body.message)
-            session.append_message("assistant", done["answer"])
+            working_session = copy.deepcopy(session)
+            working_session.append_message("user", body.message)
+            working_session.append_message("assistant", done["answer"])
             turn = ChatTurnRecord(
                 external_session_id=session.session_id, channel=session.channel,
                 question=body.message, answer=done["answer"], trace_id=trace.trace_id,
-                turn_index=sum(item["role"] == "user" for item in session.messages) - 1,
+                turn_index=sum(item["role"] == "user" for item in working_session.messages) - 1,
                 sources=done.get("sources", []), stages=calls, done=done,
                 planned_capabilities=done["planned_capabilities"],
                 capability_coverage=coverage, fallback_used=done["fallback_used"],
@@ -221,22 +235,32 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
                 duration_ms=done["duration_ms"],
             )
             try:
-                attachment_relations = app.state.attachment_archive_service.prepare_turn(
-                    [item.attachment_id for item in session.visible_attachments()],
-                    explicit_attachment_ids=body.attachment_ids,
-                    answer_at=datetime.now(UTC),
-                )
-                done["turn_id"] = persistence.save_turn(
-                    subject, session, turn=turn, attachment_relations=attachment_relations,
-                )
+                # A progress stream can run for longer than the lease without
+                # ever emitting a heartbeat. Check ownership immediately before
+                # writing the durable turn so expiry cannot create a visible
+                # turn with an interrupted request ID.
+                durable.renew(subject, reservation)
                 context = DaqContextState(task_context=plan.context.to_checkpoint()) if plan else None
-                terminal_frames = [sse_event("text_delta", {"delta": done["answer"]}),
-                                   sse_event("sources", done["sources"]),
-                                   sse_event("done", done)]
-                durable.finish(
-                    subject, reservation, [*frames, *terminal_frames], context=context,
+                def terminal_events(turn_id):
+                    done["turn_id"] = turn_id
+                    return [*frames,
+                            sse_event("text_delta", {"delta": done["answer"]}),
+                            sse_event("sources", done["sources"]),
+                            sse_event("done", done)]
+
+                _, all_frames = durable.complete_turn(
+                    subject, reservation,
+                    write_turn=lambda connection: persistence.save_turn(
+                        subject, working_session, turn=turn,
+                        attachment_relations=attachment_relations, connection=connection,
+                    ),
+                    terminal_events=terminal_events, context=context,
                     expected_context_revision=checkpoint.revision if checkpoint else 0,
                 )
+                terminal_frames = all_frames[len(frames):]
+                session.messages = working_session.messages
+                session.session_context = working_session.session_context
+                session.last_active = working_session.last_active
             except (ConversationStoreError, DurableStateError, ContextConflict,
                     RequestInterrupted, RequestConflict):
                 interrupt("persistence_failed")
@@ -249,6 +273,7 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
                             "planned_capabilities": done["planned_capabilities"],
                             "capability_coverage": coverage, "fallback_used": done["fallback_used"],
                             "fallback_reason": done["fallback_reason"],
+                            "synthesis_mode": done.get("synthesis_mode"),
                             "duration_ms": done["duration_ms"]}, metadata={
                                 "agent_id": agent_id, "session_id": session.session_id,
                                 "runtime_release": runtime_release,
@@ -270,25 +295,25 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
         terminal_sent = False
         try:
             for item in iter_with_heartbeat(produce(), heartbeat_interval_seconds=heartbeat_interval_seconds):
-                if isinstance(item, StreamHeartbeat):
-                    if time.monotonic() >= next_renewal:
+                if time.monotonic() >= next_renewal:
+                    try:
+                        durable.renew(subject, reservation)
+                    except (DurableStateError, RequestInterrupted):
                         try:
-                            durable.renew(subject, reservation)
-                        except (DurableStateError, RequestInterrupted):
-                            try:
-                                current = durable.reserve(
-                                    subject, body.client_request_id, body.model_dump(mode="json"),
-                                    session.session_id,
-                                )
-                            except DurableStateError:
-                                current = None
-                            if current is None or current.status != "replay":
-                                lease_lost.set()
-                                interrupt("execution_lease_renewal_failed")
-                                yield sse_event("stage", {"stage": "durable_state", "status": "error",
-                                                          "reason": "execution_lease_renewal_failed"})
-                                return
-                        next_renewal = time.monotonic() + request_lease_renew_interval_seconds
+                            current = durable.reserve(
+                                subject, body.client_request_id, body.model_dump(mode="json"),
+                                session.session_id,
+                            )
+                        except DurableStateError:
+                            current = None
+                        if current is None or current.status != "replay":
+                            lease_lost.set()
+                            interrupt("execution_lease_renewal_failed")
+                            yield sse_event("stage", {"stage": "durable_state", "status": "error",
+                                                      "reason": "execution_lease_renewal_failed"})
+                            return
+                    next_renewal = time.monotonic() + request_lease_renew_interval_seconds
+                if isinstance(item, StreamHeartbeat):
                     yield sse_event("heartbeat", {"elapsed_ms": item.elapsed_ms, "count": item.count})
                 else:
                     if item.startswith("event: done\n"):

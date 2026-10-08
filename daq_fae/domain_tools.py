@@ -6,6 +6,8 @@ from src.agent.loop.tools import ToolResult
 
 
 _TOOLS: dict[str, tuple[str, dict[str, dict], tuple[str, ...]]] = {
+    "catalog": ("List governed DAQ products, kits, and release scope.", {"query": {"type": "string"}}, ("query",)),
+    "selection": ("Evaluate a DAQ configuration against all stated acquisition constraints.", {"query": {"type": "string"}}, ("query",)),
     "resolve_entity": ("Resolve a DAQ product, variant, kit, or component.", {"text": {"type": "string"}}, ("text",)),
     "lookup_spec": ("Look up a governed DAQ claim with conditions and revision.", {"entity": {"type": "string"}, "field": {"type": "string"}, "conditions": {"type": "object"}}, ("entity", "field")),
     "inspect_topology": ("Inspect a verified acquisition system topology.", {"query": {"type": "string"}}, ("query",)),
@@ -14,6 +16,8 @@ _TOOLS: dict[str, tuple[str, dict[str, dict], tuple[str, ...]]] = {
     "search_knowledge": ("Search the governed DAQ knowledge release.", {"query": {"type": "string"}}, ("query",)),
     "sdk_evidence": ("Find reviewed SDK evidence for DAQ products and combinations.", {"query": {"type": "string"}}, ("query",)),
     "official_links": ("Find authorized and verified official DAQ links.", {"query": {"type": "string"}}, ("query",)),
+    "experience": ("Find reviewed field cases and diagnostic experience; not product specifications.", {"query": {"type": "string"}}, ("query",)),
+    "risk": ("Find reviewed operating and data integrity risks for an acquisition setup.", {"query": {"type": "string"}}, ("query",)),
     "session_state": ("Read user-provided context in the current DAQ session.", {}, ()),
 }
 

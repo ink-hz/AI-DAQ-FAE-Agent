@@ -56,6 +56,14 @@ def test_named_stream_and_multiturn_history_reaches_provider():
     assert terminal(second)['session_id'] == sid
 
 
+def test_first_turn_feedback_keeps_legacy_default_message_index():
+    client = TestClient(create_app(provider_mode='offline'))
+    sid = terminal(client.post('/chat', json={'message': '设备版本'}))['session_id']
+    feedback = client.post('/feedback', json={'session_id': sid, 'rating': 'bad'})
+    assert feedback.status_code == 200
+    assert feedback.json()['feedback_id']
+
+
 def test_unsupported_attachments_and_unknown_sessions_are_explicit():
     client = TestClient(create_app(provider_mode='offline'))
     response = client.post('/chat', json={'message': '看日志', 'attachment_ids': ['unwired']})

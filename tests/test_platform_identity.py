@@ -4,12 +4,15 @@ import json
 from dataclasses import replace
 from uuid import UUID
 
+import psycopg
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 from src.platform_identity.models import PlatformSubject
 from src.platform_identity.service import InMemoryAuthenticatedSessionRepository
+
+pytest_plugins = ('tests.test_durable_state',)
 
 SUBJECT = UUID('b78b3205-2c86-424a-a217-775382c208bd')
 BINDING = UUID('6dbedcf8-5263-493f-91f5-6324be037d7c')
@@ -102,6 +105,47 @@ def test_daq_launch_session_and_csrf_are_scoped_and_missing_identity_denied(tmp_
     assert client.post('/chat', headers={'Origin': ORIGIN, HEADER: csrf}).json()['agent_id'] == 'ai-daq-fae-agent'
     assert client.delete('/enterprise/session', headers={'Origin': ORIGIN, HEADER: csrf}).status_code == 204
     assert client.get('/history').status_code == 401
+
+
+def test_real_daq_postgres_accepts_only_daq_enterprise_session(tmp_path, pg_database):
+    from daq_fae.platform_identity import configure_platform_identity
+    from scripts.migrate_daq_pg import migration_files
+
+    with psycopg.connect(pg_database, autocommit=True) as connection:
+        for migration in migration_files():
+            connection.execute(migration.read_text())
+    app = FastAPI()
+    env = {**environment(tmp_path), 'DAQ_DATABASE_URL': pg_database}
+    configure_platform_identity(app, environ=env, platform_client=FakePlatform())
+    with TestClient(app, base_url=ORIGIN, raise_server_exceptions=False) as client:
+        response = client.post('/enterprise/session', json={'code': CODE},
+                               headers={'Origin': ORIGIN})
+        assert response.status_code == 201
+        assert client.get('/enterprise/session').status_code == 200
+    with psycopg.connect(pg_database) as connection:
+        rows = connection.execute('select agent_id from fae_enterprise_sessions').fetchall()
+    assert rows == [('ai-daq-fae-agent',)]
+
+
+def test_identity_startup_rejects_database_before_daq_session_constraint(tmp_path, pg_database):
+    from daq_fae.platform_identity import configure_platform_identity
+    from scripts.migrate_daq_pg import migration_files
+
+    with psycopg.connect(pg_database, autocommit=True) as connection:
+        for migration in migration_files()[:-1]:
+            connection.execute(migration.read_text())
+        # The module-scoped PG fixture may already contain the preceding test's
+        # DAQ constraint; remove it to simulate an interrupted migration.
+        connection.execute(
+            'alter table fae_enterprise_sessions '
+            'drop constraint if exists daq_enterprise_sessions_agent_id_check'
+        )
+    env = {**environment(tmp_path), 'DAQ_DATABASE_URL': pg_database}
+    with pytest.raises(ValueError, match='daq_identity_database_unverified'):
+        configure_platform_identity(FastAPI(), environ=env,
+                                    platform_client=FakePlatform())
+    with psycopg.connect(pg_database, autocommit=True) as connection:
+        connection.execute(migration_files()[-1].read_text())
 
 
 @pytest.mark.parametrize('updates', [

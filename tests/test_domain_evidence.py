@@ -12,6 +12,7 @@ def test_empty_release_exposes_full_domain_tool_contract_without_camera_facts():
         "resolve_entity", "lookup_spec", "inspect_topology",
         "lookup_procedure", "check_software_support", "search_knowledge",
         "sdk_evidence", "official_links", "session_state",
+        "catalog", "selection", "experience", "risk",
     }
     for name in names - {"session_state"}:
         result = toolbox.dispatch(name, {})

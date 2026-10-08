@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx
+import psycopg
 
 from src.agent.anthropic_transport import AnthropicTransportError
 from src.agent.guardrails import categorize_refusal
@@ -24,9 +25,11 @@ from src.platform_tasks.worker import PlatformTaskWorker
 from daq_fae.authenticated_persistence import _validate_database
 from daq_fae.domain_evidence import DaqEvidencePolicy
 from daq_fae.domain_tools import DaqToolBox
+from daq_fae.empty_knowledge_synthesis import (EMPTY_KNOWLEDGE_RELEASE,
+                                                 refine_empty_release_answer)
 from daq_fae.platform_identity import AGENT_ID
 from daq_fae.provider_errors import anthropic_failure
-from daq_fae.task_context import prepare_turn
+from daq_fae.task_context import extract_context_hints, prepare_turn
 
 
 class DaqTaskOrchestrator:
@@ -42,6 +45,7 @@ class DaqTaskOrchestrator:
 
     def handle_stream(self, *, session_id, user_message,
                       planning_message=None,
+                      context_hints=None,
                       required_attachment_source_ids=None,
                       required_image_source_ids=None,
                       continuation_guard=None):
@@ -59,7 +63,8 @@ class DaqTaskOrchestrator:
         try:
             yield StreamEvent("stage", {"stage": "daq_loop", "status": "running"})
             plan = prepare_turn(planning_message or user_message,
-                                previous=self._contexts.get(session_id))
+                                previous=self._contexts.get(session_id),
+                                context_hints=context_hints)
             refusal = categorize_refusal(planning_message or user_message)
             if refusal:
                 category, answer = refusal
@@ -102,11 +107,24 @@ class DaqTaskOrchestrator:
                             "sources": [], "fallback_used": True,
                             "fallback_reason": type(exc).__name__}
             guard()
-            done.setdefault("fallback_used", done["outcome"] in RUNTIME_FAILURE_OUTCOMES)
-            done.setdefault("fallback_reason", done["outcome"] if done["fallback_used"] else None)
+            runtime_failure = (done["outcome"] in RUNTIME_FAILURE_OUTCOMES
+                               or done["outcome"].startswith("provider_")
+                               or done["outcome"] in {"internal_error", "persistence_error"})
+            if runtime_failure:
+                done["fallback_used"] = True
+                done["fallback_reason"] = done.get("fallback_reason") or done["outcome"]
+            else:
+                done.setdefault("fallback_used", False)
+                done.setdefault("fallback_reason", None)
             done.setdefault("planned_capabilities", list(plan.planned_capabilities))
-            done.update({"agent_id": AGENT_ID, "session_id": session_id,
+            done.update({"agent_id": AGENT_ID,
+                         "knowledge_release": EMPTY_KNOWLEDGE_RELEASE,
+                         "session_id": session_id,
                          "trace_id": trace.trace_id if trace is not None else None})
+            refine_empty_release_answer(
+                done, planned_capabilities=done["planned_capabilities"],
+                knowledge_release=EMPTY_KNOWLEDGE_RELEASE,
+            )
             self._contexts[session_id] = plan.context
             session.append_message("user", user_message)
             session.append_message("assistant", done["answer"])
@@ -116,6 +134,7 @@ class DaqTaskOrchestrator:
                 trace.finalize({"outcome": done["outcome"],
                                 "fallback_used": done["fallback_used"],
                                 "fallback_reason": done["fallback_reason"],
+                                "synthesis_mode": done.get("synthesis_mode"),
                                 "planned_capabilities": done["planned_capabilities"],
                                 "capability_coverage": done.get("capability_coverage", {}),
                                 "answer_length": len(done["answer"])})
@@ -128,14 +147,33 @@ class DaqTaskOrchestrator:
             raise
 
     def handle_platform_task(self, *, spec, session_id, prompt,
-                             planning_message, continuation_guard):
-        if spec.attachment_refs:
+                             planning_message, continuation_guard,
+                             attachment_refs=()):
+        if spec.attachment_refs or attachment_refs:
             raise TaskStoreError("task_attachment_refs_not_supported")
         return self.handle_stream(
             session_id=session_id, user_message=prompt,
             planning_message=planning_message,
+            context_hints=extract_context_hints(getattr(spec, 'context_excerpt', ())),
             continuation_guard=continuation_guard,
         )
+
+
+def _verify_task_database(database_url: str) -> None:
+    try:
+        with psycopg.connect(database_url, connect_timeout=3) as connection:
+            row = connection.execute(
+                """select agent_id, database_name = current_database() as name_matches
+                   from daq_installation_identity where singleton"""
+            ).fetchone()
+            foreign_sessions = connection.execute(
+                "select exists (select 1 from chat_sessions "
+                "where external_session_id not like 'daq:%')"
+            ).fetchone()[0]
+    except psycopg.Error:
+        raise ValueError('daq_task_database_identity_unverified') from None
+    if row != ('ai-daq-fae-agent', True) or foreign_sessions:
+        raise ValueError('daq_task_database_identity_unverified')
 
 
 def configure_platform_tasks(app, *, adapter, environ=None, task_store=None,
@@ -166,6 +204,8 @@ def configure_platform_tasks(app, *, adapter, environ=None, task_store=None,
     if version < 1:
         raise ValueError("daq_platform_task_capability_version_invalid")
     codec = TaskContentCodec.from_file(keyring)
+    if task_store is None:
+        _verify_task_database(database_url)
     store = task_store if task_store is not None else PostgresPlatformTaskStore(database_url, codec=codec)
     verifier = task_verifier if task_verifier is not None else TaskTokenVerifier.from_files(
         public_keys, audience=AGENT_ID,

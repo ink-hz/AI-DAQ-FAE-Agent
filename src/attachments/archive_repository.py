@@ -114,6 +114,18 @@ class AttachmentArchiveRepository:
         self._connect = connect
         self._agent_id = agent_id
 
+    def _agent_scope(self) -> tuple[str, tuple[str, ...]]:
+        # Legacy camera rows predate agent_id metadata. Both readers must
+        # exclude rows belonging to another agent if a database is miswired.
+        if self._agent_id == "ai-fae-agent":
+            return ("exists (select 1 from chat_turns scoped_turn "
+                    "where scoped_turn.id = chat_turn_attachments.turn_id "
+                    "and coalesce(scoped_turn.metadata->>'agent_id', 'ai-fae-agent') "
+                    "= 'ai-fae-agent')", ())
+        return ("exists (select 1 from chat_turns scoped_turn "
+                "where scoped_turn.id = chat_turn_attachments.turn_id "
+                "and scoped_turn.metadata->>'agent_id' = %s)", (self._agent_id,))
+
     def _connection(self):
         return self._connect(
             self._database_url,
@@ -132,6 +144,9 @@ class AttachmentArchiveRepository:
             raise ValueError("archive_limit_invalid")
         cursor_value = _cursor_decode(cursor) if cursor else None
         params: list[object] = [now]
+        scope, scope_params = self._agent_scope()
+        scope_clause = f"and {scope}" if scope else ""
+        params.extend(scope_params)
         after = ""
         if cursor_value:
             after = "and (created_at, id) > (%s, %s)"
@@ -147,6 +162,7 @@ class AttachmentArchiveRepository:
                         and handoff_deadline_at > %s
                     ) or archive_status = 'deletion_pending'
                 )
+                  {scope_clause}
                   {after}
                 order by created_at, id
                 limit %s
@@ -162,9 +178,11 @@ class AttachmentArchiveRepository:
         return ArchivePage(items=items, next_cursor=next_cursor)
 
     def health(self) -> dict[str, int]:
+        scope, scope_params = self._agent_scope()
+        scope_clause = f"where {scope}" if scope else ""
         with self._connection() as connection, connection.cursor() as db:
             row = db.execute(
-                """
+                f"""
                 select
                     count(*) filter (where archive_status = 'pending') as pending,
                     count(*) filter (where archive_status = 'failed') as failed,
@@ -177,7 +195,9 @@ class AttachmentArchiveRepository:
                         where archive_status = 'expired_unarchived'
                     ) as expired_unarchived_total
                 from chat_turn_attachments
-                """
+                {scope_clause}
+                """,
+                scope_params,
             ).fetchone()
         return {
             "pending": int(row["pending"]),
@@ -241,6 +261,8 @@ class AttachmentArchiveRepository:
     ) -> None:
         with self._connection() as connection, connection.cursor() as db:
             row = self._locked(relation_id, cursor=db)
+            if platform_attachment_id.int == 0:
+                raise AttachmentArchiveError("archive_ack_conflict")
             if row["archive_status"] == "archived":
                 if (
                     str(row["sha256"]) == sha256
@@ -249,7 +271,16 @@ class AttachmentArchiveRepository:
                 ):
                     return
                 raise AttachmentArchiveError("archive_ack_conflict")
-            if row["archive_status"] not in {"pending", "failed"}:
+            deletion_requested = row["archive_status"] in {"deletion_pending", "deleted"}
+            if deletion_requested:
+                existing = row["platform_attachment_id"] or UUID(int=0)
+                if existing == platform_attachment_id:
+                    if row["sha256"] == sha256 and row["archived_at"] == archived_at:
+                        return
+                    raise AttachmentArchiveError("archive_ack_conflict")
+                if existing.int != 0 or row["archived_at"] is not None:
+                    raise AttachmentArchiveError("archive_ack_conflict")
+            elif row["archive_status"] not in {"pending", "failed"}:
                 raise AttachmentArchiveError("archive_ack_conflict")
             if row["sha256"] != sha256:
                 raise AttachmentArchiveError("archive_checksum_mismatch")
@@ -258,11 +289,12 @@ class AttachmentArchiveRepository:
             db.execute(
                 """
                 update chat_turn_attachments
-                set archive_status = 'archived', platform_attachment_id = %s,
+                set archive_status = %s, platform_attachment_id = %s,
                     archived_at = %s, last_archive_error = '', updated_at = now()
                 where id = %s
                 """,
-                (platform_attachment_id, archived_at, relation_id),
+                ("deletion_pending" if deletion_requested else "archived",
+                 platform_attachment_id, archived_at, relation_id),
             )
 
     def ack_failed(self, relation_id: UUID, error_code: str) -> None:
@@ -306,9 +338,11 @@ class AttachmentArchiveRepository:
             )
 
     def request_deletion(self, attachment_id: str) -> None:
+        scope, scope_params = self._agent_scope()
+        scope_clause = f"and {scope}" if scope else ""
         with self._connection() as connection, connection.cursor() as db:
             db.execute(
-                """
+                f"""
                 update chat_turn_attachments
                 set archive_status = 'deletion_pending',
                     platform_attachment_id = coalesce(
@@ -318,14 +352,39 @@ class AttachmentArchiveRepository:
                     updated_at = now()
                 where attachment_id = %s
                   and archive_status in ('pending', 'failed', 'archived')
+                  {scope_clause}
                 """,
-                (attachment_id,),
+                (attachment_id, *scope_params),
             )
 
+    def owner_for_attachment(self, attachment_id: str) -> str | None:
+        """Find the immutable conversation owner after local bytes have expired."""
+        scope, scope_params = self._agent_scope()
+        scope_clause = f"and {scope}" if scope else ""
+        with self._connection() as connection, connection.cursor() as db:
+            rows = db.execute(
+                f"""
+                select distinct session.owner_subject_id
+                from chat_turn_attachments
+                join chat_turns turn_row on turn_row.id = chat_turn_attachments.turn_id
+                join chat_sessions session on session.id = turn_row.session_id
+                where chat_turn_attachments.attachment_id = %s
+                  {scope_clause}
+                """,
+                (attachment_id, *scope_params),
+            ).fetchall()
+        if len(rows) > 1:
+            raise AttachmentArchiveError("archive_attachment_owner_conflict")
+        if not rows or rows[0]["owner_subject_id"] is None:
+            return None
+        return str(rows[0]["owner_subject_id"])
+
     def all_relations_released(self, attachment_id: str) -> bool:
+        scope, scope_params = self._agent_scope()
+        scope_clause = f"and {scope}" if scope else ""
         with self._connection() as connection, connection.cursor() as db:
             row = db.execute(
-                """
+                f"""
                 select count(*) as total,
                        count(*) filter (
                            where archive_status in (
@@ -334,35 +393,41 @@ class AttachmentArchiveRepository:
                        ) as active
                 from chat_turn_attachments
                 where attachment_id = %s
+                  {scope_clause}
                 """,
-                (attachment_id,),
+                (attachment_id, *scope_params),
             ).fetchone()
         return bool(row) and int(row["total"]) > 0 and int(row["active"]) == 0
 
     def expire_unarchived(self, attachment_id: str, now: datetime) -> None:
+        scope, scope_params = self._agent_scope()
+        scope_clause = f"and {scope}" if scope else ""
         with self._connection() as connection, connection.cursor() as db:
             db.execute(
-                """
+                f"""
                 update chat_turn_attachments
                 set archive_status = 'expired_unarchived', updated_at = %s
                 where attachment_id = %s
                   and archive_status in ('pending', 'failed')
                   and handoff_deadline_at <= %s
+                  {scope_clause}
                 """,
-                (now, attachment_id, now),
+                (now, attachment_id, now, *scope_params),
             )
 
     def _locked(self, relation_id: UUID, *, cursor=None) -> dict:
+        scope, scope_params = self._agent_scope()
+        scope_clause = f"and {scope}" if scope else ""
         if cursor is None:
             with self._connection() as connection, connection.cursor() as db:
                 row = db.execute(
-                    "select * from chat_turn_attachments where id = %s for update",
-                    (relation_id,),
+                    f"select * from chat_turn_attachments where id = %s {scope_clause} for update",
+                    (relation_id, *scope_params),
                 ).fetchone()
         else:
             row = cursor.execute(
-                "select * from chat_turn_attachments where id = %s for update",
-                (relation_id,),
+                f"select * from chat_turn_attachments where id = %s {scope_clause} for update",
+                (relation_id, *scope_params),
             ).fetchone()
         if row is None:
             raise AttachmentArchiveError("archive_relation_not_found")

@@ -19,8 +19,9 @@ from daq_fae.platform_identity import AGENT_ID
 
 
 def _service_from_daq_config() -> AttachmentArchiveService:
-    if os.getenv("DAQ_ATTACHMENT_ARCHIVE_ENABLED") != "true":
-        raise ValueError("daq_attachment_archive_disabled")
+    flag = os.getenv("DAQ_ATTACHMENT_ARCHIVE_ENABLED", "false")
+    if flag not in {"true", "false"}:
+        raise ValueError("daq_attachment_archive_enabled_invalid")
     database_url = os.getenv("DAQ_DATABASE_URL", "")
     _validate_database(database_url, os.getenv("DATABASE_URL"))
     handoff_seconds = int(os.getenv("DAQ_ATTACHMENT_ARCHIVE_HANDOFF_SECONDS", "604800"))
@@ -31,7 +32,7 @@ def _service_from_daq_config() -> AttachmentArchiveService:
         AttachmentLimits(),
     )
     return AttachmentArchiveService(
-        store, enabled=True, handoff_seconds=handoff_seconds,
+        store, enabled=(flag == "true"), handoff_seconds=handoff_seconds,
         repository=AttachmentArchiveRepository(database_url, agent_id=AGENT_ID),
     )
 

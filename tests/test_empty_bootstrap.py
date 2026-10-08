@@ -46,9 +46,11 @@ def test_empty_knowledge_request_uses_loop_and_explicitly_abstains():
     assert done["capability_coverage"] == {"lookup_spec": "empty"}
     assert set(done["evidence_policy"]["requirement_status"].values()) == {"missing"}
     assert done["tool_calls"][0]["status"] == "not_found"
-    assert done["fallback_used"] is False
+    assert done["fallback_used"] is True
+    assert done["fallback_reason"] == "empty_release_synthesis_template"
+    assert done["synthesis_mode"] == "deterministic_empty_release"
     assert done["trace_id"]
-    assert "资料" in done["answer"]
+    assert "正式规格" in done["answer"]
     assert "精度是" not in done["answer"]
 
 

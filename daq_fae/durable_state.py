@@ -304,6 +304,27 @@ class DaqDurableState:
                                (sealed.ciphertext, sealed.key_version, sealed.state_sha256, *scope))
             return RequestReservation("replay", reservation.session_id, reservation.client_request_id, events=tuple(events))
 
+    def complete_turn(self, subject, reservation, *, write_turn, terminal_events,
+                      context=None, expected_context_revision=None):
+        """Commit conversation turn, context and replay terminal atomically."""
+        with self._transaction() as connection:
+            row, scope = self._execution(connection, subject, reservation)
+            if row["state"] != "running":
+                raise RequestConflict("daq_terminal_already_completed")
+            turn_id = write_turn(connection)
+            events = terminal_events(turn_id)
+            self._validate_terminal(reservation.session_id, events)
+            if context is not None:
+                self._save_context(connection, subject, reservation.session_id,
+                                   context, expected_context_revision)
+            sealed = self._seal(self._request_binding(subject, reservation.client_request_id),
+                                {"events": list(events)})
+            connection.execute("""update daq_request_ledger set state='completed', terminal_ciphertext=%s,
+                terminal_key_version=%s,terminal_sha256=%s,updated_at=clock_timestamp()
+                where agent_id=%s and owner_subject_id=%s and client_request_id=%s""",
+                               (sealed.ciphertext, sealed.key_version, sealed.state_sha256, *scope))
+            return turn_id, tuple(events)
+
     def interrupt(self, subject, reservation, *, reason="client_disconnected"):
         if not isinstance(reason, str) or re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", reason) is None:
             raise DurableStateError("daq_interruption_reason_invalid")

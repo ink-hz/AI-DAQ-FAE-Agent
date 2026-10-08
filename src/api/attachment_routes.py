@@ -79,10 +79,14 @@ def register_attachment_routes(app: FastAPI) -> None:
     @app.delete("/attachments/{attachment_id}", status_code=204)
     async def delete_attachment(attachment_id: str, request: Request):
         try:
-            manifest = request.app.state.attachment_store.get(attachment_id)
+            manifest = request.app.state.attachment_store.get_for_deletion(attachment_id)
             _assert_attachment_owner(manifest, request)
         except AttachmentError as exc:
             if exc.code in {"attachment_not_found", "attachment_deleted"}:
+                subject = getattr(request.state, "platform_identity", None)
+                archive_service = request.app.state.attachment_archive_service
+                if subject is not None and archive_service.has_deletion_authority:
+                    archive_service.delete_for_owner(attachment_id, str(subject.subject_id))
                 return Response(status_code=204)
             return _error(exc.code, request_id="delete")
         request.app.state.attachment_archive_service.delete(attachment_id)

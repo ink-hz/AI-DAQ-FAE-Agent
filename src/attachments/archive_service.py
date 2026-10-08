@@ -33,8 +33,6 @@ class AttachmentArchiveService:
         self._clock = clock or (lambda: datetime.now(timezone.utc))
 
     def _authority(self) -> AttachmentArchiveRepository:
-        if not self.enabled:
-            raise AttachmentArchiveError("archive_disabled")
         if self._repository is None:
             raise AttachmentArchiveError("archive_repository_unavailable")
         return self._repository
@@ -97,9 +95,27 @@ class AttachmentArchiveService:
         self._authority().ack_deleted(relation_id, platform_attachment_id)
 
     def delete(self, attachment_id: str) -> None:
-        if self.enabled:
-            self._authority().request_deletion(attachment_id)
+        # Disabling new archive handoffs cannot erase a prior Platform copy.
+        if self._repository is not None:
+            self._repository.request_deletion(attachment_id)
+        elif self.enabled:
+            raise AttachmentArchiveError("archive_repository_unavailable")
         self._store.delete(attachment_id)
+
+    @property
+    def has_deletion_authority(self) -> bool:
+        return self._repository is not None
+
+    def delete_for_owner(self, attachment_id: str, owner_subject_id: str) -> bool:
+        """Delete an archived copy when its temporary local manifest is gone."""
+        if self._repository is None:
+            return False
+        repository = self._repository
+        if repository.owner_for_attachment(attachment_id) != owner_subject_id:
+            return False
+        repository.request_deletion(attachment_id)
+        self._store.delete(attachment_id)
+        return True
 
     def prepare_turn(
         self,

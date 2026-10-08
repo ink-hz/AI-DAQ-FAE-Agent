@@ -22,6 +22,8 @@ from src.attachments.models import AttachmentDescriptor, AttachmentError, Attach
 from src.attachments.archive_repository import AttachmentArchiveRepository
 from daq_fae.domain_evidence import DaqEvidencePolicy
 from daq_fae.domain_tools import DaqToolBox
+from daq_fae.empty_knowledge_synthesis import (EMPTY_KNOWLEDGE_RELEASE,
+                                                 refine_empty_release_answer)
 from daq_fae.attachment_evidence import extend_with_attachments
 from daq_fae.task_context import prepare_turn
 from daq_fae.local_state import LocalStateError, LocalStateStore
@@ -45,14 +47,14 @@ from src.storage.authenticated_conversations import ConversationNotFound, Conver
 
 
 AGENT_ID = "ai-daq-fae-agent"
-KNOWLEDGE_RELEASE = "empty-dev-v0"
-RUNTIME_RELEASE = "fae-61c7da8-dev"
+KNOWLEDGE_RELEASE = EMPTY_KNOWLEDGE_RELEASE
+RUNTIME_RELEASE = "fae-bf1ce9a-dev"
 _ROOT = Path(__file__).resolve().parent.parent
 
 
 class FeedbackRequest(BaseModel):
     session_id: str
-    message_index: int = Field(ge=0)
+    message_index: int = Field(default=0, ge=0)
     rating: Literal["good", "bad"]
     comment: str = Field(default="", max_length=4000)
     turn_id: str | None = None
@@ -91,6 +93,11 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
     if identity_mode not in {"true", "false"}:
         raise ValueError("daq_platform_identity_enabled_invalid")
     auth_mode = identity_mode == "true"
+    task_flag = os.getenv("DAQ_PLATFORM_TASK_ENABLED", "false")
+    if task_flag not in {"true", "false"}:
+        raise ValueError("daq_platform_task_enabled_invalid")
+    if task_flag == "true" and not auth_mode:
+        raise ValueError("daq_platform_task_requires_authenticated_mode")
     if auth_mode:
         if not os.getenv("DAQ_DATABASE_URL") or not os.getenv("DAQ_AUTHENTICATED_CONTENT_KEYRING_FILE"):
             raise ValueError("daq_authenticated_persistence_configuration_missing")
@@ -134,7 +141,7 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
         limits=attachment_limits or AttachmentLimits(), clock=attachment_clock,
         archive_repository=(archive_repository if archive_repository is not None else
                             AttachmentArchiveRepository(os.environ["DAQ_DATABASE_URL"], agent_id=AGENT_ID)
-                            if archive_enabled else None),
+                            if auth_mode else None),
         archive_enabled=archive_enabled, archive_handoff_seconds=archive_handoff_seconds,
     )
 
@@ -149,7 +156,7 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
         archive_health = {"enabled": archive_enabled, "ready": True,
                           "pending": 0, "failed": 0,
                           "oldest_pending_seconds": 0, "expired_unarchived_total": 0}
-        if archive_enabled:
+        if app.state.attachment_archive_repository is not None:
             try:
                 archive_health.update(app.state.attachment_archive_repository.health())
             except Exception:
@@ -465,6 +472,10 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                 "duration_ms": int((time.monotonic() - started_at) * 1000),
             })
             done.pop("provenance", None)
+            refine_empty_release_answer(
+                done, planned_capabilities=done["planned_capabilities"],
+                knowledge_release=KNOWLEDGE_RELEASE,
+            )
             session.append_message("user", request.message)
             session.append_message("assistant", done["answer"])
             try:
@@ -484,6 +495,7 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
             ctx.finalize({"outcome": done["outcome"], "answer_length": len(done["answer"]),
                           "fallback_used": done["fallback_used"],
                           "fallback_reason": done["fallback_reason"],
+                          "synthesis_mode": done.get("synthesis_mode"),
                           "capability_coverage": coverage,
                           "planned_capabilities": done["planned_capabilities"],
                           "actual_capabilities": actual,

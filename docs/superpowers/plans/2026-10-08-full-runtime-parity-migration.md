@@ -22,7 +22,7 @@
 ## 批次 3：数采领域替换与空知识约束
 
 1. 建立数采任务上下文、实体/变体/组合/schema、主题切换和可恢复 checkpoint。前置需求账本为每项需求记录稳定 ID、能力、实体、条件和 `satisfied / missing / conflict / unknown`；用户猜测不晋升为事实。
-2. 实现数采 `ToolBox`：`resolve_entity`、`lookup_spec`、`inspect_topology`、`lookup_procedure`、`check_software_support`、`search_knowledge`、`sdk_evidence`、`official_links`、`session_state`，以及经授权的附件工具。知识为空时仍提供完整工具合同，但全部返回准确的缺证/未知状态；不得借用相机 facts/catalog/SDK roster。
+2. 实现数采 `ToolBox`：目录、选型、经验、风险，以及 `resolve_entity`、`lookup_spec`、`inspect_topology`、`lookup_procedure`、`check_software_support`、`search_knowledge`、`sdk_evidence`、`official_links`、`session_state` 和经授权的附件工具。知识为空时仍提供完整工具合同，但领域事实全部返回准确的缺证/未知状态；不得借用相机 facts/catalog/SDK roster。
 3. 将账本接入共享 `EvidencePolicy`。空账本、未闭合关键需求或冲突不得 `resolved`；系统失败不得改写成业务缺证；URL 只能来自本轮有权工具结果。终稿的 planned/actual/coverage 由账本和工具执行产生，不写固定展示值。
 
 ## 批次 4：验收与发布门
@@ -33,4 +33,6 @@
 
 ## 当前执行记录
 
-- `2026-10-08`：完成只读能力对照；数采 `feat/full-daq-fae-parity` 与相机 FAE 隔离集成分支已建立。共享证据门、身份参数化、数采多能力证据、空知识 API、本机与认证会话、附件证据、WebUI、归档、HTTP Task 装配及 DAQ 专属迁移脚本已有实现。数采仓 132 个 Python 测试、235 个 WebUI 测试与构建通过；真实隔离 Postgres 已验证附件上传→回答→归档读取/确认→删除确认。相机 FAE 真实 Dev 烟测有 1 个硬失败和 1 个 Codex 发现的答案矛盾；数采真实 Dev 有 476.6 秒 Provider 传输失败。两项仍阻止“完整迁移已验收”的结论。上游 Git SHA 仍是未保护的本地 ref，数采仓暂无持久远端；真实 Platform 与发布回滚尚未联调。
+- `2026-10-08`：完成只读能力对照；数采 `feat/full-daq-fae-parity` 与相机 FAE 隔离集成分支已建立。共享证据门、身份参数化、数采多能力证据、空知识 API、本机与认证会话、附件证据、WebUI、归档、HTTP Task 装配及 DAQ 专属迁移脚本已有实现。初轮数采仓 132 个 Python 测试、235 个 WebUI 测试与构建通过；真实隔离 Postgres 已验证附件上传→回答→归档读取/确认→删除确认。相机 FAE 真实 Dev 烟测有 1 个硬失败和 1 个 Codex 发现的答案矛盾；数采真实 Dev 有 476.6 秒 Provider 传输失败。两项仍阻止“完整迁移已验收”的结论。当时上游 Git SHA 仍是未保护的本地 ref；数采仓暂无持久远端，真实 Platform 与发布回滚尚未联调。
+- `2026-10-08` 复审修复：Platform 后续消息的附件引用改为明确拒绝；归档队列双向按 Agent 隔离，本地附件过期或清理后仍允许归属人请求 Platform 删除；关闭新归档时仍处理历史删除；模型执行前保护归档内容；长流续租，认证回答/会话/请求终态统一事务提交；Platform 上下文只作未核实的需求范围，不进入系统角色提示；数据库角色/库名比对不依赖主机字符串，迁移前置检查先于所有 DDL，任务队列要求 DAQ 安装标记；空知识计划和工具面补齐目录、选型、经验、风险。
+- `2026-10-08` 终检：上游共享集成提交 `bf1ce9af2d467447e39e2be0caae0bb87b1ba689` 已推送相机仓远端特性分支，数采源码与该 SHA 的 `src/` 一致；相机隔离工作树 3085 项单测、数采后端 159 项单测、WebUI 235 项测试与构建均通过。独立数采离线 Dev 进程的 `/health` 和 `/chat` 实际 HTTP 烟测通过。补齐空知识多能力和 Platform Task 答复一致性、DELETE→晚到归档确认、旧 FAE 关闭新归档后的历史删除、反馈默认索引；新增 DAQ 专属身份会话约束迁移，真实隔离 Postgres 登录通过，缺迁移时启动即失败。上游 ref 保护、数采仓远端、真实 Platform 联调、完整双域 Dev 回归、知识治理和发布回滚仍待完成，不能宣布完整能力等价或试点就绪。

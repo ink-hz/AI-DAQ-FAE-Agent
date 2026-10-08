@@ -82,7 +82,7 @@ def _service_from_config() -> AttachmentArchiveService:
     )
     repository = (
         AttachmentArchiveRepository(config.database_url)
-        if enabled and config.database_url
+        if config.database_url
         else None
     )
     limits = AttachmentLimits(

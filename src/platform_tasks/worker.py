@@ -204,6 +204,7 @@ class PlatformTaskWorker:
                 raise TaskStoreError("task_request_invalid")
             session = self._session_store.create(channel="fae")
             prompt = _task_prompt(spec)
+            current_attachment_refs = spec.attachment_refs
             consuming_message_seq: int | None = None
             while True:
                 projector = FaeTaskEventProjector()
@@ -214,6 +215,7 @@ class PlatformTaskWorker:
                         spec=spec, session_id=session.session_id,
                         prompt=prompt,
                         planning_message=(spec.objective if consuming_message_seq is None else prompt),
+                        attachment_refs=current_attachment_refs,
                         continuation_guard=guard,
                     )
                 else:
@@ -251,6 +253,7 @@ class PlatformTaskWorker:
                 if pending is not None:
                     consuming_message_seq = pending.message_seq
                     prompt = pending.content
+                    current_attachment_refs = pending.attachment_refs
                     continue
                 terminal_kind, terminal_payload = terminal_projection
                 guard()
@@ -266,6 +269,7 @@ class PlatformTaskWorker:
                     raise TaskStoreError("pending_message_missing")
                 consuming_message_seq = pending.message_seq
                 prompt = pending.content
+                current_attachment_refs = pending.attachment_refs
         except _TaskDeadlineReached:
             self._append_timeout(task.task_id, now=self._clock())
         except _TaskCancelled:

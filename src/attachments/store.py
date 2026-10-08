@@ -222,6 +222,10 @@ class AttachmentStore:
             raise AttachmentError("attachment_expired")
         return manifest
 
+    def get_for_deletion(self, attachment_id: str) -> AttachmentManifest:
+        """Return owner metadata even after processing TTL, for authorized erasure."""
+        return self._read_manifest(attachment_id)
+
     def read_bytes(self, attachment_id: str) -> bytes:
         self.get(attachment_id)
         return (self._attachment_dir(attachment_id) / "original.bin").read_bytes()

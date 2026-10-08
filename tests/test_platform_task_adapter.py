@@ -5,6 +5,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 
@@ -16,10 +17,13 @@ from src.platform_tasks.crypto import TaskContentCodec
 from src.platform_tasks.store import InMemoryPlatformTaskStore
 from src.platform_tasks.models import PlatformTaskSpec
 from src.platform_tasks.worker import PlatformTaskWorker
+from daq_fae.platform_tasks import _verify_task_database
 from tests.test_authenticated_persistence import Conversations, Feedback
 from tests.test_authenticated_persistence import environment as persistence_environment
 from tests.test_platform_identity import FakePlatform, environment as identity_environment
 from src.platform_identity.service import InMemoryAuthenticatedSessionRepository
+
+pytest_plugins = ('tests.test_durable_state',)
 
 
 def test_task_orchestrator_uses_daq_loop_and_preserves_followup_context():
@@ -60,6 +64,69 @@ def test_platform_context_excerpt_cannot_trigger_guardrail_or_supply_verified_id
     ))
     assert 'refusal_category' not in events[-1].data
     assert orchestrator._contexts[session.session_id].get('equipment') == ['EGO']
+
+
+def test_platform_context_excerpt_scopes_pronoun_requirement_without_persisting_fact(monkeypatch):
+    sessions = SessionStore(ttl_seconds=3600)
+    session = sessions.create(channel='fae')
+    captured = []
+
+    def inspect_run(*args, **kwargs):
+        captured.append(kwargs['evidence_requirements'])
+        yield {'type': 'done', 'answer': '待核实', 'outcome': 'safe_abstained',
+               'sources': [], 'capability_coverage': {}}
+
+    monkeypatch.setattr('daq_fae.platform_tasks.LoopRuntime.run', inspect_run)
+    spec = type('Spec', (), {'attachment_refs': (),
+                            'context_excerpt': ('设备是 EGO Pro',)})()
+    orchestrator = DaqTaskOrchestrator(adapter=OfflineAdapter(), session_store=sessions)
+    list(orchestrator.handle_platform_task(
+        spec=spec, session_id=session.session_id,
+        prompt='## 任务\n它支持哪个 Viewer 版本？\n## 上下文\n设备是 EGO Pro',
+        planning_message='它支持哪个 Viewer 版本？', continuation_guard=lambda: None,
+    ))
+    assert captured[0]['requirements'][0]['entities'] == ['EGO Pro']
+    assert orchestrator._contexts[session.session_id].get('equipment') is None
+
+
+def test_task_runtime_failure_cannot_keep_false_fallback_flag(monkeypatch):
+    sessions = SessionStore(ttl_seconds=3600)
+    session = sessions.create(channel='fae')
+
+    def failed_runtime(*args, **kwargs):
+        yield {'type': 'done', 'answer': '服务不可用', 'outcome': 'provider_rate_limited',
+               'sources': [], 'fallback_used': False, 'fallback_reason': None}
+
+    monkeypatch.setattr('daq_fae.platform_tasks.LoopRuntime.run', failed_runtime)
+    events = list(DaqTaskOrchestrator(adapter=OfflineAdapter(), session_store=sessions).handle_stream(
+        session_id=session.session_id, user_message='EGO 规格'))
+    assert events[-1].data['fallback_used'] is True
+    assert events[-1].data['fallback_reason'] == 'provider_rate_limited'
+
+
+def test_task_empty_release_uses_same_visible_multi_capability_abstention_as_chat(monkeypatch):
+    sessions = SessionStore(ttl_seconds=3600)
+    session = sessions.create(channel='fae')
+
+    def missing_runtime(*args, **kwargs):
+        yield {'type': 'done', 'answer': '内部检索过程，不应交付',
+               'outcome': 'safe_abstained', 'sources': [],
+               'evidence_policy': {'requirement_status': {
+                   'selection': 'missing', 'software': 'missing'}},
+               'planned_capabilities': ['selection', 'check_software_support']}
+
+    monkeypatch.setattr('daq_fae.platform_tasks.LoopRuntime.run', missing_runtime)
+    events = list(DaqTaskOrchestrator(
+        adapter=OfflineAdapter(), session_store=sessions,
+    ).handle_stream(session_id=session.session_id,
+                    user_message='推荐组合，并确认 Viewer 兼容版本'))
+    done = events[-1].data
+    assert done['fallback_used'] is True
+    assert done['fallback_reason'] == 'empty_release_synthesis_template'
+    assert '选型依据' in done['answer']
+    assert '兼容资料' in done['answer']
+    assert events[-3].data['delta'] == done['answer']
+    assert sessions.get(session.session_id).messages[-1]['content'] == done['answer']
 
 
 def _signed_token(private_key, agent_id):
@@ -176,3 +243,69 @@ def test_platform_task_attachment_references_fail_explicitly():
     task = store.get_task(created.task.task_id)
     assert task.status == 'failed'
     assert store.events_after(task.task_id, after=0, limit=100)[-1].payload['reason_code'] == 'task_attachment_refs_not_supported'
+
+
+def test_task_followup_attachment_references_are_rejected_explicitly():
+    from src.platform_tasks.models import TaskStoreError
+    sessions = SessionStore(ttl_seconds=3600)
+    session = sessions.create(channel='fae')
+
+    class Spec:
+        attachment_refs = ()
+
+    orchestrator = DaqTaskOrchestrator(adapter=OfflineAdapter(), session_store=sessions)
+    with pytest.raises(TaskStoreError, match='task_attachment_refs_not_supported'):
+        orchestrator.handle_platform_task(
+            spec=Spec(), session_id=session.session_id, prompt='分析新日志',
+            planning_message='分析新日志', attachment_refs=(uuid4(),),
+            continuation_guard=lambda: None,
+        )
+
+
+def test_task_database_requires_daq_installation_identity(pg_database):
+    import psycopg
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    with psycopg.connect(pg_database) as connection:
+        for path in sorted((root / 'migrations/shared').glob('0*.sql')):
+            connection.execute(path.read_text())
+    with pytest.raises(ValueError, match='daq_task_database_identity_unverified'):
+        _verify_task_database(pg_database)
+    with psycopg.connect(pg_database) as connection:
+        connection.execute((root / 'migrations/daq/002_installation_identity.sql').read_text())
+    _verify_task_database(pg_database)
+
+
+def test_migration_preflight_rejects_camera_rows_before_ddl(pg_database):
+    import psycopg
+    from pathlib import Path
+    from scripts.migrate_daq_pg import preflight_database
+
+    root = Path(__file__).resolve().parents[1]
+    with psycopg.connect(pg_database) as connection:
+        connection.execute((root / 'migrations/shared/001_data_flywheel.sql').read_text())
+        connection.execute("insert into chat_sessions (external_session_id,channel) values ('camera-1','fae')")
+        with pytest.raises(ValueError, match='daq_migration_foreign_database'):
+            preflight_database(connection)
+
+
+def test_migration_preflight_rejects_camera_identity_rows_without_chat(pg_database):
+    import psycopg
+    from pathlib import Path
+    from scripts.migrate_daq_pg import preflight_database
+
+    root = Path(__file__).resolve().parents[1]
+    with psycopg.connect(pg_database) as connection:
+        connection.execute((root / 'migrations/shared/008_fae_enterprise_sessions.sql').read_text())
+        connection.execute(
+            """insert into fae_enterprise_sessions (
+                session_token_hash,session_token_key_version,csrf_token_hash,
+                csrf_token_key_version,internal_user_id,identity_binding_id,
+                agent_id,idle_expires_at,absolute_expires_at)
+                values (decode('aa','hex'),1,decode('bb','hex'),1,
+                        gen_random_uuid(),gen_random_uuid(),'ai-fae-agent',
+                        now()+interval '1 hour',now()+interval '2 hours')"""
+        )
+        with pytest.raises(ValueError, match='daq_migration_foreign_database'):
+            preflight_database(connection)

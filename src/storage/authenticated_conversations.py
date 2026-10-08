@@ -16,6 +16,7 @@ import os
 import secrets
 import stat
 from collections.abc import Mapping
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -325,6 +326,7 @@ class AuthenticatedConversationRepository:
         *,
         turn: ChatTurnRecord | None = None,
         attachment_relations: tuple[AttachmentTurnInput, ...] = (),
+        connection=None,
     ) -> str | None:
         """Persist owner projection, turn and sealed checkpoint in one transaction.
 
@@ -352,8 +354,8 @@ class AuthenticatedConversationRepository:
         payload = session.to_checkpoint()
         sealed = self._codec.seal_state(session.session_id, payload)
         turn_id: str | None = None
-        with self._connect() as connection:
-            with connection.cursor() as cur:
+        with (nullcontext(connection) if connection is not None else self._connect()) as active_connection:
+            with active_connection.cursor() as cur:
                 self._write_owner_projection(
                     cur,
                     session,

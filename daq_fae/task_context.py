@@ -19,6 +19,8 @@ _FIELDS = frozenset({
 _SWITCH = re.compile(r'^(?:换个场景|换个问题|另一个问题|重新开始|new topic|switch topic)', re.I)
 _FOLLOWUP = re.compile(r'继续|然后|还是|下一步|那|这个|它|\b(?:it|still|next|continue)\b', re.I)
 _INTENTS = {
+    'catalog': r'有哪些|有多少|型号列表|产品目录|产品线|\b(?:catalog|product list|product range)\b',
+    'selection': r'推荐|选型|选择|适合|选哪个|选什么|方案建议|\b(?:recommend|selection|choose|suitable)\b',
     'resolve_entity': r'设备|型号|变体|配置|套件|\b(?:device|model|variant|kit)\b',
     'lookup_spec': r'规格|参数|精度|分辨率|帧率|带宽|功耗|基线|\b(?:spec|specification|accuracy|resolution|fps|bandwidth)\b',
     'inspect_topology': r'接线|连接|主从|同步|组合|端口|供电|\b(?:topology|connection|sync|wiring|hub|power)\b',
@@ -26,6 +28,8 @@ _INTENTS = {
     'check_software_support': r'版本|兼容|支持|固件|viewer|sdk|firmware|\b(?:version|compatible|support)\b',
     'sdk_evidence': r'\bsdk\b|\bapi\b|\bros2?\b|\bpython\b|代码|接口',
     'official_links': r'链接|下载|官网|\b(?:link|download|official website)\b',
+    'experience': r'经验|案例|最佳实践|常见问题|\b(?:experience|case study|best practice)\b',
+    'risk': r'风险|注意事项|安全|合规|数据丢失|\b(?:risk|safety|compliance|data loss)\b',
 }
 _DIAGNOSTIC = re.compile(r'失败|报错|日志|没有画面|断开|\b(?:error|timeout|failed|failure|log|disconnect)\b', re.I)
 _TASKS = {
@@ -127,8 +131,36 @@ def _extract(message):
     return updates
 
 
+def extract_context_hints(excerpts) -> dict:
+    """Extract tentative scope hints from Platform context, not user memory."""
+    allowed = {'equipment', 'variant', 'platform', 'viewer_version',
+               'sdk_version', 'firmware_version'}
+    hints = {}
+    conflicts = set()
+    safe_label = re.compile(r'^[A-Za-z0-9][A-Za-z0-9 ._+/-]{0,63}$')
+    safe_version = re.compile(r'^[0-9][0-9A-Za-z._-]{0,31}$')
+    for excerpt in excerpts:
+        if not isinstance(excerpt, str):
+            continue
+        for key, value in _extract(excerpt).items():
+            if key not in allowed or key in conflicts:
+                continue
+            parts = value if isinstance(value, list) else [value]
+            pattern = safe_version if key.endswith('_version') else safe_label
+            if not parts or len(parts) > 4 or not all(
+                isinstance(part, str) and pattern.fullmatch(part) for part in parts
+            ):
+                continue
+            if key in hints and hints[key] != value:
+                hints.pop(key)
+                conflicts.add(key)
+            else:
+                hints[key] = value
+    return hints
+
+
 def prepare_turn(message: str, *, previous=None, updates=None, topic_switch=None,
-                 attachment_source_ids=(), image_source_ids=()) -> TurnPlan:
+                 attachment_source_ids=(), image_source_ids=(), context_hints=None) -> TurnPlan:
     """Prepare a turn without mutating prior state or granting facts/permissions.
 
     Pass the returned context into the next turn/checkpoint, tool_context() to the
@@ -177,8 +209,17 @@ def prepare_turn(message: str, *, previous=None, updates=None, topic_switch=None
     capabilities = list(dict.fromkeys(capabilities))
     topic_id = f'topic_{turn}' if switched else old.topic_id
     context = DaqTaskContext(topic_id, turn, values, tuple(steps), tuple(capabilities))
-    scope = {'topic_id': topic_id, 'entities': context.get('equipment', []),
-             'conditions': {key: value.value for key, value in values.items() if key != 'equipment'}}
+    hints = copy.deepcopy(dict(context_hints or {}))
+    if set(hints) - {'equipment', 'variant', 'platform', 'viewer_version',
+                     'sdk_version', 'firmware_version'}:
+        raise ValueError('daq_context_hints_invalid')
+    hinted_conditions = {key: value for key, value in hints.items()
+                         if key != 'equipment' and key not in values}
+    used_hints = bool(hinted_conditions or ('equipment' in hints and 'equipment' not in values))
+    scope = {'topic_id': topic_id,
+             'entities': context.get('equipment', hints.get('equipment', [])),
+             'conditions': {**hinted_conditions,
+                            **{key: value.value for key, value in values.items() if key != 'equipment'}}}
     requirements = []
     fields = [name for name, pattern in _SPEC_FIELDS.items() if re.search(pattern, message, re.I)]
     software = [name for name, pattern in _SOFTWARE.items() if re.search(pattern, message, re.I)]
@@ -188,7 +229,8 @@ def prepare_turn(message: str, *, previous=None, updates=None, topic_switch=None
         for claim_field in dimensions:
             requirement = {'capability': capability, 'critical': True, 'status': 'unknown',
                            'evidence_class': 'governed_required', **copy.deepcopy(scope),
-                           'conditions_authority': 'user_supplied', 'entity_status': 'unresolved'}
+                           'conditions_authority': ('platform_context_unverified' if used_hints else 'user_supplied'),
+                           'entity_status': 'unresolved'}
             if claim_field:
                 requirement['software' if capability == 'check_software_support' else 'field'] = claim_field
             if status == 'unknown':

@@ -14,6 +14,7 @@ from uuid import UUID
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+import psycopg
 
 from src.platform_identity.client import PlatformIdentityClient
 from src.platform_identity.models import PlatformIdentityError
@@ -83,6 +84,25 @@ class _InternalPilotClient:
         return self._authorize(await self._client.validate(binding_id))
 
 
+def _verify_identity_database(database_url: str) -> None:
+    """Fail startup if the DAQ-only session constraint was not installed."""
+    try:
+        with psycopg.connect(database_url, connect_timeout=3) as connection:
+            marker = connection.execute(
+                "select agent_id, database_name = current_database() "
+                "from daq_installation_identity where singleton"
+            ).fetchone()
+            constraint = connection.execute(
+                "select exists (select 1 from pg_constraint "
+                "where conrelid = to_regclass('public.fae_enterprise_sessions') "
+                "and conname = 'daq_enterprise_sessions_agent_id_check')"
+            ).fetchone()[0]
+    except psycopg.Error:
+        raise ValueError('daq_identity_database_unverified') from None
+    if marker != (AGENT_ID, True) or not constraint:
+        raise ValueError('daq_identity_database_unverified')
+
+
 def configure_platform_identity(
     app: FastAPI, *, environ: Mapping[str, str] | None = None,
     repository=None, platform_client=None,
@@ -97,6 +117,8 @@ def configure_platform_identity(
     if config is None:
         return None
     token_keyring = SessionTokenKeyring.from_file(config.session_keyring_file)
+    if repository is None:
+        _verify_identity_database(config.database_url)
     owns_client = platform_client is None
     client = platform_client if platform_client is not None else PlatformIdentityClient(
         config.base_url, agent_id=AGENT_ID,

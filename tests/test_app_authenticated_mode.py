@@ -18,12 +18,22 @@ def test_enabled_platform_identity_requires_dedicated_persistence(monkeypatch, t
         create_app(provider_mode="offline", state_db_path=tmp_path / "dev.sqlite3")
 
 
+def test_task_flag_cannot_silently_disable_when_identity_is_off(monkeypatch):
+    monkeypatch.setenv('DAQ_PLATFORM_IDENTITY_ENABLED', 'false')
+    monkeypatch.setenv('DAQ_PLATFORM_TASK_ENABLED', 'true')
+    with pytest.raises(ValueError, match='daq_platform_task_requires_authenticated_mode'):
+        create_app(provider_mode='offline')
+
+
 def test_authenticated_assembly_exposes_no_anonymous_state_or_chat(tmp_path, monkeypatch):
     env = {**identity_environment(tmp_path), **persistence_environment(tmp_path)}
     for key, value in env.items():
         monkeypatch.setenv(key, value)
     local_db = tmp_path / 'anonymous.sqlite3'
-    app = create_app(provider_mode='offline', state_db_path=local_db)
+    app = create_app(
+        provider_mode='offline', state_db_path=local_db,
+        identity_repository=InMemoryAuthenticatedSessionRepository(),
+    )
     assert app.state.local_state is None
     assert not local_db.exists()
     client = TestClient(app, base_url=env['DAQ_PLATFORM_PUBLIC_ORIGIN'])
@@ -110,7 +120,10 @@ def test_authenticated_browser_uses_daq_entry_and_root_api(tmp_path, monkeypatch
     dist.mkdir()
     (dist / 'index.html').write_text('<html><head></head><body>DAQ workspace</body></html>')
     (dist / 'assets').mkdir()
-    app = create_app(provider_mode='offline', webui_dist=dist)
+    app = create_app(
+        provider_mode='offline', webui_dist=dist,
+        identity_repository=InMemoryAuthenticatedSessionRepository(),
+    )
     client = TestClient(app, base_url=env['DAQ_PLATFORM_PUBLIC_ORIGIN'])
     html = client.get('/daq/').text
     assert 'DAQ workspace' in html

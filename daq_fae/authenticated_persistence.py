@@ -161,7 +161,7 @@ class DaqAuthenticatedPersistence:
                            "last_active_at": item.last_active_at.isoformat()} for item in page.items],
                 "next_cursor": page.next_cursor}
 
-    def save_turn(self, subject, session, *, turn, attachment_relations=()):
+    def save_turn(self, subject, session, *, turn, attachment_relations=(), connection=None):
         _assert_subject(subject)
         _assert_owner(subject, session)
         trusted = {**self._versions, "authentication_mode": "platform_enterprise",
@@ -192,6 +192,7 @@ class DaqAuthenticatedPersistence:
         try:
             turn_id = self.conversations.save_turn_and_checkpoint(
                 session, turn=record, attachment_relations=attachment_relations,
+                connection=connection,
             )
         except Exception:
             raise ConversationStoreError("daq_conversation_storage_unavailable") from None
@@ -248,9 +249,10 @@ def _validate_database(database_url, old_database_url):
         raise ValueError("daq_database_identity_invalid")
     if old_database_url:
         old = urlsplit(old_database_url)
-        if ((parsed.hostname, parsed.port or 5432) == (old.hostname, old.port or 5432)
-                and (unquote(parsed.username) == unquote(old.username or "")
-                     or unquote(parsed.path) == unquote(old.path))):
+        # Host aliases and proxies may point at the same server; require a
+        # distinct database *and* role whenever the camera URL is configured.
+        if (unquote(parsed.username) == unquote(old.username or "")
+                or unquote(parsed.path) == unquote(old.path)):
             raise ValueError("daq_database_identity_invalid")
 
 

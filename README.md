@@ -4,19 +4,19 @@
 
 ## 当前状态
 
-`feat/full-daq-fae-parity` 已有可运行的**本机 Dev 实例**。当前知识发布 `empty-dev-v0` 没有已审核数采事实，因此产品参数、兼容性、操作步骤和下载链接应明确缺证。当前共享 `src/` 是 [upstream-source.json](upstream-source.json) 记录的本地集成快照；它还没有受保护的持久 Git ref，不是正式依赖 pin。
+`feat/full-daq-fae-parity` 已有可运行的**本机 Dev 实例**。当前知识发布 `empty-dev-v0` 没有已审核数采事实，因此产品参数、兼容性、操作步骤和下载链接应明确缺证。当前共享 `src/` 是 [upstream-source.json](upstream-source.json) 记录的集成快照；上游集成分支已推送远端，但尚未核实受保护的持久 Git ref，因此不是正式依赖 pin。
 
 | 能力 | 当前接入情况 |
 | --- | --- |
 | Provider/Loop/终稿协议、SSE/心跳、trace、错误归因 | 已在数采 API 实际装配；Opus 5.5 使用 `submit_only_auto` |
-| 数采多能力计划、任务上下文、需求账本和证据门 | 已装配；空知识或未核验来源不能交付 `resolved` |
-| 会话续接、请求去重、反馈 | 本机 Dev 用独立 SQLite；内部认证模式用独立 Postgres、所有者会话与请求账本，包含长调用续租 |
-| 附件上传、会话内检索/精读、图片分析、归档 | 已接入；认证模式可启用独立归档清单与删除确认，真实 Postgres 往返测试通过；视觉 Provider 尚未配置时明确失败 |
+| 数采多能力计划、任务上下文、需求账本和证据门 | 已装配目录、选型、规格、流程、SDK、经验与风险等入口；空知识或未核验来源不能交付 `resolved`；全部缺证的安全弃答使用可追踪的确定性整理，`fallback_used=true` |
+| 会话续接、请求去重、反馈 | 本机 Dev 用独立 SQLite；内部认证模式用独立 Postgres、所有者会话与请求账本，包含长调用续租和回答/终态同事务提交 |
+| 附件上传、会话内检索/精读、图片分析、归档 | 已接入；认证模式可启用独立归档清单与删除确认，关闭新归档后仍处理既有删除，真实 Postgres 往返及删除与归档确认竞态测试通过；视觉 Provider 尚未配置时明确失败 |
 | WebUI | 本机 `/app/` 与内部认证模式 `/daq/` 分别装配，沿用旧客户端合同 |
 | Platform 身份、Postgres 会话/反馈、review、HTTP Task | 已装配可选内部认证模式；数采 Agent ID、任务签名 audience、会话和资料隔离；真实 Platform 联调未完成 |
 | 数采事实、关系、权限和知识发布 | 空知识；待资料归档、裁决、可见性与发布清单 |
 
-**尚不能宣布完整能力等价或试点可发布。** 共享源码仍是本地未保护的 Git pin；真实 Opus 网关有一次 476 秒传输失败，相机 Dev 回归有一个硬失败和一个答案矛盾；数采真实知识、Platform 实例联调和部署回滚仍未验收。[迁移计划](docs/superpowers/plans/2026-10-08-full-runtime-parity-migration.md)与[完整设计](docs/2026-10-08-数采FAE完整设计.md)记录发布门。
+**尚不能宣布完整能力等价或试点可发布。** 共享源码虽已推送远端集成分支，受保护依赖 pin 尚未核实；真实 Opus 网关有一次 476 秒传输失败，相机 Dev 回归有一个硬失败和一个答案矛盾；数采真实知识、Platform 实例联调和部署回滚仍未验收。[迁移计划](docs/superpowers/plans/2026-10-08-full-runtime-parity-migration.md)与[完整设计](docs/2026-10-08-数采FAE完整设计.md)记录发布门。
 
 ## 本机启动
 
@@ -52,6 +52,6 @@ cd webui && npm test && npm run build
 
 ## 内部认证模式的装配
 
-独立 DAQ Postgres 须先按清单执行 `PYTHONPATH=. python scripts/migrate_daq_pg.py` 查看迁移顺序，再由有数据库权限的操作者设置 `DAQ_DATABASE_URL`，确认数据库名后执行 `PYTHONPATH=. python scripts/migrate_daq_pg.py --apply --confirm-database-name <数采数据库名>`。脚本只读取 `DAQ_DATABASE_URL`，ASGI 启动不会自动改表。
+独立 DAQ Postgres 须先按清单执行 `PYTHONPATH=. python scripts/migrate_daq_pg.py` 查看迁移顺序，再由有数据库权限的操作者设置 `DAQ_DATABASE_URL`，确认数据库名后执行 `PYTHONPATH=. python scripts/migrate_daq_pg.py --apply --confirm-database-name <数采数据库名>`。脚本只读取 `DAQ_DATABASE_URL`，ASGI 启动不会自动改表。迁移先排除相机身份会话，再用数采专属约束替换共享表内的相机 Agent ID 限制；认证模式启动会核验该约束和 DAQ 安装标记。
 
-内部模式至少配置 `DAQ_PLATFORM_IDENTITY_ENABLED=true`、独立 `DAQ_DATABASE_URL`、`DAQ_AUTHENTICATED_CONTENT_KEYRING_FILE`、`DAQ_PLATFORM_IDENTITY_BASE_URL`、`DAQ_PLATFORM_PUBLIC_ORIGIN`、`DAQ_PLATFORM_SESSION_KEYRING_FILE` 和 `DAQ_PLATFORM_ALLOWED_SUBJECT_IDS`。归档启用项是 `DAQ_ATTACHMENT_ARCHIVE_ENABLED=true`；Platform 归档工作进程调用 `python -m daq_fae.archive_cli`，只读取 DAQ 数据库与附件目录。HTTP Task 启用项是 `DAQ_PLATFORM_TASK_ENABLED=true`，还需独立 `DAQ_PLATFORM_TASK_CONTENT_KEYRING_FILE` 与 `DAQ_PLATFORM_TASK_PUBLIC_KEY_PATHS_JSON`；路由为 `/internal/platform/v1`，签名 audience 为 `ai-daq-fae-agent`。缺少这些配置时相应能力保持关闭，不能从旧 FAE 借用凭据或数据。
+内部模式至少配置 `DAQ_PLATFORM_IDENTITY_ENABLED=true`、独立 `DAQ_DATABASE_URL`、`DAQ_AUTHENTICATED_CONTENT_KEYRING_FILE`、`DAQ_PLATFORM_IDENTITY_BASE_URL`、`DAQ_PLATFORM_PUBLIC_ORIGIN`、`DAQ_PLATFORM_SESSION_KEYRING_FILE` 和 `DAQ_PLATFORM_ALLOWED_SUBJECT_IDS`。归档启用项是 `DAQ_ATTACHMENT_ARCHIVE_ENABLED=true`；Platform 归档工作进程调用 `python -m daq_fae.archive_cli`，只读取 DAQ 数据库与附件目录。HTTP Task 启用项是 `DAQ_PLATFORM_TASK_ENABLED=true`，还需独立 `DAQ_PLATFORM_TASK_CONTENT_KEYRING_FILE` 与 `DAQ_PLATFORM_TASK_PUBLIC_KEY_PATHS_JSON`；路由为 `/internal/platform/v1`，签名 audience 为 `ai-daq-fae-agent`，启动会核验 DAQ 安装身份标记。任务附件引用目前明确失败，须完成 Platform 附件读取授权合同后才能启用该路径。缺少这些配置时相应能力保持关闭，不能从旧 FAE 借用凭据或数据。
