@@ -5,10 +5,12 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import time
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 import httpx
+from pydantic import BaseModel, Field
 
 from src.agent.loop.adapters import AnthropicAdapter
 from src.agent.loop.runtime import LoopRuntime
@@ -17,6 +19,8 @@ from daq_fae.api_attachments import configure_attachments
 from src.attachments.models import AttachmentDescriptor, AttachmentError, AttachmentLimits
 from daq_fae.domain_evidence import DaqEvidencePolicy, question_requirements
 from daq_fae.domain_tools import DaqToolBox
+from daq_fae.local_state import LocalStateError, LocalStateStore
+from daq_fae.webui import mount_local_webui
 from daq_fae.offline_adapter import OfflineAdapter
 from daq_fae.api_transport import ChatRequest, LocalRequestRegistry, RequestRecord, is_local_peer
 from src.agent.session import SessionStore
@@ -30,6 +34,16 @@ AGENT_ID = "ai-daq-fae-agent"
 KNOWLEDGE_RELEASE = "empty-dev-v0"
 RUNTIME_RELEASE = "fae-3d0b06d-dev"
 _ROOT = Path(__file__).resolve().parent.parent
+
+
+class FeedbackRequest(BaseModel):
+    session_id: str
+    message_index: int = Field(ge=0)
+    rating: Literal["good", "bad"]
+    comment: str = Field(default="", max_length=4000)
+    turn_id: str | None = None
+    trace_id: str | None = None
+    reason_code: str | None = None
 
 
 def _anthropic_dev_adapter() -> AnthropicAdapter:
@@ -52,7 +66,8 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                knowledge_dir: Path | None = None, heartbeat_interval_seconds: float = 10,
                max_concurrent: int = 2, trace_recorder=None,
                attachment_dir: Path | None = None, attachment_limits=None,
-               attachment_clock=None) -> FastAPI:
+               attachment_clock=None, webui_dist: Path | None = None,
+               state_db_path: Path | None = None) -> FastAPI:
     knowledge_dir = knowledge_dir or _ROOT / "knowledge"
     if not knowledge_dir.is_dir():
         raise ValueError("empty knowledge directory is missing")
@@ -71,6 +86,10 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
     app.state.session_store = SessionStore(ttl_seconds=3600)
     app.state.chat_concurrency_gate = ChatConcurrencyGate(max_concurrent)
     app.state.trace_recorder = trace_recorder or TraceRecorder([NoopTraceSink()])
+    app.state.local_state = LocalStateStore(
+        state_db_path or Path(os.getenv("DAQ_DEV_STATE_DB", str(_ROOT / "data" / "daq_dev.sqlite3"))),
+        agent_id=AGENT_ID,
+    )
     registry = LocalRequestRegistry()
     configure_attachments(
         app, root=attachment_dir or Path(os.getenv("DAQ_ATTACHMENT_STORAGE_DIR", str(_ROOT / "data" / "daq_attachments"))),
@@ -97,8 +116,8 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
             "attachment_model_evidence_enabled": False,
             "attachment_archive_enabled": False,
             "platform_identity_enabled": False,
-            "session_persistence": "process_memory",
-            "request_idempotency": "process_memory",
+            "session_persistence": "local_sqlite_dev",
+            "request_idempotency": "local_sqlite_dev",
             "trace_persistence": "configured_sink" if trace_recorder else "disabled",
         }
 
@@ -106,15 +125,51 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
     def history(session_id: str):
         session = app.state.session_store.get(session_id)
         if session is None:
+            restored = app.state.local_state.load_session(session_id)
+            if restored is not None:
+                session = app.state.session_store.adopt(restored)
+        if session is None:
             raise HTTPException(404, "session not found or expired")
         return {"session_id": session.session_id, "channel": session.channel,
                 "messages": list(session.messages), "current_schema": None}
+
+    @app.post("/feedback")
+    def feedback(body: FeedbackRequest):
+        session = app.state.session_store.get(body.session_id)
+        if session is None:
+            restored = app.state.local_state.load_session(body.session_id)
+            if restored is not None:
+                session = app.state.session_store.adopt(restored)
+        if session is None:
+            raise HTTPException(404, "session not found or expired")
+        feedback_id = app.state.local_state.record_feedback(
+            session_id=body.session_id, turn_index=body.message_index,
+            turn_id=body.turn_id, trace_id=body.trace_id,
+            rating=body.rating, comment=body.comment, reason_code=body.reason_code,
+        )
+        if feedback_id is None:
+            raise HTTPException(404, "feedback target not found")
+        return {"ok": True, "feedback_id": feedback_id}
 
     @app.post("/chat")
     def chat(request: ChatRequest):
         fingerprint = (request.message, request.session_id, request.channel, tuple(request.attachment_ids))
         with registry.lock:
             registry.prune()
+            if request.client_request_id:
+                try:
+                    persisted = app.state.local_state.lookup_request(
+                        request.client_request_id, fingerprint,
+                    )
+                except LocalStateError:
+                    raise HTTPException(409, "client_request_id_conflict") from None
+                if persisted is not None:
+                    persisted_session_id, events = persisted
+                    if events is None:
+                        raise HTTPException(409, "request_in_progress_or_interrupted")
+                    if app.state.local_state.load_session(persisted_session_id) is None:
+                        raise HTTPException(404, "session not found or expired")
+                    return StreamingResponse(iter(events), media_type="text/event-stream")
             existing = registry.records.get(request.client_request_id) if request.client_request_id else None
             if existing:
                 if existing.fingerprint != fingerprint:
@@ -125,6 +180,10 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                     raise HTTPException(404, "session not found or expired")
                 return StreamingResponse(iter(tuple(existing.events)), media_type="text/event-stream")
             session = app.state.session_store.get(request.session_id) if request.session_id else None
+            if session is None and request.session_id:
+                restored = app.state.local_state.load_session(request.session_id)
+                if restored is not None:
+                    session = app.state.session_store.adopt(restored)
             if request.session_id and session is None:
                 raise HTTPException(404, "session not found or expired")
             if session is not None and request.channel != session.channel:
@@ -154,6 +213,14 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
             registry.active_sessions.add(session.session_id)
             record = RequestRecord(fingerprint=fingerprint, session_id=session.session_id)
             if request.client_request_id:
+                try:
+                    app.state.local_state.reserve_request(
+                        request.client_request_id, fingerprint, session.session_id,
+                    )
+                except LocalStateError:
+                    registry.active_sessions.discard(session.session_id)
+                    app.state.chat_concurrency_gate.release()
+                    raise HTTPException(409, "client_request_id_conflict") from None
                 registry.records[request.client_request_id] = record
             prior_history = list(session.messages)
 
@@ -271,8 +338,20 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                 "coverage_status": coverage_status,
                 "duration_ms": int((time.monotonic() - started_at) * 1000),
             })
+            done.pop("provenance", None)
             session.append_message("user", request.message)
             session.append_message("assistant", done["answer"])
+            try:
+                app.state.local_state.save_turn(session, done)
+            except Exception:
+                done.update({
+                    "answer": "本轮会话无法安全保存，答案未交付。请检查数采 Dev 存储。",
+                    "outcome": "persistence_error", "sources": [],
+                    "fallback_used": True, "fallback_reason": "local_state_write_failed",
+                    "persistence_failed": True,
+                })
+                done.pop("turn_id", None)
+                session.messages[-1]["content"] = done["answer"]
             ctx.finalize({"outcome": done["outcome"], "answer": done["answer"],
                           "fallback_used": done["fallback_used"],
                           "fallback_reason": done["fallback_reason"],
@@ -304,6 +383,10 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                     with registry.lock:
                         record.events.append(encoded)
                         if name == "done":
+                            if request.client_request_id:
+                                app.state.local_state.finish_request(
+                                    request.client_request_id, record.events,
+                                )
                             record.finished = True
                     yield encoded
             finally:
@@ -321,6 +404,7 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
 
         return StreamingResponse(stream(), media_type="text/event-stream")
 
+    mount_local_webui(app, dist=webui_dist or _ROOT / "webui" / "dist")
     return app
 
 

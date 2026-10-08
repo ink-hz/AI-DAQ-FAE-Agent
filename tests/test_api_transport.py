@@ -3,10 +3,16 @@ import threading
 import time
 
 from fastapi.testclient import TestClient
+import pytest
 
 from daq_fae.app import create_app
 from daq_fae.offline_adapter import OfflineAdapter
 from src.agent.tracing import TraceRecorder, TraceSink
+
+
+@pytest.fixture(autouse=True)
+def isolated_dev_state(tmp_path, monkeypatch):
+    monkeypatch.setenv('DAQ_DEV_STATE_DB', str(tmp_path / 'state.sqlite3'))
 
 
 def events(response):
@@ -109,7 +115,7 @@ def test_local_dev_guard_rejects_non_loopback_and_exposes_no_platform_identity()
     health = TestClient(app).get('/health').json()
     assert health['local_dev_only'] is True
     assert health['platform_identity_enabled'] is False
-    assert health['session_persistence'] == 'process_memory'
+    assert health['session_persistence'] == 'local_sqlite_dev'
 
 
 def test_concurrent_requests_have_explicit_limits_and_no_duplicate_execution():
