@@ -13,6 +13,8 @@ import httpx
 from src.agent.loop.adapters import AnthropicAdapter
 from src.agent.loop.runtime import LoopRuntime
 
+from daq_fae.api_attachments import configure_attachments
+from src.attachments.models import AttachmentDescriptor, AttachmentError, AttachmentLimits
 from daq_fae.empty_knowledge import EmptyKnowledgeToolBox
 from daq_fae.offline_adapter import OfflineAdapter
 from daq_fae.api_transport import ChatRequest, LocalRequestRegistry, RequestRecord, is_local_peer
@@ -54,7 +56,9 @@ def _anthropic_dev_adapter() -> AnthropicAdapter:
 
 def create_app(*, provider_mode: str | None = None, adapter=None,
                knowledge_dir: Path | None = None, heartbeat_interval_seconds: float = 10,
-               max_concurrent: int = 2, trace_recorder=None) -> FastAPI:
+               max_concurrent: int = 2, trace_recorder=None,
+               attachment_dir: Path | None = None, attachment_limits=None,
+               attachment_clock=None) -> FastAPI:
     knowledge_dir = knowledge_dir or _ROOT / "knowledge"
     if not knowledge_dir.is_dir():
         raise ValueError("empty knowledge directory is missing")
@@ -74,6 +78,10 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
     app.state.chat_concurrency_gate = ChatConcurrencyGate(max_concurrent)
     app.state.trace_recorder = trace_recorder or TraceRecorder([NoopTraceSink()])
     registry = LocalRequestRegistry()
+    configure_attachments(
+        app, root=attachment_dir or Path(os.getenv("DAQ_ATTACHMENT_STORAGE_DIR", str(_ROOT / "data" / "daq_attachments"))),
+        limits=attachment_limits or AttachmentLimits(), clock=attachment_clock,
+    )
 
     @app.middleware("http")
     async def local_dev_guard(request: Request, call_next):
@@ -91,6 +99,9 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
             "runtime_release": RUNTIME_RELEASE,
             "provider_mode": mode,
             "local_dev_only": True,
+            "attachment_capability": "http_storage_only",
+            "attachment_model_evidence_enabled": False,
+            "attachment_archive_enabled": False,
             "platform_identity_enabled": False,
             "session_persistence": "process_memory",
             "request_idempotency": "process_memory",
@@ -107,9 +118,7 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
 
     @app.post("/chat")
     def chat(request: ChatRequest):
-        if request.attachment_ids:
-            raise HTTPException(422, "attachments_not_enabled")
-        fingerprint = (request.message, request.session_id, request.channel)
+        fingerprint = (request.message, request.session_id, request.channel, tuple(request.attachment_ids))
         with registry.lock:
             registry.prune()
             existing = registry.records.get(request.client_request_id) if request.client_request_id else None
@@ -133,6 +142,21 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                 raise HTTPException(409, "session_request_in_progress")
             if not app.state.chat_concurrency_gate.acquire(timeout=0):
                 raise HTTPException(429, "chat_concurrency_limit")
+            try:
+                manifests = app.state.attachment_store.bind_many(
+                    request.attachment_ids, session.session_id, owner_subject_id=None,
+                )
+            except AttachmentError as exc:
+                app.state.chat_concurrency_gate.release()
+                status = {
+                    "attachment_expired": 410, "attachment_deleted": 410,
+                    "attachment_owner_mismatch": 403, "attachment_session_mismatch": 409,
+                }.get(exc.code, 422)
+                raise HTTPException(status, exc.code) from None
+            session.bind_attachments(
+                [AttachmentDescriptor.from_manifest(manifest) for manifest in manifests],
+                explicit_ids=request.attachment_ids,
+            )
             registry.active_sessions.add(session.session_id)
             record = RequestRecord(fingerprint=fingerprint, session_id=session.session_id)
             if request.client_request_id:
@@ -154,15 +178,25 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
             progress = []
             try:
                 with install_trace_ctx(ctx):
-                    done = None
-                    for event in runtime.run(request.message, history=prior_history):
-                        if event.get("type") == "tool_call":
-                            progress.append(event)
-                            yield "stage", {"stage": "tool_call", **event}
-                        elif event.get("type") == "done":
-                            done = dict(event)
-                    if done is None:
-                        raise RuntimeError("runtime_missing_terminal")
+                    if request.attachment_ids:
+                        done = {
+                            "type": "done", "outcome": "attachment_evidence_unavailable",
+                            "answer": "附件已安全接收并绑定当前会话，但本次数采 Dev 尚未接入附件取证工具，无法根据附件内容回答。",
+                            "sources": [], "tool_calls": [],
+                            "fallback_used": True,
+                            "fallback_reason": "attachment_model_evidence_not_enabled",
+                            "attachment_capability": "http_storage_only",
+                        }
+                    else:
+                        done = None
+                        for event in runtime.run(request.message, history=prior_history):
+                            if event.get("type") == "tool_call":
+                                progress.append(event)
+                                yield "stage", {"stage": "tool_call", **event}
+                            elif event.get("type") == "done":
+                                done = dict(event)
+                        if done is None:
+                            raise RuntimeError("runtime_missing_terminal")
             except httpx.HTTPStatusError as exc:
                 status_code = exc.response.status_code
                 outcome = (

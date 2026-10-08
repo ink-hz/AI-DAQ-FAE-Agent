@@ -54,7 +54,7 @@ def test_unsupported_attachments_and_unknown_sessions_are_explicit():
     client = TestClient(create_app(provider_mode='offline'))
     response = client.post('/chat', json={'message': '看日志', 'attachment_ids': ['unwired']})
     assert response.status_code == 422
-    assert response.json()['detail'] == 'attachments_not_enabled'
+    assert response.json()['detail'] == 'attachment_not_found'
     assert client.post('/chat', json={'message': '继续', 'session_id': 'unknown'}).status_code == 404
     assert client.get('/history', params={'session_id': 'unknown'}).status_code == 404
 
