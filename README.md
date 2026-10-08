@@ -2,7 +2,7 @@
 
 数采（数据采集）产品的独立 FAE Agent 工作目录。首期服务内部 FAE / 技术支持，复用现有 AI FAE 的通用运行能力，但独立发布数采知识和服务版本。
 
-当前有一个**本地 Dev 空知识启动版**：复制已核对生产构建身份的 FAE `a6234f6` 源码快照，新增数采 API 装配。`knowledge/` 为空，不会载入相机资料；任何确定性答案都须等数采证据工具和知识发布完成后才能交付。快照来源见 [upstream-source.json](upstream-source.json)。它是可运行起点，不代表完整设计的里程碑 0 已通过。
+当前有一个**本地 Dev 空知识启动版**：复制已核对生产构建身份的 FAE `a6234f6` 源码快照，新增数采 API 装配。`knowledge/` 为空，不会载入相机资料；任何确定性答案都须等数采证据工具和知识发布完成后才能交付。快照来源见 [upstream-source.json](upstream-source.json)。它是可运行起点，**并未达到原相机 FAE 的非知识能力等价**，也不代表完整设计的里程碑 0 已通过。逐项差异见[能力对照审查](docs/reviews/2026-10-08-bootstrap-capability-parity-audit.md)。
 
 ## 本地启动
 
