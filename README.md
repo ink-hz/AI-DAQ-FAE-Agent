@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-`master`（2026-10-08 核对：`8cea98b`，已在 `origin/master`）包含可运行的**本机 Dev 实例**。当前知识发布 `empty-dev-v0` 没有已审核数采事实，因此产品参数、兼容性、操作步骤和下载链接应明确缺证。当前共享 `src/` 是 [upstream-source.json](upstream-source.json) 记录的集成快照；上游集成分支已推送远端，但尚未核实受保护的持久 Git ref，因此不是正式依赖 pin。
+`master` 已推送到 `origin/master`，包含可运行的**本机 Dev 实例**；当前提交与远端状态请以 Git 查询结果为准。当前知识发布 `empty-dev-v0` 没有已审核数采事实，因此产品参数、兼容性、操作步骤和下载链接应明确缺证。当前共享 `src/` 是 [upstream-source.json](upstream-source.json) 记录的集成快照；上游集成分支已推送远端，但尚未核实受保护的持久 Git ref，因此不是正式依赖 pin。
 
 | 能力 | 当前接入情况 |
 | --- | --- |
