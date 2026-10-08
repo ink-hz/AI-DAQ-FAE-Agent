@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import date
+import hashlib
 import json
 import re
 from urllib.parse import urlsplit
@@ -11,6 +12,7 @@ from urllib.parse import urlsplit
 
 KINDS = {"entity", "claim", "topology", "procedure", "software", "link"}
 STATUSES = {"candidate", "verified", "conflict", "unknown", "unsupported"}
+ROLES = {"internal_fae", "tmall_support", "channel"}
 _ID = re.compile(r"^[a-z][a-z0-9_.:-]{2,127}$")
 _REQUIRED_DATA = {
     "entity": {"name", "entity_type"},
@@ -25,6 +27,63 @@ _REQUIRED_DATA = {
 
 def _finding(record_id: object, code: str) -> dict[str, str]:
     return {"record_id": str(record_id), "code": code}
+
+
+def record_fingerprint(row: dict) -> str:
+    """Bind every approval to exact fact, applicability, and source identities."""
+    core = {key: row[key] for key in ("id", "kind", "status", "scope", "source_refs", "data")}
+    payload = json.dumps(core, ensure_ascii=False, sort_keys=True,
+                         separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def access_fingerprint(row: dict) -> str:
+    access = row.get("access_review") or {}
+    payload = json.dumps({
+        "record_sha256": record_fingerprint(row),
+        "view_roles": sorted(access.get("view_roles", [])),
+        "forward_roles": sorted(access.get("forward_roles", [])),
+    }, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _nonempty(value: object) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _data_valid(kind: str, status: str, data: dict) -> bool:
+    if kind == "entity":
+        return _nonempty(data.get("name")) and data.get("entity_type") in {
+            "family", "device", "variant", "component", "kit", "hub",
+        }
+    if kind == "claim":
+        value = data.get("value")
+        return (isinstance(data.get("entity_id"), str) and
+                bool(_ID.fullmatch(data["entity_id"])) and
+                isinstance(data.get("field"), str) and bool(_ID.fullmatch(data["field"])) and
+                _nonempty(data.get("unit")) and isinstance(data.get("conditions"), dict) and
+                (status == "conflict" or
+                 (value is not None and value != "" and value != [] and value != {})))
+    if kind == "topology":
+        return (isinstance(data.get("members"), list) and bool(data["members"]) and
+                all(_nonempty(item) for item in data["members"]) and
+                isinstance(data.get("roles"), dict) and
+                isinstance(data.get("connections"), list) and
+                isinstance(data.get("power"), dict) and
+                _nonempty(data.get("platform")) and _nonempty(data.get("sync_target")) and
+                _nonempty(data.get("storage")))
+    if kind == "procedure":
+        return (all(_nonempty(data.get(key)) for key in ("task", "topology_id")) and
+                all(isinstance(data.get(key), list) for key in
+                    ("prerequisites", "steps", "checks", "failure_branches")) and
+                bool(data.get("steps")) and bool(data.get("checks")))
+    if kind == "software":
+        return all(_nonempty(data.get(key)) for key in
+                   ("entity_id", "hardware_revision", "platform", "connection_mode",
+                    "software", "version", "capability", "evidence_level"))
+    if kind == "link":
+        return all(_nonempty(data.get(key)) for key in ("url", "title", "link_type"))
+    return False
 
 
 def _review_valid(review: object) -> bool:
@@ -98,7 +157,7 @@ def validate_records(records: list[dict], snapshot: dict) -> tuple[list[dict], l
             findings.append(_finding(record_id, "kind_invalid"))
         if not isinstance(status, str) or status not in STATUSES:
             findings.append(_finding(record_id, "status_invalid"))
-        if not isinstance(row.get("scope"), dict):
+        if not isinstance(row.get("scope"), dict) or not row["scope"]:
             findings.append(_finding(record_id, "scope_invalid"))
         refs = row.get("source_refs")
         if not isinstance(refs, list) or not refs:
@@ -114,6 +173,9 @@ def validate_records(records: list[dict], snapshot: dict) -> tuple[list[dict], l
             data = {}
         if kind in _REQUIRED_DATA and not _REQUIRED_DATA[kind] <= data.keys():
             findings.append(_finding(record_id, "data_fields_missing"))
+        if isinstance(kind, str) and kind in KINDS and isinstance(status, str) \
+                and status in STATUSES and not _data_valid(kind, status, data):
+            findings.append(_finding(record_id, f"{kind}_data_invalid"))
         if kind == "claim" and status != "conflict" and "value" not in data:
             findings.append(_finding(record_id, "claim_value_missing"))
         if status == "conflict":
@@ -132,15 +194,27 @@ def validate_records(records: list[dict], snapshot: dict) -> tuple[list[dict], l
                         findings.append(_finding(record_id, code))
         answerable = status in {"verified", "unsupported"}
         if answerable:
-            if not _review_valid(row.get("fact_review")):
+            fingerprint = record_fingerprint(row) if all(
+                key in row for key in ("id", "kind", "status", "scope", "source_refs", "data")
+            ) else None
+            fact_review = row.get("fact_review")
+            if not _review_valid(fact_review):
                 findings.append(_finding(record_id, "fact_review_missing"))
+            elif fact_review.get("record_sha256") != fingerprint:
+                findings.append(_finding(record_id, "fact_review_stale"))
             access = row.get("access_review")
             if not _review_valid(access) or not isinstance(access.get("view_roles"), list) \
                     or not access["view_roles"] or not all(isinstance(role, str) and role
-                    for role in access["view_roles"]) or not isinstance(access.get("forward_roles"), list) \
-                    or not all(isinstance(role, str) and role for role in access["forward_roles"]) \
+                    and role in ROLES for role in access["view_roles"]) \
+                    or not isinstance(access.get("forward_roles"), list) \
+                    or not all(isinstance(role, str) and role in ROLES
+                               for role in access["forward_roles"]) \
+                    or len(set(access["view_roles"])) != len(access["view_roles"]) \
+                    or len(set(access["forward_roles"])) != len(access["forward_roles"]) \
                     or not set(access["forward_roles"]) <= set(access["view_roles"]):
                 findings.append(_finding(record_id, "access_review_missing"))
+            elif access.get("record_sha256") != access_fingerprint(row):
+                findings.append(_finding(record_id, "access_review_stale"))
             if any(isinstance(ref, dict) and ref.get("locator") == {"kind": "file"}
                    for ref in refs) and kind not in {"software", "link"}:
                 findings.append(_finding(record_id, "asset_not_fact_evidence"))
@@ -161,8 +235,61 @@ def validate_records(records: list[dict], snapshot: dict) -> tuple[list[dict], l
                         or parsed is None or parsed.scheme != "https" or not parsed.hostname \
                         or parsed.username or parsed.password:
                     findings.append(_finding(record_id, "link_review_missing"))
+                elif review.get("record_sha256") != fingerprint:
+                    findings.append(_finding(record_id, "link_review_stale"))
         row["answerable"] = answerable
         normalized.append(row)
+    claims_by_key: dict[str, list[dict]] = {}
+    for row in normalized:
+        if row.get("kind") != "claim" or row.get("status") not in {
+            "verified", "unsupported", "conflict",
+        }:
+            continue
+        data = row.get("data")
+        if not isinstance(data, dict) or not isinstance(row.get("scope"), dict):
+            continue
+        key = json.dumps([data.get("entity_id"), data.get("field"), data.get("conditions"),
+                          row["scope"]], ensure_ascii=False, sort_keys=True, default=str)
+        claims_by_key.setdefault(key, []).append(row)
+    for group in claims_by_key.values():
+        answerable_rows = [row for row in group if row["status"] in {"verified", "unsupported"}]
+        if any(row["status"] == "conflict" for row in group) and answerable_rows:
+            for row in group:
+                row["answerable"] = False
+                findings.append(_finding(row["id"], "unadjudicated_conflict"))
+            continue
+        values = {json.dumps([row["status"], row["data"].get("value"),
+                              row["data"].get("unit")], ensure_ascii=False,
+                             sort_keys=True, default=str) for row in answerable_rows}
+        if len(values) > 1:
+            for row in group:
+                row["answerable"] = False
+                findings.append(_finding(row["id"], "unadjudicated_conflict"))
+    invalid_ids = {finding["record_id"] for finding in findings}
+    for row in normalized:
+        if row.get("id") in invalid_ids:
+            row["answerable"] = False
+    entities = {row["id"] for row in normalized
+                if row.get("kind") == "entity" and row["answerable"]}
+    for row in normalized:
+        if not row["answerable"]:
+            continue
+        data = row["data"]
+        if row["kind"] == "topology" and any(
+            member not in entities for member in data["members"]
+        ):
+            row["answerable"] = False
+            findings.append(_finding(row["id"], "entity_reference_missing"))
+        elif row["kind"] in {"claim", "software"} and data["entity_id"] not in entities:
+            row["answerable"] = False
+            findings.append(_finding(row["id"], "entity_reference_missing"))
+    topologies = {row["id"] for row in normalized
+                  if row.get("kind") == "topology" and row["answerable"]}
+    for row in normalized:
+        if row["answerable"] and row["kind"] == "procedure" and \
+                row["data"]["topology_id"] not in topologies:
+            row["answerable"] = False
+            findings.append(_finding(row["id"], "topology_reference_missing"))
     return normalized, findings
 
 
@@ -176,6 +303,12 @@ def impact_report(records: list[dict], change: dict) -> dict[str, list[str]]:
             continue
         paths = {ref.get("path") for ref in row.get("source_refs", [])
                  if isinstance(ref, dict)}
+        data = row.get("data")
+        if isinstance(data, dict) and isinstance(data.get("candidates"), list):
+            paths.update(candidate.get("source_ref", {}).get("path")
+                         for candidate in data["candidates"]
+                         if isinstance(candidate, dict) and
+                         isinstance(candidate.get("source_ref"), dict))
         if paths & changed:
             impacted.add(record_id)
         if change.get("added") and row.get("status") in {"unknown", "unsupported"}:

@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 
 import fitz
 
@@ -32,6 +33,7 @@ def test_import_is_deterministic_and_keeps_exact_text_locations(tmp_path: Path):
 
     first = import_archive(archive, digest)
     assert first == import_archive(archive, digest)
+    assert first["extractor_version"] == "1"
     assert {row["path"]: row["kind"] for row in first["sources"]} == {
         "EGO/guide.md": "markdown", "HUB/spec.pdf": "pdf", "SDK/fw.zip": "asset",
     }
@@ -68,3 +70,57 @@ def test_wrong_manifest_hash_rejects_import(tmp_path: Path):
         assert "manifest hash mismatch" in str(exc)
     else:
         raise AssertionError("untrusted archive was imported")
+
+
+def test_blank_pdf_page_is_flagged_for_ocr_even_when_other_pages_have_text(tmp_path: Path):
+    pdf = fitz.open()
+    pdf.new_page().insert_text((72, 72), "visible text")
+    pdf.new_page()
+    payload = pdf.tobytes()
+    pdf.close()
+    archive, digest = _archive(tmp_path, {"mixed.pdf": payload})
+    snapshot = import_archive(archive, digest)
+    assert snapshot["sources"][0]["needs_ocr_pages"] == [2]
+    assert snapshot["sources"][0]["extraction_status"] == "partial_text"
+
+
+def test_source_changed_after_archive_check_is_rejected(tmp_path: Path, monkeypatch):
+    archive, digest = _archive(tmp_path, {"guide.md": b"# EGO\noriginal\n"})
+    from daq_fae.knowledge import source_import
+    original_verify = source_import.verify_archive
+
+    def mutate_after_verify(path, expected):
+        result = original_verify(path, expected)
+        source = path / "files" / "guide.md"
+        os.chmod(source, 0o600)
+        source.write_bytes(b"# EGO\nchanged\n")
+        return result
+
+    monkeypatch.setattr(source_import, "verify_archive", mutate_after_verify)
+    try:
+        import_archive(archive, digest)
+    except ValueError as exc:
+        assert "source changed during import" in str(exc)
+    else:
+        raise AssertionError("candidate text used bytes different from source hash")
+
+
+def test_asset_changed_after_archive_check_is_rejected(tmp_path: Path, monkeypatch):
+    archive, digest = _archive(tmp_path, {"firmware.zip": b"original"})
+    from daq_fae.knowledge import source_import
+    original_verify = source_import.verify_archive
+
+    def mutate_after_verify(path, expected):
+        result = original_verify(path, expected)
+        source = path / "files" / "firmware.zip"
+        os.chmod(source, 0o600)
+        source.write_bytes(b"changed")
+        return result
+
+    monkeypatch.setattr(source_import, "verify_archive", mutate_after_verify)
+    try:
+        import_archive(archive, digest)
+    except ValueError as exc:
+        assert "source changed during import" in str(exc)
+    else:
+        raise AssertionError("asset metadata used bytes different from source hash")

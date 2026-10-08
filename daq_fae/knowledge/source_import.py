@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
+import stat
 
 import fitz
 
@@ -18,6 +20,25 @@ _HEADING = re.compile(r"^#{1,6}\s+")
 
 def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def _read_verified(path: Path, entry: dict, *, capture: bool) -> bytes | None:
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    digest = hashlib.sha256()
+    size = 0
+    parts = [] if capture else None
+    with os.fdopen(descriptor, "rb") as stream:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+            raise ValueError(f"source changed during import: {entry['path']}")
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            size += len(block)
+            digest.update(block)
+            if parts is not None:
+                parts.append(block)
+    if size != entry["size"] or digest.hexdigest() != entry["sha256"]:
+        raise ValueError(f"source changed during import: {entry['path']}")
+    return b"".join(parts) if parts is not None else None
 
 
 def _decode(data: bytes) -> tuple[str, str]:
@@ -74,9 +95,10 @@ def import_archive(archive: Path, manifest_sha256: str) -> dict:
             "kind": kind, "modified_at_utc": entry["modified_at_utc"],
             "extraction_status": "metadata_only" if kind == "asset" else "extracted",
         }
+        payload = _read_verified(archive / "files" / path, entry, capture=kind != "asset")
         if kind in {"markdown", "text"}:
             try:
-                content, encoding = _decode((archive / "files" / path).read_bytes())
+                content, encoding = _decode(payload)
                 source["encoding"] = encoding
                 for locator, text in _line_sections(content, markdown=kind == "markdown"):
                     chunks.append(_chunk(path, entry["sha256"], locator, text))
@@ -86,19 +108,27 @@ def import_archive(archive: Path, manifest_sha256: str) -> dict:
                 source["extraction_status"] = "decode_failed"
         elif kind == "pdf":
             try:
-                with fitz.open(archive / "files" / path) as pdf:
+                with fitz.open(stream=payload, filetype="pdf") as pdf:
+                    missing_text_pages = []
                     for page_number, page in enumerate(pdf, start=1):
                         text = page.get_text(sort=True).strip()
                         if text:
                             chunks.append(_chunk(path, entry["sha256"],
                                                  {"kind": "page", "page": page_number}, text))
-                    if not any(c["source_path"] == path for c in chunks):
+                        else:
+                            missing_text_pages.append(page_number)
+                    if missing_text_pages:
+                        source["needs_ocr_pages"] = missing_text_pages
+                    if len(missing_text_pages) == len(pdf):
                         source["extraction_status"] = "needs_ocr"
+                    elif missing_text_pages:
+                        source["extraction_status"] = "partial_text"
             except (RuntimeError, ValueError):
                 source["extraction_status"] = "pdf_unreadable"
         sources.append(source)
     return {
         "format_version": 1,
+        "extractor_version": "1",
         "archive_manifest_sha256": verified["manifest_sha256"],
         "source_date": manifest["source_date"],
         "sources": sources,

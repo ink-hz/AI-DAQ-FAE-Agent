@@ -1,4 +1,6 @@
 from copy import deepcopy
+import hashlib
+import json
 
 from daq_fae.knowledge.records import impact_report, validate_records
 
@@ -12,6 +14,24 @@ SNAPSHOT = {
     "chunks": [{"source_path": "EGO/spec.md", "source_sha256": HASH,
                 "locator": SOURCE["locator"], "text": "EGO specification"}],
 }
+
+
+def _bind_reviews(row):
+    core = {key: row[key] for key in ("id", "kind", "status", "scope", "source_refs", "data")}
+    digest = hashlib.sha256(json.dumps(core, ensure_ascii=False, sort_keys=True,
+                                      separators=(",", ":")).encode()).hexdigest()
+    for key in ("fact_review", "link_review"):
+        if key in row:
+            row[key]["record_sha256"] = digest
+    if "access_review" in row:
+        access = row["access_review"]
+        payload = {"record_sha256": digest,
+                   "view_roles": sorted(access["view_roles"]),
+                   "forward_roles": sorted(access["forward_roles"])}
+        access["record_sha256"] = hashlib.sha256(json.dumps(
+            payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode()).hexdigest()
+    return row
 
 
 def _record(kind="claim", status="verified", **overrides):
@@ -45,16 +65,23 @@ def _record(kind="claim", status="verified", **overrides):
         row["link_review"] = {"reviewer": "link-owner", "reviewed_at": "2026-10-08",
                               "final_url": data["url"]}
     row.update(overrides)
-    return row
+    return _bind_reviews(row)
 
 
 def test_all_six_record_kinds_keep_reviewed_provenance():
-    rows = [_record(kind) for kind in
-            ("entity", "claim", "topology", "procedure", "software", "link")]
+    rows = [_record(kind, **({"id": "entity:ego-1600"} if kind == "entity" else
+                             {"id": "topology:single"} if kind == "topology" else {}))
+            for kind in ("entity", "claim", "topology", "procedure", "software", "link")]
     normalized, findings = validate_records(rows, SNAPSHOT)
     assert findings == []
     assert len(normalized) == 6
     assert all(row["answerable"] for row in normalized)
+
+
+def test_answerable_claim_cannot_reference_an_absent_entity():
+    normalized, findings = validate_records([_record()], SNAPSHOT)
+    assert "entity_reference_missing" in {finding["code"] for finding in findings}
+    assert normalized[0]["answerable"] is False
 
 
 def test_source_drift_and_duplicate_id_fail_closed():
@@ -118,3 +145,76 @@ def test_malformed_review_and_locator_return_findings_instead_of_crashing():
     assert {finding["code"] for finding in findings} >= {
         "access_review_missing", "source_locator_missing",
     }
+
+
+def test_distinct_verified_values_for_same_claim_scope_are_not_answerable():
+    first = _record(id="claim:first")
+    second = _record(id="claim:second")
+    second["data"]["value"] = "1920x1200"
+    _bind_reviews(second)
+    normalized, findings = validate_records([first, second], SNAPSHOT)
+    assert "unadjudicated_conflict" in {finding["code"] for finding in findings}
+    assert not any(row["answerable"] for row in normalized)
+
+
+def test_unresolved_conflict_blocks_same_field_verified_answer():
+    verified = _record(id="claim:verified", data={
+        "entity_id": "entity:ego-pro", "field": "baseline", "value": 100,
+        "unit": "mm", "conditions": {},
+    })
+    unresolved = _record(id="claim:unresolved", status="conflict", data={
+        "entity_id": "entity:ego-pro", "field": "baseline", "unit": "mm",
+        "conditions": {}, "candidates": [
+            {"value": 100, "source_ref": deepcopy(SOURCE)},
+            {"value": 120, "source_ref": deepcopy(SOURCE)},
+        ],
+    })
+    normalized, findings = validate_records([verified, unresolved], SNAPSHOT)
+    assert "unadjudicated_conflict" in {finding["code"] for finding in findings}
+    assert not any(row["answerable"] for row in normalized)
+
+
+def test_review_is_bound_to_exact_source_and_value():
+    row = _record()
+    changed = deepcopy(row)
+    changed["source_refs"][0]["sha256"] = OTHER_HASH
+    changed["data"]["value"] = "1920x1200"
+    new_snapshot = deepcopy(SNAPSHOT)
+    new_snapshot["sources"][0]["sha256"] = OTHER_HASH
+    new_snapshot["chunks"][0]["source_sha256"] = OTHER_HASH
+    _, findings = validate_records([changed], new_snapshot)
+    assert {finding["code"] for finding in findings} >= {
+        "fact_review_stale", "access_review_stale",
+    }
+
+
+def test_access_expansion_requires_new_access_review():
+    row = _record()
+    row["access_review"]["view_roles"].append("channel")
+    _, findings = validate_records([row], SNAPSHOT)
+    assert "access_review_stale" in {finding["code"] for finding in findings}
+
+
+def test_empty_claim_fields_and_unknown_role_are_invalid_even_with_matching_reviews():
+    row = _record()
+    row["data"].update({"entity_id": None, "field": "", "value": None,
+                        "unit": None, "conditions": None})
+    row["scope"] = {}
+    row["access_review"]["view_roles"] = ["arbitrary_role"]
+    _bind_reviews(row)
+    _, findings = validate_records([row], SNAPSHOT)
+    assert {finding["code"] for finding in findings} >= {
+        "scope_invalid", "claim_data_invalid", "access_review_missing",
+    }
+
+
+def test_impact_report_includes_conflict_candidate_sources():
+    row = _record(status="conflict", data={"entity_id": "entity:ego-pro", "field": "baseline",
+                                           "unit": "mm", "conditions": {}, "candidates": [
+                                               {"value": 100, "source_ref": {"path": "other.md"}},
+                                               {"value": 120, "source_ref": deepcopy(SOURCE)},
+                                           ]})
+    row["source_refs"] = [deepcopy(SOURCE)]
+    report = impact_report([row], {"added": [], "changed": ["other.md"],
+                                   "removed": [], "unchanged": []})
+    assert report["impacted_record_ids"] == ["claim:test"]
