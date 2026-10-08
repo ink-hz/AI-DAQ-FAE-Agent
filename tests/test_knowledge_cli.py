@@ -160,3 +160,40 @@ def test_cli_rejects_release_root_in_tracked_repo_path(tmp_path: Path):
                 for name in dirs:
                     os.chmod(Path(directory) / name, 0o700)
             shutil.rmtree(release_root)
+
+
+def test_cli_review_packet_rechecks_archive_and_writes_private_candidate(tmp_path: Path):
+    archive, digest = _archive(tmp_path, b"# EGO\nBaseline 100 mm\n")
+    snapshot_path = tmp_path / "snapshot.json"
+    _cli("import", "--archive", str(archive), "--manifest-sha256", digest,
+         "--output", str(snapshot_path))
+    recipe = {"version": "test-1", "cases": [{
+        "id": "baseline", "group": "conflict", "question": "Which baseline?",
+        "owner": "product_rd", "selectors": [{"source_glob": "*.md",
+                                              "pattern": "Baseline 100 mm"}],
+    }]}
+    recipe_path = tmp_path / "recipe.json"
+    recipe_path.write_text(json.dumps(recipe))
+    output = tmp_path / "packet.json"
+    result = _cli("review-packet", "--archive", str(archive),
+                  "--manifest-sha256", digest, "--snapshot", str(snapshot_path),
+                  "--recipe", str(recipe_path), "--output", str(output))
+    assert result["cases"] == 1 and result["missing_selectors"] == 0
+    assert output.stat().st_mode & 0o077 == 0
+    assert json.loads(output.read_text())["cases"][0]["status"] == "pending"
+    assert _cli("review-packet", "--archive", str(archive),
+                "--manifest-sha256", digest, "--snapshot", str(snapshot_path),
+                "--recipe", str(recipe_path), "--output", str(output)) == result
+    diff = _cli("review-diff", "--previous", str(output), "--current", str(output))
+    assert diff["cases"] == {"added": [], "changed": [], "removed": []}
+    snapshot = json.loads(snapshot_path.read_text())
+    snapshot["chunks"][0]["text"] = "tampered"
+    snapshot_path.write_text(json.dumps(snapshot))
+    failed = subprocess.run([sys.executable, "scripts/daq_knowledge.py", "review-packet",
+                             "--archive", str(archive), "--manifest-sha256", digest,
+                             "--snapshot", str(snapshot_path), "--recipe", str(recipe_path),
+                             "--output", str(tmp_path / "invalid.json")], cwd=ROOT,
+                            text=True, capture_output=True)
+    assert failed.returncode == 2
+    assert "differs from verified archive" in failed.stderr
+    assert not (tmp_path / "invalid.json").exists()

@@ -21,6 +21,9 @@ from daq_fae.knowledge.records import (  # noqa: E402
 from daq_fae.knowledge.releases import (  # noqa: E402
     activate_release, publish_release, read_active_release,
 )
+from daq_fae.knowledge.review_packets import (  # noqa: E402
+    build_review_packet, compare_review_packets,
+)
 from daq_fae.knowledge.source_import import (  # noqa: E402
     compare_snapshots, import_archive,
 )
@@ -87,6 +90,15 @@ def main(argv: list[str] | None = None) -> int:
     difference.add_argument("--records", type=Path)
     fingerprint = commands.add_parser("fingerprint")
     fingerprint.add_argument("--records", type=Path, required=True)
+    review_packet = commands.add_parser("review-packet")
+    review_packet.add_argument("--archive", type=Path, required=True)
+    review_packet.add_argument("--manifest-sha256", required=True)
+    review_packet.add_argument("--snapshot", type=Path, required=True)
+    review_packet.add_argument("--recipe", type=Path, required=True)
+    review_packet.add_argument("--output", type=Path, required=True)
+    review_diff = commands.add_parser("review-diff")
+    review_diff.add_argument("--previous", type=Path, required=True)
+    review_diff.add_argument("--current", type=Path, required=True)
     publish = commands.add_parser("publish")
     publish.add_argument("--root", type=Path, required=True)
     publish.add_argument("--snapshot", type=Path, required=True)
@@ -118,6 +130,29 @@ def main(argv: list[str] | None = None) -> int:
             result = {"sources": change}
             if args.records:
                 result["records"] = impact_report(_read_json(args.records), change)
+        elif args.command == "review-packet":
+            snapshot = _read_json(args.snapshot)
+            verified_snapshot = import_archive(args.archive, args.manifest_sha256)
+            if snapshot != verified_snapshot:
+                raise ValueError("candidate snapshot differs from verified archive")
+            packet = build_review_packet(snapshot, _read_json(args.recipe))
+            _private_write(args.output, packet)
+            result = {
+                "archive_manifest_sha256": packet["archive_manifest_sha256"],
+                "recipe_sha256": packet["recipe_sha256"],
+                "cases": len(packet["cases"]),
+                "missing_selectors": sum(len(case["missing_selectors"])
+                                         for case in packet["cases"]),
+                "unmapped_sources": len(packet["unmapped_sources"]),
+                "claimed_classification_counts": {
+                    label: sum(row["claimed_classification"] == label
+                               for row in packet["source_markings"].values())
+                    for label in sorted({row["claimed_classification"]
+                                         for row in packet["source_markings"].values()})},
+            }
+        elif args.command == "review-diff":
+            result = compare_review_packets(_read_json(args.previous),
+                                            _read_json(args.current))
         elif args.command == "fingerprint":
             rows = _read_json(args.records)
             if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):

@@ -14,7 +14,7 @@
 | 附件上传、会话内检索/精读、图片分析、归档 | 已接入；认证模式可启用独立归档清单与删除确认，关闭新归档后仍处理既有删除，真实 Postgres 往返及删除与归档确认竞态测试通过；视觉 Provider 尚未配置时明确失败 |
 | WebUI | 本机 `/app/` 与内部认证模式 `/daq/` 分别装配，沿用旧客户端合同 |
 | Platform 身份、Postgres 会话/反馈、review、HTTP Task | 已装配可选内部认证模式；数采 Agent ID、任务签名 audience、会话和资料隔离；真实 Platform 联调未完成 |
-| 数采事实、关系、权限和知识发布 | 在线仍为空知识；K-1 已有离线候选导入、差异与影响审计、本机不可变发布及回滚工具，真实资料尚未裁决或装入在线服务 |
+| 数采事实、关系、权限和知识发布 | 在线仍为空知识；K-1 已有离线候选导入、差异与影响审计、本机不可变发布及回滚工具；K-2 有私有候选复审包与更新差异，真实资料尚未裁决或装入在线服务 |
 
 **尚不能宣布完整能力等价或试点可发布。** 共享源码虽已推送远端集成分支，受保护依赖 pin 尚未核实；真实 Opus 网关有一次 476 秒传输失败，相机 Dev 回归有一个硬失败和一个答案矛盾；数采真实知识、Platform 实例联调和部署回滚仍未验收。原始数采资料已有本机受限归档候选和逐文件哈希，但持久存储与资料裁决尚未验收，不进入当前知识发布。[接管门禁核查](docs/reviews/2026-10-08-daq-takeover-gate-audit.md)、[迁移计划](docs/superpowers/plans/2026-10-08-full-runtime-parity-migration.md)与[完整设计](docs/2026-10-08-数采FAE完整设计.md)记录发布门。
 
@@ -67,11 +67,21 @@ cd webui && npm test && npm run build
   --records data/knowledge/reviewed-records.json
 .venv/bin/python scripts/daq_knowledge.py fingerprint \
   --records data/knowledge/reviewed-records.json
+.venv/bin/python scripts/daq_knowledge.py review-packet \
+  --archive "$DAQ_ARCHIVE" --manifest-sha256 "$DAQ_MANIFEST_SHA256" \
+  --snapshot "data/knowledge/candidates/$DAQ_MANIFEST_SHA256-extractor-1.json" \
+  --recipe review_recipes/k2.json \
+  --output "data/knowledge/review/$DAQ_MANIFEST_SHA256-k2-20261008-2.json"
+.venv/bin/python scripts/daq_knowledge.py review-diff \
+  --previous data/knowledge/review/<旧归档哈希>-<旧配方版本>.json \
+  --current data/knowledge/review/<新归档哈希>-<新配方版本>.json
 ```
 
 同一归档和同一抽取器版本重导入得到同一候选快照；抽取规则变化时须提升 `extractor_version` 并另存快照，不覆盖原文件。更新报告按文件内容哈希列出新增、变更、删除，以及必须复审的记录。PDF 按页、Markdown/TXT 按行定位；软件、固件、图片等仅保留元数据。`publish` 命令会重新读取并核验归档，要求记录的来源哈希、定位、事实复审和资料权限复审匹配。它只生成本机不可变快照，需另用 `activate` 显式切换；`rollback` 可切回既有快照。命令详情见 `.venv/bin/python scripts/daq_knowledge.py --help`。这套工具不改变当前 API 的 `empty-dev-v0`，不代表真实知识、Platform 或生产已发布。
 
 `fingerprint` 只计算待审核摘要，不代替审核。具名事实复审、资料权限复审和链接复审须各自将对应摘要写入 `record_sha256`；更改值、条件或来源会使旧事实审核失效，扩大可见或转发角色还会使旧权限审核失效。已核验规格、软件关系和组合步骤必须引用同一发布中已核验的实体或拓扑。当前角色标识限于 `internal_fae`、`tmall_support`、`channel`，实际可见范围仍待 K-2 负责人签认。字段和审核格式见[记录合同](docs/knowledge/2026-10-08-daq-k1-record-contract.md)。
+
+`review-packet` 会再次校验归档和候选快照，给 19 个 K-2 议题收集精确页/行定位与短摘录，并把所有资料角色权限设为待签认。输出只允许在 Git 忽略目录或仓外，文件权限为 `0600`。每次资料更新生成新包，用 `review-diff` 找到需重审的议题和未映射来源；改动配方也会标记受影响议题。细节见[复审指引](docs/knowledge/2026-10-08-daq-k2-review-guide.md)和[本机演练](docs/reviews/2026-10-08-daq-k2-candidate-rehearsal.md)。复审包不产生已核验事实、角色授权或在线发布。
 
 ## 内部认证模式的装配
 

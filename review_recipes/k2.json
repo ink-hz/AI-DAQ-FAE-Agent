@@ -1,0 +1,204 @@
+{
+  "version": "k2-20261008-2",
+  "cases": [
+    {
+      "id": "entity:ego-1600",
+      "group": "entity",
+      "question": "确认 EGO 1600 配置的正式名称、SKU/硬件修订及别名；不得与 1920 配置合并。",
+      "owner": "product_rd",
+      "selectors": [
+        {"source_glob": "English-Datasheet/双目EGO/*EGO DATASHEET*.pdf", "pattern": "1600\\s*[×x]\\s*1200"},
+        {"source_glob": "中文-产品规格书/双目EGO/*EGO 规格书*.pdf", "pattern": "1600\\s*[×x]\\s*1200"}
+      ]
+    },
+    {
+      "id": "entity:ego-1920",
+      "group": "entity",
+      "question": "确认 EGO 1920 配置与 EGO 1600 的 SKU/修订映射和适用规格。",
+      "owner": "product_rd",
+      "selectors": [
+        {"source_glob": "English-Datasheet/双目EGO/*1920*.pdf", "pattern": "1920\\s*[×x]\\s*1200"},
+        {"source_glob": "中文-产品规格书/双目EGO/*1920*.pdf", "pattern": "1920\\s*[×x]\\s*1200"}
+      ]
+    },
+    {
+      "id": "entity:ego-pro",
+      "group": "entity",
+      "question": "确认 EGO Pro 正式名称、四目配置、硬件修订和别名。",
+      "owner": "product_rd",
+      "selectors": [
+        {"source_glob": "English-Datasheet/四目EGO/*.pdf", "pattern": "EGO\\s+Pro"},
+        {"source_glob": "中文-产品规格书/四目EGO/*.pdf", "pattern": "EGO\\s+Pro"}
+      ]
+    },
+    {
+      "id": "entity:eg-db",
+      "group": "entity",
+      "question": "确认 EG-DB 正式名称、深度整机边界、SKU/修订及内嵌模块关系。",
+      "owner": "product_rd",
+      "selectors": [
+        {"source_glob": "English-Datasheet/深度EGO/*.pdf", "pattern": "EG-DB"},
+        {"source_glob": "中文-产品规格书/深度EGO/*.pdf", "pattern": "Gemini\\s*335L"}
+      ]
+    },
+    {
+      "id": "entity:wristcam",
+      "group": "entity",
+      "question": "确认 WristCam 单只/左右成套的身份、别名和修订。",
+      "owner": "product_rd",
+      "selectors": [
+        {"source_glob": "English-Datasheet/腕部相机/*.pdf", "pattern": "WristCam"},
+        {"source_glob": "中文-产品规格书/腕部相机/*.pdf", "pattern": "WristCam"}
+      ]
+    },
+    {
+      "id": "entity:umi-finger",
+      "group": "entity",
+      "question": "确认 UMI Finger 与 UMI 视觉模块的整机/组件关系和各自别名。",
+      "owner": "product_rd",
+      "selectors": [
+        {"source_glob": "中文-产品规格书/UMI Finger/*Finger*.pdf", "pattern": "UMI\\s*Finger"},
+        {"source_glob": "中文-产品规格书/UMI Finger/*视觉模块*.pdf", "pattern": "视觉模块"}
+      ]
+    },
+    {
+      "id": "entity:hub",
+      "group": "entity",
+      "question": "确认 HUB 的型号、修订、端口角色和适用组合。",
+      "owner": "product_rd",
+      "selectors": [
+        {"source_glob": "English-Datasheet/HUB/*.pdf", "pattern": "HUB"},
+        {"source_glob": "中文-产品规格书/HUB/*.pdf", "pattern": "HUB"}
+      ]
+    },
+    {
+      "id": "relation:ego-pro-quad-ego",
+      "group": "identity_gap",
+      "question": "官方 Quad-EGO 与资料内 EGO Pro 是否同一 SKU/硬件修订？须取得逐页官方来源并签认映射。",
+      "owner": "product_rd",
+      "selectors": [
+        {"source_glob": "English-Datasheet/四目EGO/*.pdf", "pattern": "EGO\\s+Pro"},
+        {"source_glob": "external-official/*", "pattern": "Quad-EGO"}
+      ]
+    },
+    {
+      "id": "relation:eg-db-rgbd-ego",
+      "group": "identity_gap",
+      "question": "官方 RGB-D EGO 与资料内 EG-DB 是否同一 SKU/硬件修订？模块参数不能自动成为整机参数。",
+      "owner": "product_rd",
+      "selectors": [
+        {"source_glob": "English-Datasheet/深度EGO/*.pdf", "pattern": "EG-DB"},
+        {"source_glob": "external-official/*", "pattern": "RGB-D\\s+EGO"}
+      ]
+    },
+    {
+      "id": "claim:ego-pro-baseline",
+      "group": "conflict",
+      "question": "EGO Pro 前向双目基线 100/120 mm 应如何按 SKU、修订和测量对象裁决？",
+      "owner": "product_rd",
+      "selectors": [
+        {"source_glob": "English-Datasheet/四目EGO/*.pdf", "pattern": "100\\s*mm"},
+        {"source_glob": "中文-产品规格书/四目EGO/*.pdf", "pattern": "100\\s*mm"},
+        {"source_glob": "external-official/*", "pattern": "120\\s*mm"}
+      ]
+    },
+    {
+      "id": "claim:wireless-generation",
+      "group": "variant_boundary",
+      "question": "Wi-Fi 5/6 分别属于哪个确切设备、SKU 和修订？不得跨变体继承。",
+      "owner": "product_rd",
+      "selectors": [
+        {"source_glob": "English-Datasheet/双目EGO/*.pdf", "pattern": "Wi-Fi\\s*5"},
+        {"source_glob": "English-Datasheet/四目EGO/*.pdf", "pattern": "Wi-Fi\\s*6"},
+        {"source_glob": "中文-产品规格书/UMI Finger/*.pdf", "pattern": "Wi-Fi\\s*5"}
+      ]
+    },
+    {
+      "id": "claim:eg-db-rgb-framerate",
+      "group": "conflict",
+      "question": "EG-DB RGB 1600×1200 的 60/30 与 30 fps 差异及条件如何裁决？",
+      "owner": "product_rd",
+      "selectors": [
+        {"source_glob": "English-Datasheet/深度EGO/*.pdf", "pattern": "1600\\s*[×x]\\s*1200\\s*@\\s*60/30"},
+        {"source_glob": "中文-产品规格书/深度EGO/*.pdf", "pattern": "1600\\s*[×x]\\s*1200\\s*@\\s*30"}
+      ]
+    },
+    {
+      "id": "claim:wristcam-fov",
+      "group": "conflict",
+      "question": "WristCam 的水平视场角 160°/165° 在同版资料中不一致；确认数值和条件。",
+      "owner": "product_rd",
+      "selectors": [
+        {"source_glob": "English-Datasheet/腕部相机/*.pdf", "pattern": "160°"},
+        {"source_glob": "English-Datasheet/腕部相机/*.pdf", "pattern": "165°"},
+        {"source_glob": "中文-产品规格书/腕部相机/*.pdf", "pattern": "160°"},
+        {"source_glob": "中文-产品规格书/腕部相机/*.pdf", "pattern": "165°"}
+      ]
+    },
+    {
+      "id": "claim:umi-usb",
+      "group": "conflict",
+      "question": "UMI Finger 与视觉模块各自的 USB 2.0/3.0 差异及接口用途如何裁决？",
+      "owner": "product_rd",
+      "selectors": [
+        {"source_glob": "中文-产品规格书/UMI Finger/*.pdf", "pattern": "USB\\s*2\\.0"},
+        {"source_glob": "中文-产品规格书/UMI Finger/*.pdf", "pattern": "USB\\s*3\\.0"}
+      ]
+    },
+    {
+      "id": "claim:hub-synchronization",
+      "group": "condition_boundary",
+      "question": "HUB 的触发通道偏差和系统同步精度分别定义什么测量对象、条件？不能混写。",
+      "owner": "product_rd",
+      "selectors": [
+        {"source_glob": "English-Datasheet/HUB/*.pdf", "pattern": "1\\s*[μµu]s"},
+        {"source_glob": "English-Datasheet/HUB/*.pdf", "pattern": "1\\s*ms"},
+        {"source_glob": "中文-产品规格书/HUB/*.pdf", "pattern": "1\\s*ms"}
+      ]
+    },
+    {
+      "id": "procedure:ego-single",
+      "group": "procedure",
+      "question": "按平台/连接方式核验 EGO 单机准备、采集、短时试录和落盘检查；确认适用变体。",
+      "owner": "product_rd",
+      "selectors": [
+        {"source_glob": "中文-快速上手指南/*.md", "pattern": "单机独立采集"},
+        {"source_glob": "English-EGO QuickStart/*.md", "pattern": "Standalone Fast Acquisition"},
+        {"source_glob": "English-EGO Detailed Description/*.md", "pattern": "Start collection"},
+        {"source_glob": "中文-EGO 详细说明/*.md", "pattern": "开始采集"}
+      ]
+    },
+    {
+      "id": "procedure:ego-pro-single",
+      "group": "procedure",
+      "question": "按独立、USB、Wi-Fi 三种条件核验 EGO Pro 单机步骤与落盘；不得推广到多机。",
+      "owner": "product_rd",
+      "selectors": [
+        {"source_glob": "中文-EGO Pro 四目快速使用说明文档/*.md", "pattern": "单机独立采集"},
+        {"source_glob": "中文-EGO Pro 四目快速使用说明文档/*.md", "pattern": "单机USB"},
+        {"source_glob": "中文-EGO Pro 四目快速使用说明文档/*.md", "pattern": "单机Wi"}
+      ]
+    },
+    {
+      "id": "procedure:ego-two-wristcam-hub",
+      "group": "procedure",
+      "question": "逐步核验 EGO + 左右 WristCam + HUB 的线缆、供电、主从配对、同步、短录和落盘，限定平台及软件版本。",
+      "owner": "product_rd",
+      "selectors": [
+        {"source_glob": "中文-EGO+WristCam基础使用步骤_260908/*.md", "pattern": "左右腕部相机各一个"},
+        {"source_glob": "中文-EGO+WristCam基础使用步骤_260908/*.md", "pattern": "移动电源接入HUB"},
+        {"source_glob": "中文-EGO+WristCam基础使用步骤_260908/*.md", "pattern": "主从配对"},
+        {"source_glob": "中文-EGO+WristCam基础使用步骤_260908/*.md", "pattern": "停止采集，查看采集结果"}
+      ]
+    },
+    {
+      "id": "gap:ego-pro-multidevice",
+      "group": "procedure_gap",
+      "question": "EGO Pro 多设备章节仍标持续更新；补齐原件和确认前不生成多机操作流程。",
+      "owner": "product_rd",
+      "selectors": [
+        {"source_glob": "中文-EGO Pro 四目快速使用说明文档/*.md", "pattern": "持续更新中"}
+      ]
+    }
+  ]
+}
