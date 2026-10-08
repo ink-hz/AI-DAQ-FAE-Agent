@@ -1,3 +1,5 @@
+import pytest
+
 from daq_fae.task_context import extract_context_hints, prepare_turn
 
 
@@ -137,3 +139,29 @@ def test_user_declaration_overrides_platform_excerpt_for_evidence_scope():
     assert plan.context.get('equipment') == ['EGO']
     assert all(item['entities'] == ['EGO'] for item in plan.requirements)
     assert all(item['conditions_authority'] == 'user_supplied' for item in plan.requirements)
+
+
+@pytest.mark.parametrize('question', [
+    'HUB 和主机怎么选？',
+    '采集组合应该如何选？',
+])
+def test_open_ended_choice_plans_selection_evidence(question):
+    plan = prepare_turn(question)
+    assert 'selection' in plan.planned_capabilities
+
+
+@pytest.mark.parametrize('question', [
+    '录制时丢帧，怎么排查？',
+    '采集链路卡顿，如何定位？',
+    '同步不稳定，排障建议？',
+])
+def test_diagnostic_symptoms_plan_search_procedure_and_software_evidence(question):
+    plan = prepare_turn(question)
+    assert {'search_knowledge', 'lookup_procedure', 'check_software_support'} <= set(plan.planned_capabilities)
+
+
+def test_conjoined_equipment_stays_separate_across_followup():
+    first = prepare_turn('设备是 Unit A、双 Sensor B 和 Hub C，我要同步录制。')
+    second = prepare_turn('那 Viewer 版本和落盘步骤呢？', previous=first.context)
+    assert first.context.get('equipment') == ['Unit A', '双 Sensor B', 'Hub C']
+    assert second.context.get('equipment') == ['Unit A', '双 Sensor B', 'Hub C']

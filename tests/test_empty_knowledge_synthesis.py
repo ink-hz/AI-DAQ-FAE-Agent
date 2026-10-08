@@ -59,3 +59,18 @@ def test_multi_capability_abstention_keeps_each_missing_conclusion_visible():
     assert '兼容资料' in done['answer']
     assert '推荐设备组合' in done['answer']
     assert '确认兼容关系' in done['answer']
+
+
+def test_diagnostic_abstention_requests_observations_needed_to_continue():
+    done = {'answer': '资料不足', 'outcome': 'safe_abstained', 'sources': [],
+            'evidence_policy': {'requirement_status': {
+                'procedure': 'missing', 'search': 'missing', 'software': 'missing'}}}
+    refine_empty_release_answer(
+        done, planned_capabilities=['lookup_procedure', 'search_knowledge',
+                                    'check_software_support'],
+        knowledge_release='empty-dev-v0',
+    )
+    assert '设备和软件版本' in done['answer']
+    assert '故障现象与发生时间' in done['answer']
+    assert '日志' in done['answer']
+    assert '无法可靠' in done['answer']

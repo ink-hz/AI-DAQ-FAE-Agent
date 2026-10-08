@@ -20,7 +20,7 @@ _SWITCH = re.compile(r'^(?:换个场景|换个问题|另一个问题|重新开�
 _FOLLOWUP = re.compile(r'继续|然后|还是|下一步|那|这个|它|\b(?:it|still|next|continue)\b', re.I)
 _INTENTS = {
     'catalog': r'有哪些|有多少|型号列表|产品目录|产品线|\b(?:catalog|product list|product range)\b',
-    'selection': r'推荐|选型|选择|适合|选哪个|选什么|方案建议|\b(?:recommend|selection|choose|suitable)\b',
+    'selection': r'推荐|选型|选择|适合|选哪个|选什么|怎么选|如何选|怎样选|选用|方案建议|\b(?:recommend|selection|choose|suitable)\b',
     'resolve_entity': r'设备|型号|变体|配置|套件|\b(?:device|model|variant|kit)\b',
     'lookup_spec': r'规格|参数|精度|分辨率|帧率|带宽|功耗|基线|\b(?:spec|specification|accuracy|resolution|fps|bandwidth)\b',
     'inspect_topology': r'接线|连接|主从|同步|组合|端口|供电|\b(?:topology|connection|sync|wiring|hub|power)\b',
@@ -31,7 +31,11 @@ _INTENTS = {
     'experience': r'经验|案例|最佳实践|常见问题|\b(?:experience|case study|best practice)\b',
     'risk': r'风险|注意事项|安全|合规|数据丢失|\b(?:risk|safety|compliance|data loss)\b',
 }
-_DIAGNOSTIC = re.compile(r'失败|报错|日志|没有画面|断开|\b(?:error|timeout|failed|failure|log|disconnect)\b', re.I)
+_DIAGNOSTIC = re.compile(
+    r'失败|报错|日志|没有画面|断开|排查|排障|故障|异常|不稳定|丢帧|掉帧|卡顿|'
+    r'\b(?:error|timeout|failed|failure|log|disconnect|troubleshoot|unstable|stutter)\b',
+    re.I,
+)
 _TASKS = {
     'installation': r'安装|\binstall(?:ation)?\b',
     'configuration': r'配置|\bconfigur(?:e|ation)\b|\bsetup\b',
@@ -117,7 +121,7 @@ def _extract(message):
         match = re.search(pattern, message, re.I)
         if match:
             value = match.group(1).strip()
-            updates[key] = [part.strip() for part in re.split(r'\s*\+\s*|、', value)] if key == 'equipment' else value
+            updates[key] = [part.strip() for part in re.split(r'\s*\+\s*|、|\s+(?:和|与|及)\s+', value)] if key == 'equipment' else value
     for key, label in (('viewer_version', 'viewer'), ('sdk_version', 'sdk'), ('firmware_version', r'固件|firmware')):
         matches = list(re.finditer(rf'(?:{label})\s*(?:版本)?\s*(?:为|是|[:：=]|is)?\s*v?([0-9]+(?:\.[0-9A-Za-z_-]+)+)', message, re.I))
         if matches:

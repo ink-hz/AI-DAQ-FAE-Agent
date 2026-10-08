@@ -62,6 +62,9 @@ def refine_empty_release_answer(
         subject = '、'.join(item[0] for item in focuses)
         action = '、'.join(item[1] for item in focuses)
         next_step = '请提供或确认各项适用的正式资料，核实后逐项回答。'
+    if {'search_knowledge', 'lookup_procedure'} <= planned:
+        next_step = ('请提供设备和软件版本、故障现象与发生时间、完整日志；'
+                     '确认适用的正式资料后再给排查顺序。')
     original = str(done.get('answer') or '')
     done['answer'] = f'目前缺少{subject}，无法可靠{action}。{next_step}'
     done['fallback_used'] = True
