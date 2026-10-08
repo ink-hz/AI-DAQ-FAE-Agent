@@ -10,3 +10,4 @@ tmp/
 dist/
 *.pyc
 .DS_Store
+.worktrees/
