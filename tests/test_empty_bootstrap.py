@@ -41,9 +41,10 @@ def test_empty_knowledge_request_uses_loop_and_explicitly_abstains():
     done = next(event for event in events if event["type"] == "done")
     assert done["outcome"] == "safe_abstained"
     assert done["sources"] == []
-    assert done["planned_capabilities"] == []
-    assert done["coverage_status"] == "unknown"
-    assert done["capability_coverage"] == {"search_knowledge": "missing"}
+    assert done["planned_capabilities"] == ["search_knowledge"]
+    assert done["coverage_status"] == "empty"
+    assert done["capability_coverage"] == {"search_knowledge": "empty"}
+    assert done["evidence_policy"]["requirement_status"] == {"question_evidence": "missing"}
     assert done["tool_calls"][0]["status"] == "not_found"
     assert done["fallback_used"] is False
     assert done["trace_id"]
@@ -75,7 +76,7 @@ def test_ungrounded_model_conclusion_is_blocked_and_visible():
     done = next(event for event in _events(response) if event["type"] == "done")
     assert done["outcome"] == "invalid_answer_contract"
     assert done["fallback_used"] is True
-    assert done["fallback_reason"] == "empty_knowledge_ungrounded_resolution"
+    assert done["fallback_reason"] == "evidence_policy:daq_evidence_needed"
     assert done["sources"] == []
     assert "1 mm" not in response.text
 

@@ -96,9 +96,9 @@ def test_trace_uses_terminal_identity_and_observed_coverage():
     root = next(span for span, is_root in sink.spans if is_root)
     assert root.trace_id == done['trace_id']
     assert root.output_summary['outcome'] == done['outcome']
-    assert done['capability_coverage'] == {'search_knowledge': 'missing'}
+    assert done['capability_coverage'] == {'search_knowledge': 'empty'}
     assert done['actual_capabilities'] == ['search_knowledge']
-    assert done['coverage_status'] == 'unknown'
+    assert done['coverage_status'] == 'empty'
     assert done['duration_ms'] >= 0
 
 

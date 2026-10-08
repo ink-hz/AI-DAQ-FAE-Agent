@@ -15,27 +15,21 @@ from src.agent.loop.runtime import LoopRuntime
 
 from daq_fae.api_attachments import configure_attachments
 from src.attachments.models import AttachmentDescriptor, AttachmentError, AttachmentLimits
-from daq_fae.empty_knowledge import EmptyKnowledgeToolBox
+from daq_fae.domain_evidence import DaqEvidencePolicy, question_requirements
+from daq_fae.domain_tools import DaqToolBox
 from daq_fae.offline_adapter import OfflineAdapter
 from daq_fae.api_transport import ChatRequest, LocalRequestRegistry, RequestRecord, is_local_peer
 from src.agent.session import SessionStore
 from src.api.stream import StreamHeartbeat, iter_with_heartbeat, sse_event
 from src.api.concurrency import ChatConcurrencyGate
 from src.agent.tracing import NoopTraceSink, TraceRecorder, install_trace_ctx
+from src.agent.protocol import RUNTIME_FAILURE_OUTCOMES
 
 
 AGENT_ID = "ai-daq-fae-agent"
 KNOWLEDGE_RELEASE = "empty-dev-v0"
-RUNTIME_RELEASE = "fae-a6234f6"
+RUNTIME_RELEASE = "fae-3d0b06d-dev"
 _ROOT = Path(__file__).resolve().parent.parent
-_EMPTY_ANSWER = (
-    "当前数采知识库还没有已审核的产品资料，因此无法确认这个问题的具体结论。"
-    "请提供设备型号、硬件或软件版本，以及可审核的资料后再核查。"
-)
-_UNGROUNDED_ANSWER = (
-    "本次模型在空知识库下提交了无证据的确定结论，答案已拦截。"
-    "请检查终稿协议与证据门。"
-)
 
 
 def _anthropic_dev_adapter() -> AnthropicAdapter:
@@ -172,8 +166,9 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
         def runtime_events():
             runtime = LoopRuntime(
                 adapter=adapter,
-                toolbox=EmptyKnowledgeToolBox(),
+                toolbox=DaqToolBox(),
                 system_prompt_path=_ROOT / "prompts" / "empty_knowledge_system.md",
+                evidence_policy=DaqEvidencePolicy(),
             )
             progress = []
             try:
@@ -189,7 +184,10 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                         }
                     else:
                         done = None
-                        for event in runtime.run(request.message, history=prior_history):
+                        for event in runtime.run(
+                            request.message, history=prior_history,
+                            evidence_requirements=question_requirements(request.message),
+                        ):
                             if event.get("type") == "tool_call":
                                 progress.append(event)
                                 yield "stage", {"stage": "tool_call", **event}
@@ -238,36 +236,29 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                     "fallback_reason": "runtime_error",
                 }
 
-            if done["outcome"] in {"resolved", "escalate_rd", "escalate_fae"}:
-                original_outcome = done["outcome"]
-                done.update({
-                    "answer": _UNGROUNDED_ANSWER,
-                    "outcome": "invalid_answer_contract",
-                    "sources": [],
-                    "fallback_used": True,
-                    "fallback_reason": (
-                        "empty_knowledge_ungrounded_resolution"
-                        if original_outcome == "resolved"
-                        else "empty_knowledge_unsupported_outcome"
-                    ),
-                })
-            elif done["outcome"] == "safe_abstained":
-                done["answer"] = _EMPTY_ANSWER
-                done["sources"] = []
-                done["fallback_used"] = False
-                done["fallback_reason"] = None
+            if done["outcome"] in RUNTIME_FAILURE_OUTCOMES:
+                done["fallback_used"] = True
+                done["fallback_reason"] = (
+                    done.get("answer_contract", {}).get("validation_error")
+                    or done.get("evidence_policy", {}).get("failure_reason")
+                    or done["outcome"]
+                )
             else:
                 done.setdefault("fallback_used", False)
                 done.setdefault("fallback_reason", None)
-
             calls = done.get("tool_calls") or progress
-            actual = list(dict.fromkeys(call.get("tool") for call in calls if call.get("tool")))
-            coverage = {}
-            for call in calls:
-                if call.get("tool") == "search_knowledge":
-                    coverage["search_knowledge"] = (
-                        "missing" if call.get("status") == "not_found" else "unknown"
-                    )
+            done.setdefault(
+                "planned_capabilities",
+                ["user_attachment"] if request.attachment_ids else ["search_knowledge"],
+            )
+            actual = done.get("actual_capabilities", [])
+            coverage = done.get("capability_coverage", {})
+            coverage_status = (
+                "full" if coverage and all(value == "full" for value in coverage.values())
+                else "partial" if "partial" in coverage.values() or "full" in coverage.values()
+                else "empty" if "empty" in coverage.values()
+                else "unknown"
+            )
             done.update({
                 "agent_id": AGENT_ID,
                 "knowledge_release": KNOWLEDGE_RELEASE,
@@ -275,10 +266,9 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                 "trace_id": ctx.trace_id,
                 "session_id": session.session_id,
                 "client_request_id": request.client_request_id,
-                "planned_capabilities": [],
                 "actual_capabilities": actual,
                 "capability_coverage": coverage,
-                "coverage_status": "unknown",
+                "coverage_status": coverage_status,
                 "duration_ms": int((time.monotonic() - started_at) * 1000),
             })
             session.append_message("user", request.message)
@@ -289,7 +279,7 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                           "capability_coverage": coverage,
                           "planned_capabilities": done["planned_capabilities"],
                           "actual_capabilities": actual,
-                          "coverage_status": "unknown",
+                          "coverage_status": coverage_status,
                           "tool_calls": calls,
                           "duration_ms": done["duration_ms"],
                           "provider_status_code": done.get("provider_status_code"),
