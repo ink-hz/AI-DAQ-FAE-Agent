@@ -1,8 +1,10 @@
 """An authenticated browser turn must use DAQ Postgres state, never Dev SQLite."""
 
 from fastapi.testclient import TestClient
+import time
 
 from daq_fae.app import create_app
+from daq_fae.offline_adapter import OfflineAdapter
 from src.platform_identity.service import InMemoryAuthenticatedSessionRepository
 from tests.test_api_transport import terminal
 from tests.test_authenticated_persistence import Conversations, Feedback
@@ -113,3 +115,40 @@ def test_authenticated_attachment_upload_binds_only_to_owner_session(
     assert done['session_id'].startswith('daq:')
     assert app.state.attachment_store.get(aid).bound_session_id == done['session_id']
     assert client.get(f'/attachments/{aid}').status_code == 200
+
+
+def test_blocked_provider_keeps_authenticated_execution_lease_alive(tmp_path, monkeypatch, pg_database):
+    env = {**identity_environment(tmp_path), **persistence_environment(tmp_path)}
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+
+    class SlowAdapter(OfflineAdapter):
+        def chat(self, messages, tools=None, required_tool=None):
+            time.sleep(0.05)
+            yield from super().chat(messages, tools, required_tool)
+
+    app = create_app(
+        adapter=SlowAdapter(), platform_client=FakePlatform(),
+        identity_repository=InMemoryAuthenticatedSessionRepository(),
+        conversation_repository=Conversations(), feedback_store=Feedback(), review_store=object(),
+        durable_state=store(pg_database), heartbeat_interval_seconds=0.005,
+        request_lease_renew_interval_seconds=0.01,
+    )
+    renewals = []
+    original = app.state.daq_durable_state.renew
+
+    def renew(*args, **kwargs):
+        renewals.append(True)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(app.state.daq_durable_state, 'renew', renew)
+    client = TestClient(app, base_url=env['DAQ_PLATFORM_PUBLIC_ORIGIN'])
+    launch = client.post('/enterprise/session', json={'code': CODE},
+                         headers={'Origin': env['DAQ_PLATFORM_PUBLIC_ORIGIN']})
+    headers = {'Origin': env['DAQ_PLATFORM_PUBLIC_ORIGIN'],
+               'X-DAQ-Enterprise-CSRF': launch.json()['csrf_token']}
+    response = client.post('/chat', json={'message': '设备版本', 'client_request_id': 'slow-owner'},
+                           headers=headers)
+    assert response.status_code == 200
+    assert renewals
+    assert terminal(response)['outcome'] == 'safe_abstained'

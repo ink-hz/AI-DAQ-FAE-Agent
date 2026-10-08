@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import time
+import threading
 from pathlib import Path
 
 import httpx
@@ -29,8 +30,11 @@ from daq_fae.provider_errors import anthropic_failure
 
 
 def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
-                       heartbeat_interval_seconds: float, root: Path,
+                       heartbeat_interval_seconds: float,
+                       request_lease_renew_interval_seconds: float, root: Path,
                        agent_id: str, knowledge_release: str, runtime_release: str):
+    if request_lease_renew_interval_seconds <= 0 or request_lease_renew_interval_seconds >= 600:
+        raise ValueError("daq_request_lease_renew_interval_invalid")
     if not body.client_request_id:
         raise HTTPException(422, "client_request_id_required")
     if body.channel != "fae":
@@ -90,6 +94,7 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
         raise HTTPException(503, "daq_durable_storage_unavailable") from None
 
     prior_history = list(session.messages)
+    lease_lost = threading.Event()
     trace = app.state.trace_recorder.start_trace("daq_authenticated_chat_request", {
         "agent_id": agent_id, "session_id": session.session_id,
         "owner_subject_id": str(subject.subject_id), "message_length": len(body.message),
@@ -200,6 +205,8 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
                          ),
                          "duration_ms": int((time.monotonic() - start) * 1000)})
             done.pop("provenance", None)
+            if lease_lost.is_set():
+                raise RequestInterrupted("daq_execution_lease_lost")
             session.append_message("user", body.message)
             session.append_message("assistant", done["answer"])
             turn = ChatTurnRecord(
@@ -251,10 +258,37 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
             app.state.chat_concurrency_gate.release()
 
     def stream():
-        for item in iter_with_heartbeat(produce(), heartbeat_interval_seconds=heartbeat_interval_seconds):
-            if isinstance(item, StreamHeartbeat):
-                yield sse_event("heartbeat", {"elapsed_ms": item.elapsed_ms, "count": item.count})
-            else:
-                yield item
+        next_renewal = time.monotonic() + request_lease_renew_interval_seconds
+        terminal_sent = False
+        try:
+            for item in iter_with_heartbeat(produce(), heartbeat_interval_seconds=heartbeat_interval_seconds):
+                if isinstance(item, StreamHeartbeat):
+                    if time.monotonic() >= next_renewal:
+                        try:
+                            durable.renew(subject, reservation)
+                        except (DurableStateError, RequestInterrupted):
+                            try:
+                                current = durable.reserve(
+                                    subject, body.client_request_id, body.model_dump(mode="json"),
+                                    session.session_id,
+                                )
+                            except DurableStateError:
+                                current = None
+                            if current is None or current.status != "replay":
+                                lease_lost.set()
+                                interrupt("execution_lease_renewal_failed")
+                                yield sse_event("stage", {"stage": "durable_state", "status": "error",
+                                                          "reason": "execution_lease_renewal_failed"})
+                                return
+                        next_renewal = time.monotonic() + request_lease_renew_interval_seconds
+                    yield sse_event("heartbeat", {"elapsed_ms": item.elapsed_ms, "count": item.count})
+                else:
+                    if item.startswith("event: done\n"):
+                        terminal_sent = True
+                    yield item
+        finally:
+            if not terminal_sent:
+                lease_lost.set()
+                interrupt("client_disconnected_or_stream_incomplete")
 
     return StreamingResponse(stream(), media_type="text/event-stream")

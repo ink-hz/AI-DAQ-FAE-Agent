@@ -76,6 +76,7 @@ def _anthropic_dev_adapter() -> AnthropicAdapter:
 
 def create_app(*, provider_mode: str | None = None, adapter=None,
                knowledge_dir: Path | None = None, heartbeat_interval_seconds: float = 10,
+               request_lease_renew_interval_seconds: float = 60,
                max_concurrent: int = 2, trace_recorder=None,
                attachment_dir: Path | None = None, attachment_limits=None,
                attachment_clock=None, webui_dist: Path | None = None,
@@ -214,6 +215,7 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                 app, request, http_request.state.platform_identity,
                 adapter=adapter, vision_adapter=vision_adapter,
                 heartbeat_interval_seconds=heartbeat_interval_seconds,
+                request_lease_renew_interval_seconds=request_lease_renew_interval_seconds,
                 root=_ROOT, agent_id=AGENT_ID,
                 knowledge_release=KNOWLEDGE_RELEASE, runtime_release=RUNTIME_RELEASE,
             )
