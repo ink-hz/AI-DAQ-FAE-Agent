@@ -1,0 +1,7 @@
+{
+  "repository": "AI-FAE-Agent",
+  "revision": "bf1ce9af2d467447e39e2be0caae0bb87b1ba689",
+  "deployed_basis_revision": "a6234f6be546efebb230ffc74bd9a00bebdc2814",
+  "source": "tracked git archive of src/ and requirements.txt",
+  "purpose": "temporary Dev integration snapshot from the remote feature branch with EvidencePolicy, trusted agent identity, scoped browser session cookie, bidirectional Agent-scoped archive and deletion, shared authenticated-turn transaction hook, Platform task failure projection, and structured task adapter hook; replace with a protected pinned dependency after upstream Dev regression before milestone 0 completion"
+}

@@ -1,7 +1,60 @@
 # AI DAQ FAE Agent
 
-数采（数据采集）产品的独立 FAE Agent 工作目录。首期服务内部 FAE / 技术支持，复用现有 AI FAE 的通用运行能力，但独立发布数采知识和服务版本。
+数采 FAE 是与相机 FAE 同级的独立项目，首期面向内部 FAE 和技术支持。它复用受版本约束的通用运行时，采用自己的 Agent 身份、会话、附件目录和数采知识发布。
 
-当前只有设计和开发任务书，尚未初始化运行代码或部署。完整设计见 [docs/2026-10-08-数采FAE完整设计.md](docs/2026-10-08-数采FAE完整设计.md)；跨仓开发顺序与验收见 [数采 FAE 开发任务书](docs/superpowers/plans/2026-10-08-data-acquisition-fae-development-task-brief.md)。
+## 当前状态
 
-现有 FAE 的实现基线、数采资料盘点、需求基线与 A/B 决策保存在相邻的 `AI-FAE-Agent` 仓库；本目录的设计记录后续实施所需的具体接口、数据、验收和发布边界。
+`feat/full-daq-fae-parity` 已有可运行的**本机 Dev 实例**。当前知识发布 `empty-dev-v0` 没有已审核数采事实，因此产品参数、兼容性、操作步骤和下载链接应明确缺证。当前共享 `src/` 是 [upstream-source.json](upstream-source.json) 记录的集成快照；上游集成分支已推送远端，但尚未核实受保护的持久 Git ref，因此不是正式依赖 pin。
+
+| 能力 | 当前接入情况 |
+| --- | --- |
+| Provider/Loop/终稿协议、SSE/心跳、trace、错误归因 | 已在数采 API 实际装配；Opus 5.5 使用 `submit_only_auto` |
+| 数采多能力计划、任务上下文、需求账本和证据门 | 已装配目录、选型、规格、流程、SDK、经验与风险等入口；空知识或未核验来源不能交付 `resolved`；全部缺证的安全弃答使用可追踪的确定性整理，`fallback_used=true` |
+| 会话续接、请求去重、反馈 | 本机 Dev 用独立 SQLite；内部认证模式用独立 Postgres、所有者会话与请求账本，包含长调用续租和回答/终态同事务提交 |
+| 附件上传、会话内检索/精读、图片分析、归档 | 已接入；认证模式可启用独立归档清单与删除确认，关闭新归档后仍处理既有删除，真实 Postgres 往返及删除与归档确认竞态测试通过；视觉 Provider 尚未配置时明确失败 |
+| WebUI | 本机 `/app/` 与内部认证模式 `/daq/` 分别装配，沿用旧客户端合同 |
+| Platform 身份、Postgres 会话/反馈、review、HTTP Task | 已装配可选内部认证模式；数采 Agent ID、任务签名 audience、会话和资料隔离；真实 Platform 联调未完成 |
+| 数采事实、关系、权限和知识发布 | 空知识；待资料归档、裁决、可见性与发布清单 |
+
+**尚不能宣布完整能力等价或试点可发布。** 共享源码虽已推送远端集成分支，受保护依赖 pin 尚未核实；真实 Opus 网关有一次 476 秒传输失败，相机 Dev 回归有一个硬失败和一个答案矛盾；数采真实知识、Platform 实例联调和部署回滚仍未验收。[迁移计划](docs/superpowers/plans/2026-10-08-full-runtime-parity-migration.md)与[完整设计](docs/2026-10-08-数采FAE完整设计.md)记录发布门。
+
+## 本机启动
+
+```bash
+python3.11 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+cp .env.example .env
+cd webui && npm ci && npm run build && cd ..
+.venv/bin/uvicorn daq_fae.app:app --env-file .env --host 127.0.0.1 --port 8081
+```
+
+`.env.example` 默认 `offline`，只做不调用模型的 Loop/工具合同烟测。本机服务拒绝非 loopback 请求；SQLite 和附件文件位于 `data/`，相机 FAE 的资料与数据库不进入本应用。
+
+```bash
+curl -fsS http://127.0.0.1:8081/health
+curl -fsSN -H 'content-type: application/json' \
+  -d '{"message":"EG-DB 的深度精度是多少？"}' \
+  http://127.0.0.1:8081/chat
+```
+
+浏览器可打开 `http://127.0.0.1:8081/app/`。`/chat` 返回具名 `session`、`stage`、`text_delta`、`sources`、`done` 事件；正常空知识终态是 `safe_abstained`，并附需求状态、能力覆盖、trace 与 turn ID。Provider HTTP 400 与 503 分别归为配置错误和上游不可用。
+
+若要在**开发环境**调用真实模型，设置 `DAQ_PROVIDER_MODE=anthropic`、`DAQ_ANTHROPIC_AUTH_TOKEN` 或 `DAQ_ANTHROPIC_API_KEY`、`DAQ_ANTHROPIC_BASE_URL` 和 `DAQ_ANTHROPIC_MODEL`。不要提交凭据。当前默认模型为 Opus 5.5 adaptive/high；不得对它发送 forced `tool_choice`。
+
+验证命令：
+
+```bash
+.venv/bin/python -m pytest -q tests
+.venv/bin/python scripts/verify_upstream_snapshot.py --upstream ../AI-FAE-Agent
+cd webui && npm test && npm run build
+```
+
+源码核验会读取 `upstream-source.json` 中的完整提交 SHA，比对两仓的 `src/` Git tree 和 `requirements.txt` blob，并拒绝未提交的共享源码改动。GitHub CI 也执行此门，私有上游仓需配置只读 `FAE_UPSTREAM_READ_TOKEN`。当前数采仓尚无远端、上游 ref 的保护设置未核实，因此 CI 配置存在不代表远端流水线已运行或正式依赖 pin 已完成。
+
+正式依赖 pin 之前还需完成旧 FAE Dev 回归、双服务合同、上游受保护 ref、数采真实 Dev 回放与独立答案复审。数采资料和用户附件不能自动进入知识库；发布仍受来源、事实裁决和角色权限约束。
+
+## 内部认证模式的装配
+
+独立 DAQ Postgres 须先按清单执行 `PYTHONPATH=. python scripts/migrate_daq_pg.py` 查看迁移顺序，再由有数据库权限的操作者设置 `DAQ_DATABASE_URL`，确认数据库名后执行 `PYTHONPATH=. python scripts/migrate_daq_pg.py --apply --confirm-database-name <数采数据库名>`。脚本只读取 `DAQ_DATABASE_URL`，ASGI 启动不会自动改表。迁移先排除相机身份会话，再用数采专属约束替换共享表内的相机 Agent ID 限制；认证模式启动会核验该约束和 DAQ 安装标记。
+
+内部模式至少配置 `DAQ_PLATFORM_IDENTITY_ENABLED=true`、独立 `DAQ_DATABASE_URL`、`DAQ_AUTHENTICATED_CONTENT_KEYRING_FILE`、`DAQ_PLATFORM_IDENTITY_BASE_URL`、`DAQ_PLATFORM_PUBLIC_ORIGIN`、`DAQ_PLATFORM_SESSION_KEYRING_FILE` 和 `DAQ_PLATFORM_ALLOWED_SUBJECT_IDS`。归档启用项是 `DAQ_ATTACHMENT_ARCHIVE_ENABLED=true`；Platform 归档工作进程调用 `python -m daq_fae.archive_cli`，只读取 DAQ 数据库与附件目录。HTTP Task 启用项是 `DAQ_PLATFORM_TASK_ENABLED=true`，还需独立 `DAQ_PLATFORM_TASK_CONTENT_KEYRING_FILE` 与 `DAQ_PLATFORM_TASK_PUBLIC_KEY_PATHS_JSON`；路由为 `/internal/platform/v1`，签名 audience 为 `ai-daq-fae-agent`，启动会核验 DAQ 安装身份标记。任务附件引用目前明确失败，须完成 Platform 附件读取授权合同后才能启用该路径。缺少这些配置时相应能力保持关闭，不能从旧 FAE 借用凭据或数据。

@@ -5,8 +5,9 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .venv/
-data/
+/data/
 tmp/
 dist/
 *.pyc
 .DS_Store
+.worktrees/

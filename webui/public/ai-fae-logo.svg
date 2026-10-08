@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
+  <title>AI FAE Agent</title>
+  <desc>Depth camera lens mark for the AI FAE Agent.</desc>
+  <rect width="64" height="64" rx="14" fill="#e8f0fa"/>
+  <path d="M19 14h26l8 8v20l-8 8H19l-8-8V22l8-8Z" fill="#fbfdff" stroke="#163a66" stroke-width="4" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="13" fill="#163a66"/>
+  <circle cx="32" cy="32" r="7" fill="#dcecff"/>
+  <circle cx="32" cy="32" r="3" fill="#2f7f9f"/>
+  <path d="M32 18v7M32 39v7M18 32h7M39 32h7" stroke="#2f7f9f" stroke-width="3" stroke-linecap="round"/>
+  <path d="M22 22l5 5M42 22l-5 5M22 42l5-5M42 42l-5-5" stroke="#8fb9dd" stroke-width="2.5" stroke-linecap="round"/>
+</svg>
