@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Request
@@ -35,7 +36,20 @@ def register_platform_identity_routes(
     public_origin: str,
     additional_browser_origins: tuple[str, ...] = (),
     partner_auth_start_url: str | None = None,
+    cookie_name: str = ENTERPRISE_SESSION_COOKIE,
+    csrf_header: str = ENTERPRISE_CSRF_HEADER,
 ) -> None:
+    if (
+        not isinstance(cookie_name, str)
+        or re.fullmatch(r"__Host-[A-Za-z0-9_-]+", cookie_name) is None
+        or not isinstance(csrf_header, str)
+        or re.fullmatch(r"[A-Za-z0-9!#$%&'*+.^_`|~-]+", csrf_header) is None
+    ):
+        raise ValueError("enterprise_browser_scope_invalid")
+
+    def scoped_error(code: str, status_code: int, *, clear_cookie: bool = False):
+        return _error(code, status_code, clear_cookie=clear_cookie, cookie_name=cookie_name)
+
     canonical_origin = _canonical_browser_origin(
         public_origin,
         error_code="enterprise_public_origin_invalid",
@@ -60,24 +74,24 @@ def register_platform_identity_routes(
 
     @app.middleware("http")
     async def platform_identity_boundary(request: Request, call_next):
-        token = request.cookies.get(ENTERPRISE_SESSION_COOKIE)
+        token = request.cookies.get(cookie_name)
         request.state.platform_identity = None
         request.state.enterprise_identity = None
         is_exchange = request.url.path == "/enterprise/session" and request.method == "POST"
         if request.method not in _SAFE_METHODS and (token or is_exchange):
             if request.headers.get("origin") not in allowed_browser_origin_set:
-                return _error("enterprise_origin_invalid", 403)
+                return scoped_error("enterprise_origin_invalid", 403)
         if token and not is_exchange:
             try:
                 subject = await service.authenticate(token)
                 request.state.platform_identity = subject
                 request.state.enterprise_identity = subject
             except PlatformIdentityError as exc:
-                return _error(exc.code, exc.status_code, clear_cookie=exc.status_code == 401)
+                return scoped_error(exc.code, exc.status_code, clear_cookie=exc.status_code == 401)
             if request.method not in _SAFE_METHODS:
-                csrf = request.headers.get(ENTERPRISE_CSRF_HEADER, "")
+                csrf = request.headers.get(csrf_header, "")
                 if not service.verify_csrf(token, csrf):
-                    return _error("enterprise_csrf_invalid", 403)
+                    return scoped_error("enterprise_csrf_invalid", 403)
         return await call_next(request)
 
     @app.get("/identity/capabilities")
@@ -99,7 +113,7 @@ def register_platform_identity_routes(
             partner_auth_start_url is None
             or request.url.hostname == "agent.orbbec.com.cn"
         ):
-            return _error("partner_login_unavailable", 404)
+            return scoped_error("partner_login_unavailable", 404)
         return RedirectResponse(
             partner_auth_start_url,
             status_code=302,
@@ -111,7 +125,7 @@ def register_platform_identity_routes(
         try:
             issued = await service.exchange_launch(body.code)
         except PlatformIdentityError as exc:
-            return _error(exc.code, exc.status_code)
+            return scoped_error(exc.code, exc.status_code)
         response = JSONResponse(
             _session_body(
                 AuthenticatedAccountProjection.from_subject(issued.subject),
@@ -121,7 +135,7 @@ def register_platform_identity_routes(
             headers={"Cache-Control": "no-store"},
         )
         response.set_cookie(
-            ENTERPRISE_SESSION_COOKIE,
+            cookie_name,
             issued.session_token,
             secure=True,
             httponly=True,
@@ -133,14 +147,14 @@ def register_platform_identity_routes(
 
     @app.get("/enterprise/session")
     async def read_session(request: Request):
-        token = request.cookies.get(ENTERPRISE_SESSION_COOKIE)
+        token = request.cookies.get(cookie_name)
         if request.state.platform_identity is None or not token:
-            return _error("enterprise_session_required", 401)
+            return scoped_error("enterprise_session_required", 401)
         try:
             csrf_token = await service.restore_csrf(token)
             account = await service.describe_account(token)
         except PlatformIdentityError as exc:
-            return _error(exc.code, exc.status_code, clear_cookie=exc.status_code == 401)
+            return scoped_error(exc.code, exc.status_code, clear_cookie=exc.status_code == 401)
         return JSONResponse(
             _session_body(account, csrf_token),
             headers={"Cache-Control": "no-store"},
@@ -148,13 +162,13 @@ def register_platform_identity_routes(
 
     @app.delete("/enterprise/session", status_code=204)
     async def delete_session(request: Request):
-        token = request.cookies.get(ENTERPRISE_SESSION_COOKIE)
+        token = request.cookies.get(cookie_name)
         if request.state.platform_identity is None or not token:
-            return _error("enterprise_session_required", 401)
+            return scoped_error("enterprise_session_required", 401)
         service.revoke(token)
         response = Response(status_code=204)
         response.delete_cookie(
-            ENTERPRISE_SESSION_COOKIE,
+            cookie_name,
             secure=True,
             httponly=True,
             samesite="lax",
@@ -195,7 +209,10 @@ def _session_body(
     }
 
 
-def _error(code: str, status_code: int, *, clear_cookie: bool = False) -> JSONResponse:
+def _error(
+    code: str, status_code: int, *, clear_cookie: bool = False,
+    cookie_name: str = ENTERPRISE_SESSION_COOKIE,
+) -> JSONResponse:
     response = JSONResponse(
         {"error": {"code": code, "message": "platform identity request rejected"}},
         status_code=status_code,
@@ -203,7 +220,7 @@ def _error(code: str, status_code: int, *, clear_cookie: bool = False) -> JSONRe
     )
     if clear_cookie:
         response.delete_cookie(
-            ENTERPRISE_SESSION_COOKIE,
+            cookie_name,
             secure=True,
             httponly=True,
             samesite="lax",
