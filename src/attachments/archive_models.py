@@ -165,6 +165,7 @@ class ArchiveManifest:
     processing_expires_at: datetime
     handoff_deadline_at: datetime
     variants: tuple[ArchiveVariant, ...]
+    agent_id: str = "ai-fae-agent"
 
     @classmethod
     def from_relation(
@@ -175,6 +176,7 @@ class ArchiveManifest:
         external_session_id: str,
         trace_id: str,
         relation: AttachmentTurnInput,
+        agent_id: str = "ai-fae-agent",
     ) -> ArchiveManifest:
         variants = [ArchiveVariant(
             name="original",
@@ -206,12 +208,13 @@ class ArchiveManifest:
             processing_expires_at=relation.processing_expires_at,
             handoff_deadline_at=relation.handoff_deadline_at,
             variants=tuple(variants),
+            agent_id=agent_id,
         )
 
     def as_dict(self) -> dict:
         return {
             "schema_version": "fae-attachment-archive/v1",
-            "agent_id": "ai-fae-agent",
+            "agent_id": self.agent_id,
             "operation": "archive",
             "relation_id": self.relation_id,
             "native_turn_id": self.native_turn_id,
@@ -238,6 +241,7 @@ class ArchiveDeleteManifest:
     native_turn_id: str
     platform_attachment_id: str
     requested_at: datetime
+    agent_id: str = "ai-fae-agent"
 
     def __post_init__(self) -> None:
         _uuid(self.relation_id, "relation_id")
@@ -248,7 +252,7 @@ class ArchiveDeleteManifest:
     def as_dict(self) -> dict:
         return {
             "schema_version": "fae-attachment-archive/v1",
-            "agent_id": "ai-fae-agent",
+            "agent_id": self.agent_id,
             "operation": "delete",
             "relation_id": self.relation_id,
             "native_turn_id": self.native_turn_id,

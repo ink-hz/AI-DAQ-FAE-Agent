@@ -10,13 +10,13 @@
 | --- | --- |
 | Provider/Loop/终稿协议、SSE/心跳、trace、错误归因 | 已在数采 API 实际装配；Opus 5.5 使用 `submit_only_auto` |
 | 数采多能力计划、任务上下文、需求账本和证据门 | 已装配；空知识或未核验来源不能交付 `resolved` |
-| 会话续接、请求去重、反馈 | 本机 Dev 使用独立 SQLite 持久化；重启续聊和完成请求重放已测试 |
-| 附件上传、会话内检索/精读、图片分析入口 | 已装配；资料只算本轮用户证据；视觉 Provider 尚未配置时明确失败 |
-| WebUI | 已迁入数采仓，可在本机 `/app/` 使用；`/daq/` 内部 Platform 入口尚未接通 |
-| Platform 身份、Postgres 会话/反馈、review、HTTP Task | 共享组件与 DAQ 身份装配已有代码；尚未接入当前服务和完成跨端验收 |
+| 会话续接、请求去重、反馈 | 本机 Dev 用独立 SQLite；内部认证模式用独立 Postgres、所有者会话与请求账本，包含长调用续租 |
+| 附件上传、会话内检索/精读、图片分析、归档 | 已接入；认证模式可启用独立归档清单与删除确认，真实 Postgres 往返测试通过；视觉 Provider 尚未配置时明确失败 |
+| WebUI | 本机 `/app/` 与内部认证模式 `/daq/` 分别装配，沿用旧客户端合同 |
+| Platform 身份、Postgres 会话/反馈、review、HTTP Task | 已装配可选内部认证模式；数采 Agent ID、任务签名 audience、会话和资料隔离；真实 Platform 联调未完成 |
 | 数采事实、关系、权限和知识发布 | 空知识；待资料归档、裁决、可见性与发布清单 |
 
-**不能把当前 Dev 启动和通过单元测试称为完整能力等价或试点可发布。** [迁移计划](docs/superpowers/plans/2026-10-08-full-runtime-parity-migration.md)与[完整设计](docs/2026-10-08-数采FAE完整设计.md)列出剩余合同和发布门。
+**尚不能宣布完整能力等价或试点可发布。** 共享源码仍是本地未保护的 Git pin；真实 Opus 网关有一次 476 秒传输失败，相机 Dev 回归有一个硬失败和一个答案矛盾；数采真实知识、Platform 实例联调和部署回滚仍未验收。[迁移计划](docs/superpowers/plans/2026-10-08-full-runtime-parity-migration.md)与[完整设计](docs/2026-10-08-数采FAE完整设计.md)记录发布门。
 
 ## 本机启动
 
@@ -49,3 +49,9 @@ cd webui && npm test && npm run build
 ```
 
 正式依赖 pin 之前还需完成旧 FAE Dev 回归、双服务合同、上游受保护 ref、数采真实 Dev 回放与独立答案复审。数采资料和用户附件不能自动进入知识库；发布仍受来源、事实裁决和角色权限约束。
+
+## 内部认证模式的装配
+
+独立 DAQ Postgres 须先按清单执行 `PYTHONPATH=. python scripts/migrate_daq_pg.py` 查看迁移顺序，再由有数据库权限的操作者设置 `DAQ_DATABASE_URL`，确认数据库名后执行 `PYTHONPATH=. python scripts/migrate_daq_pg.py --apply --confirm-database-name <数采数据库名>`。脚本只读取 `DAQ_DATABASE_URL`，ASGI 启动不会自动改表。
+
+内部模式至少配置 `DAQ_PLATFORM_IDENTITY_ENABLED=true`、独立 `DAQ_DATABASE_URL`、`DAQ_AUTHENTICATED_CONTENT_KEYRING_FILE`、`DAQ_PLATFORM_IDENTITY_BASE_URL`、`DAQ_PLATFORM_PUBLIC_ORIGIN`、`DAQ_PLATFORM_SESSION_KEYRING_FILE` 和 `DAQ_PLATFORM_ALLOWED_SUBJECT_IDS`。归档启用项是 `DAQ_ATTACHMENT_ARCHIVE_ENABLED=true`；Platform 归档工作进程调用 `python -m daq_fae.archive_cli`，只读取 DAQ 数据库与附件目录。HTTP Task 启用项是 `DAQ_PLATFORM_TASK_ENABLED=true`，还需独立 `DAQ_PLATFORM_TASK_CONTENT_KEYRING_FILE` 与 `DAQ_PLATFORM_TASK_PUBLIC_KEY_PATHS_JSON`；路由为 `/internal/platform/v1`，签名 audience 为 `ai-daq-fae-agent`。缺少这些配置时相应能力保持关闭，不能从旧 FAE 借用凭据或数据。

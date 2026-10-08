@@ -108,9 +108,11 @@ class AttachmentArchiveRepository:
         database_url: str,
         *,
         connect: Callable = psycopg.connect,
+        agent_id: str = "ai-fae-agent",
     ) -> None:
         self._database_url = database_url
         self._connect = connect
+        self._agent_id = agent_id
 
     def _connection(self):
         return self._connect(
@@ -151,7 +153,7 @@ class AttachmentArchiveRepository:
                 """,
                 tuple(params),
             ).fetchall()
-        items = tuple(_manifest(row) for row in rows)
+        items = tuple(_manifest(row, agent_id=self._agent_id) for row in rows)
         next_cursor = (
             _cursor_encode(rows[-1]["created_at"], rows[-1]["id"])
             if rows
@@ -367,7 +369,7 @@ class AttachmentArchiveRepository:
         return row
 
 
-def _manifest(row: dict) -> ArchiveManifest | ArchiveDeleteManifest:
+def _manifest(row: dict, *, agent_id: str = "ai-fae-agent") -> ArchiveManifest | ArchiveDeleteManifest:
     if row["archive_status"] == "deletion_pending":
         platform_attachment_id = row.get("platform_attachment_id") or UUID(int=0)
         return ArchiveDeleteManifest(
@@ -375,6 +377,7 @@ def _manifest(row: dict) -> ArchiveManifest | ArchiveDeleteManifest:
             native_turn_id=str(row["turn_id"]),
             platform_attachment_id=str(platform_attachment_id),
             requested_at=row["updated_at"],
+            agent_id=agent_id,
         )
     return ArchiveManifest.from_relation(
         relation_id=str(row["id"]),
@@ -382,4 +385,5 @@ def _manifest(row: dict) -> ArchiveManifest | ArchiveDeleteManifest:
         external_session_id=str(row["external_session_id"]),
         trace_id=str(row["trace_id"]),
         relation=_relation(row),
+        agent_id=agent_id,
     )

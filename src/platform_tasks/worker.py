@@ -208,13 +208,22 @@ class PlatformTaskWorker:
             while True:
                 projector = FaeTaskEventProjector()
                 terminal_projection: tuple[str, dict[str, object]] | None = None
-                stream = self._orchestrator.handle_stream(
-                    session_id=session.session_id,
-                    user_message=prompt,
-                    required_attachment_source_ids=None,
-                    required_image_source_ids=None,
-                    continuation_guard=guard,
-                )
+                task_handler = getattr(self._orchestrator, "handle_platform_task", None)
+                if callable(task_handler):
+                    stream = task_handler(
+                        spec=spec, session_id=session.session_id,
+                        prompt=prompt,
+                        planning_message=(spec.objective if consuming_message_seq is None else prompt),
+                        continuation_guard=guard,
+                    )
+                else:
+                    stream = self._orchestrator.handle_stream(
+                        session_id=session.session_id,
+                        user_message=prompt,
+                        required_attachment_source_ids=None,
+                        required_image_source_ids=None,
+                        continuation_guard=guard,
+                    )
                 for stream_event in stream:
                     guard()
                     for kind, payload in projector.project(stream_event):

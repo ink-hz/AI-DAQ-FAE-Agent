@@ -152,3 +152,41 @@ def test_blocked_provider_keeps_authenticated_execution_lease_alive(tmp_path, mo
     assert response.status_code == 200
     assert renewals
     assert terminal(response)['outcome'] == 'safe_abstained'
+
+
+def test_authenticated_turn_records_attachment_archive_relations(tmp_path, monkeypatch, pg_database):
+    env = {**identity_environment(tmp_path), **persistence_environment(tmp_path)}
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    conversations = Conversations()
+    app = create_app(
+        provider_mode='offline', platform_client=FakePlatform(),
+        identity_repository=InMemoryAuthenticatedSessionRepository(),
+        conversation_repository=conversations, feedback_store=Feedback(), review_store=object(),
+        durable_state=store(pg_database), attachment_dir=tmp_path / 'attachments',
+    )
+
+    class ArchiveService:
+        def __init__(self):
+            self.calls = []
+
+        def prepare_turn(self, attachment_ids, *, explicit_attachment_ids, answer_at):
+            self.calls.append((attachment_ids, explicit_attachment_ids, answer_at))
+            return ('archive-relation',)
+
+    archive = ArchiveService()
+    app.state.attachment_archive_service = archive
+    client = TestClient(app, base_url=env['DAQ_PLATFORM_PUBLIC_ORIGIN'])
+    launch = client.post('/enterprise/session', json={'code': CODE},
+                         headers={'Origin': env['DAQ_PLATFORM_PUBLIC_ORIGIN']})
+    headers = {'Origin': env['DAQ_PLATFORM_PUBLIC_ORIGIN'],
+               'X-DAQ-Enterprise-CSRF': launch.json()['csrf_token']}
+    upload = client.post('/attachments', files=[('files', ('log.txt', b'status=ready', 'text/plain'))],
+                         headers=headers)
+    aid = upload.json()['results'][0]['attachment']['attachment_id']
+    response = client.post('/chat', json={'message': '看这份日志', 'attachment_ids': [aid],
+                                          'client_request_id': 'archive-turn'}, headers=headers)
+    assert terminal(response)['outcome'] == 'safe_abstained'
+    assert archive.calls[0][0] == [aid]
+    assert archive.calls[0][1] == [aid]
+    assert conversations.writes[0][2] == ('archive-relation',)

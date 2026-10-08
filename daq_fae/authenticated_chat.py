@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import time
 import threading
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
@@ -220,7 +221,14 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
                 duration_ms=done["duration_ms"],
             )
             try:
-                done["turn_id"] = persistence.save_turn(subject, session, turn=turn)
+                attachment_relations = app.state.attachment_archive_service.prepare_turn(
+                    [item.attachment_id for item in session.visible_attachments()],
+                    explicit_attachment_ids=body.attachment_ids,
+                    answer_at=datetime.now(UTC),
+                )
+                done["turn_id"] = persistence.save_turn(
+                    subject, session, turn=turn, attachment_relations=attachment_relations,
+                )
                 context = DaqContextState(task_context=plan.context.to_checkpoint()) if plan else None
                 terminal_frames = [sse_event("text_delta", {"delta": done["answer"]}),
                                    sse_event("sources", done["sources"]),

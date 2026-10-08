@@ -110,10 +110,13 @@ class FaeTaskEventProjector:
             if event.data.get("loop") is not None:
                 common["execution"] = event.data["loop"]
             fallback_reason = str(event.data.get("fallback_reason") or "")
-            if outcome in RUNTIME_FAILURE_OUTCOMES or fallback_reason in {
+            if (outcome in RUNTIME_FAILURE_OUTCOMES
+                    or outcome.startswith("provider_")
+                    or outcome in {"internal_error", "persistence_error"}
+                    or fallback_reason in {
                 *RUNTIME_FAILURE_OUTCOMES,
                 "loop_runtime_error",
-            }:
+            }):
                 common["reason_code"] = str(
                     event.data.get("fallback_reason") or outcome
                 )

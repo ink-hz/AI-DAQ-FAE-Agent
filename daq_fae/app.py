@@ -19,6 +19,7 @@ from src.agent.guardrails import categorize_refusal
 
 from daq_fae.api_attachments import configure_attachments
 from src.attachments.models import AttachmentDescriptor, AttachmentError, AttachmentLimits
+from src.attachments.archive_repository import AttachmentArchiveRepository
 from daq_fae.domain_evidence import DaqEvidencePolicy
 from daq_fae.domain_tools import DaqToolBox
 from daq_fae.attachment_evidence import extend_with_attachments
@@ -29,6 +30,7 @@ from daq_fae.provider_errors import anthropic_failure
 from daq_fae.authenticated_persistence import configure_authenticated_persistence
 from daq_fae.durable_state import configure_durable_state
 from daq_fae.platform_identity import configure_platform_identity
+from daq_fae.platform_tasks import configure_platform_tasks
 from daq_fae.webui import mount_authenticated_webui, mount_local_webui
 from daq_fae.offline_adapter import OfflineAdapter
 from daq_fae.api_transport import ChatRequest, LocalRequestRegistry, RequestRecord, is_local_peer
@@ -83,7 +85,8 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                state_db_path: Path | None = None, vision_adapter=None,
                platform_client=None, identity_repository=None,
                conversation_repository=None, feedback_store=None, review_store=None,
-               durable_state=None) -> FastAPI:
+               durable_state=None, archive_repository=None,
+               task_store=None, task_verifier=None, task_worker=None) -> FastAPI:
     identity_mode = os.getenv("DAQ_PLATFORM_IDENTITY_ENABLED", "false")
     if identity_mode not in {"true", "false"}:
         raise ValueError("daq_platform_identity_enabled_invalid")
@@ -91,6 +94,15 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
     if auth_mode:
         if not os.getenv("DAQ_DATABASE_URL") or not os.getenv("DAQ_AUTHENTICATED_CONTENT_KEYRING_FILE"):
             raise ValueError("daq_authenticated_persistence_configuration_missing")
+    archive_flag = os.getenv("DAQ_ATTACHMENT_ARCHIVE_ENABLED", "false")
+    if archive_flag not in {"true", "false"}:
+        raise ValueError("daq_attachment_archive_configuration_invalid")
+    archive_enabled = archive_flag == "true"
+    if archive_enabled and not auth_mode:
+        raise ValueError("daq_attachment_archive_requires_authenticated_mode")
+    archive_handoff_seconds = int(os.getenv("DAQ_ATTACHMENT_ARCHIVE_HANDOFF_SECONDS", "604800"))
+    if archive_handoff_seconds <= 0:
+        raise ValueError("daq_attachment_archive_handoff_invalid")
     knowledge_dir = knowledge_dir or _ROOT / "knowledge"
     if not knowledge_dir.is_dir():
         raise ValueError("empty knowledge directory is missing")
@@ -120,6 +132,10 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
     configure_attachments(
         app, root=attachment_dir or Path(os.getenv("DAQ_ATTACHMENT_STORAGE_DIR", str(_ROOT / "data" / "daq_attachments"))),
         limits=attachment_limits or AttachmentLimits(), clock=attachment_clock,
+        archive_repository=(archive_repository if archive_repository is not None else
+                            AttachmentArchiveRepository(os.environ["DAQ_DATABASE_URL"], agent_id=AGENT_ID)
+                            if archive_enabled else None),
+        archive_enabled=archive_enabled, archive_handoff_seconds=archive_handoff_seconds,
     )
 
     @app.middleware("http")
@@ -130,6 +146,14 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
 
     @app.get("/health")
     def health():
+        archive_health = {"enabled": archive_enabled, "ready": True,
+                          "pending": 0, "failed": 0,
+                          "oldest_pending_seconds": 0, "expired_unarchived_total": 0}
+        if archive_enabled:
+            try:
+                archive_health.update(app.state.attachment_archive_repository.health())
+            except Exception:
+                archive_health["ready"] = False
         return {
             "status": "ok",
             "environment": "development",
@@ -140,13 +164,15 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
             "local_dev_only": not auth_mode,
             "attachment_capability": "session_bound_tools",
             "attachment_model_evidence_enabled": True,
-            "attachment_archive_enabled": False,
+            "attachment_archive_enabled": archive_enabled,
+            "attachment_archive": archive_health,
             "attachments": {
                 "enabled": True,
                 "vision_enabled": vision_adapter is not None,
                 "vision_reason": "ready" if vision_adapter is not None else "disabled_by_config",
             },
             "platform_identity_enabled": auth_mode,
+            "platform_task_enabled": hasattr(app.state, "platform_task_capabilities"),
             "session_persistence": "postgres_daq_authenticated" if auth_mode else "local_sqlite_dev",
             "request_idempotency": "postgres_daq_ledger" if auth_mode else "local_sqlite_dev",
             "trace_persistence": "configured_sink" if trace_recorder else "daq_jsonl_dev",
@@ -558,6 +584,10 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
 
         configure_platform_identity(
             app, repository=identity_repository, platform_client=platform_client,
+        )
+        configure_platform_tasks(
+            app, adapter=adapter, task_store=task_store,
+            task_verifier=task_verifier, task_worker=task_worker,
         )
         mount_authenticated_webui(app, dist=webui_dist or _ROOT / "webui" / "dist")
     else:
