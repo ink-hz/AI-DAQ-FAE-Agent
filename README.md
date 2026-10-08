@@ -45,8 +45,11 @@ curl -fsSN -H 'content-type: application/json' \
 
 ```bash
 .venv/bin/python -m pytest -q tests
+.venv/bin/python scripts/verify_upstream_snapshot.py --upstream ../AI-FAE-Agent
 cd webui && npm test && npm run build
 ```
+
+源码核验会读取 `upstream-source.json` 中的完整提交 SHA，比对两仓的 `src/` Git tree 和 `requirements.txt` blob，并拒绝未提交的共享源码改动。GitHub CI 也执行此门，私有上游仓需配置只读 `FAE_UPSTREAM_READ_TOKEN`。当前数采仓尚无远端、上游 ref 的保护设置未核实，因此 CI 配置存在不代表远端流水线已运行或正式依赖 pin 已完成。
 
 正式依赖 pin 之前还需完成旧 FAE Dev 回归、双服务合同、上游受保护 ref、数采真实 Dev 回放与独立答案复审。数采资料和用户附件不能自动进入知识库；发布仍受来源、事实裁决和角色权限约束。
 
