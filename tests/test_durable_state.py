@@ -224,3 +224,45 @@ def test_missing_durable_config_fails_closed():
     from fastapi import FastAPI
     with pytest.raises(DurableStateError, match='daq_durable_configuration_missing'):
         configure_durable_state(FastAPI(), environ={})
+
+
+def test_task_context_checkpoint_round_trip_preserves_multiturn_user_provenance(pg_database):
+    from daq_fae.durable_state import DaqContextState
+    from daq_fae.task_context import prepare_turn
+    state = store(pg_database)
+    first = reserve(state)
+    plan = prepare_turn('设备是 EGO + WristCam；平台是 Linux；SDK 版本 1.2.0；已经检查连接，录制仍报错',
+                        updates={'variant': {'value': '1920', 'certainty': 'hypothesis'}})
+    raw = plan.context.to_checkpoint()
+    context = DaqContextState(task_context=raw)
+    state.finish(SUBJECT, first, completed(first), context=context, expected_context_revision=0)
+    loaded = store(pg_database).load_context(SUBJECT, first.session_id)
+    assert loaded.state.task_context == raw
+    followup = prepare_turn('那下一步呢？', previous=loaded.state.task_context)
+    assert followup.context.get('equipment') == ['EGO', 'WristCam']
+    assert followup.context.get('sdk_version') == '1.2.0'
+    assert followup.context.values['variant'].certainty == 'hypothesis'
+    assert followup.context.values['variant'].authority == 'user_supplied'
+    assert followup.context.values['variant'].origin_turn == 1
+    assert followup.context.turn == 2 and followup.context.topic_id == raw['topic_id']
+    assert set(raw['active_capabilities']) <= set(followup.context.active_capabilities)
+    assert followup.context.attempted_steps == tuple(raw['attempted_steps'])
+    switched = prepare_turn('换个场景，设备是 UMI', previous=loaded.state.task_context)
+    assert switched.context.get('equipment') == ['UMI']
+    assert switched.context.get('sdk_version') is None
+
+
+@pytest.mark.parametrize('mutation', [
+    lambda raw: raw.update(version=2),
+    lambda raw: raw.update(verified_facts={'frame_rate': 120}),
+    lambda raw: raw['values']['equipment'].update(authority='official_fact'),
+    lambda raw: raw.update(turn='1'),
+])
+def test_task_context_checkpoint_rejects_unknown_or_upgraded_authority(mutation):
+    from daq_fae.durable_state import DaqContextState
+    from daq_fae.task_context import prepare_turn
+    from pydantic import ValidationError
+    raw = prepare_turn('设备是 EGO').context.to_checkpoint()
+    mutation(raw)
+    with pytest.raises(ValidationError, match="daq_task_context_checkpoint_invalid"):
+        DaqContextState(task_context=raw)

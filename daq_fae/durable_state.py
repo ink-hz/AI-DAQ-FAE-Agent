@@ -15,7 +15,7 @@ from uuid import uuid4
 
 import psycopg
 from psycopg.rows import dict_row
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from src.storage.authenticated_conversations import (
     ConversationContentCodec,
@@ -27,6 +27,7 @@ from daq_fae.authenticated_persistence import (
     _assert_session_id, _assert_subject, _load_content_codec, _validate_database,
 )
 from daq_fae.platform_identity import AGENT_ID
+from daq_fae.task_context import DaqTaskContext
 
 
 class DurableStateError(RuntimeError):
@@ -61,6 +62,7 @@ class RequirementState(BaseModel):
 class DaqContextState(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     schema_version: Literal[1] = 1
+    task_context: dict[str, object] | None = None
     topic_id: str | None = None
     acquisition_task: str | None = None
     device_variants: dict[str, str] = Field(default_factory=dict)
@@ -83,6 +85,24 @@ class DaqContextState(BaseModel):
     actual_capabilities: list[str] = Field(default_factory=list, max_length=100)
     runtime_release: str | None = None
     knowledge_release: str | None = None
+
+
+    @field_validator("task_context")
+    @classmethod
+    def validated_task_context(cls, value):
+        if value is None:
+            return None
+        try:
+            normalized = DaqTaskContext.from_checkpoint(value).to_checkpoint()
+            # The existing reader normalizes some values and ignores unknown
+            # fields. Persistence requires a lossless canonical round trip:
+            # reject discarded fields/coercions instead of silently promoting
+            # or dropping user provenance during restore.
+            if _json(normalized) != _json(value):
+                raise ValueError
+        except (AttributeError, KeyError, TypeError, ValueError, DurableStateError):
+            raise ValueError("daq_task_context_checkpoint_invalid") from None
+        return normalized
 
 
 @dataclass(frozen=True)

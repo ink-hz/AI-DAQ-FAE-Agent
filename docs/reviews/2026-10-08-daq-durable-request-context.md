@@ -93,3 +93,16 @@ The cluster is stopped and removed after the test module. These are Dev contract
 not production evals. Focused ledger + adapter run: 35 passed; Ruff and whitespace
 checks passed. Main application wiring, live DAQ migration/role acceptance,
 Platform registration and deployment remain pending.
+
+
+The context envelope also includes optional `task_context`, validated through
+`DaqTaskContext.from_checkpoint` and canonical lossless round-trip equality.
+Root should save `DaqContextState(task_context=plan.context.to_checkpoint(), ...)`
+and pass the restored `state.task_context` into `prepare_turn(previous=...)`.
+This preserves values and their user-supplied authority/certainty/origin turn,
+active capabilities, attempted steps, turn and topic ID. Unknown fields,
+authority upgrades and implicit coercions are rejected. Existing envelope rows
+without this field remain readable. It depends on the reviewed `task_context`
+module already integrated into the DAQ full-parity branch; no DDL change is needed.
+A real-Postgres round trip proves inherited setup/short follow-up and explicit
+topic reset retain their semantics after restart.
