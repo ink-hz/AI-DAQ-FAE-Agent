@@ -24,9 +24,9 @@
 
 **Interfaces:** `git check-ignore -v tmp/` must name `.gitignore`, not `.git/info/exclude`.
 
-- [ ] **Step 1:** Add `/tmp/` to the repository root `.gitignore` in the isolated camera worktree.
-- [ ] **Step 2:** Run `git check-ignore -v tmp/` in that worktree and inspect the rule; run `git diff --check`.
-- [ ] **Step 3:** Commit the single file on `feat/daq-tmp-ignore-20261008` and push the branch for review. Do not merge it into `master` during this task.
+- [x] **Step 1:** Add `/tmp/` to the repository root `.gitignore` in the isolated camera worktree.
+- [x] **Step 2:** Run `git check-ignore -v tmp/` in that worktree and inspect the rule; run `git diff --check`.
+- [x] **Step 3:** Commit the single file on `feat/daq-tmp-ignore-20261008` and push the branch for review. Do not merge it into `master` during this task.
 
 ### Task 2: Archive and verify the original candidate bytes
 
@@ -34,12 +34,12 @@
 
 **Interfaces:** `create_archive(source: Path, destination: Path, source_date: str) -> dict` and `verify_archive(destination: Path, expected_manifest_sha256: str | None = None) -> dict`. CLI: `create SOURCE DESTINATION --source-date YYYY-MM-DD` and `verify DESTINATION --expected-manifest-sha256 DIGEST`.
 
-- [ ] **Step 1:** Write tests with two small synthetic files asserting relative paths, sizes, SHA-256 values, source dates, and byte-identical re-read. Add a tamper test, an extra-file test, a source symlink rejection test, and a destination-exists rejection test.
-- [ ] **Step 2:** Run `/Users/neo/Developer/work/AI-FAE-Agent/.venv/bin/python -m pytest -q tests/test_archive_candidate_snapshot.py` and confirm failures because the utility is absent.
-- [ ] **Step 3:** Implement `create_archive`: enumerate the tree without following links, reject any symlink or non-regular entry, copy into a new private staging directory, hash streamed bytes, write canonical UTF-8 JSON manifest, verify it, atomically rename to the requested destination, and make the archive read-only for its owner. Include original file mtimes and snapshot label date. Reject an existing destination.
-- [ ] **Step 4:** Implement `verify_archive`: reject links, missing and extra files, check every listed file's size and SHA-256, and return a file/byte summary. CLI must emit only summary counts and manifest SHA-256.
-- [ ] **Step 5:** Run focused tests, then create a restricted local archive under `../AI-FAE-Agent-local-archive/daq-candidate-20260920/` from `../AI-FAE-Agent/tmp/数据采集设备资料汇总-20260920(1)/`. Verify the archive again in a separate process and compare all source file hashes to the manifest; record count, byte total and manifest hash, not the list of filenames, in the review note.
-- [ ] **Step 6:** Run the full DAQ backend suite, source snapshot check, WebUI tests and build. Commit the utility, tests, plan and review note on `feat/m0-archive-20261008`. No shared runtime or production behavior changes.
+- [x] **Step 1:** Write tests with two small synthetic files asserting relative paths, sizes, SHA-256 values, source dates, and byte-identical re-read. Add a tamper test, an extra-file test, a source symlink rejection test, and a destination-exists rejection test.
+- [x] **Step 2:** Run `/Users/neo/Developer/work/AI-FAE-Agent/.venv/bin/python -m pytest -q tests/test_archive_candidate_snapshot.py` and confirm failures because the utility is absent.
+- [x] **Step 3:** Implement `create_archive`: enumerate the tree without following links, reject any symlink or non-regular entry, copy into a new private staging directory, hash streamed bytes, write canonical UTF-8 JSON manifest, verify it, atomically rename to the requested destination, and make the archive read-only for its owner. Include original file mtimes and snapshot label date. Reject an existing destination.
+- [x] **Step 4:** Implement `verify_archive`: reject links, missing and extra files, check every listed file's size and SHA-256, and return a file/byte summary. CLI must emit only summary counts and manifest SHA-256.
+- [x] **Step 5:** Run focused tests, then create a restricted local archive under `../AI-FAE-Agent-local-archive/daq-candidate-20260920/` from `../AI-FAE-Agent/tmp/数据采集设备资料汇总-20260920(1)/`. Verify the archive again in a separate process and compare all source file hashes to the manifest; record count, byte total and manifest hash, not the list of filenames, in the review note.
+- [x] **Step 6:** Run the full DAQ backend suite, source snapshot check, WebUI tests and build. Commit the utility, tests, plan and review note on `feat/m0-archive-20261008`. No shared runtime or production behavior changes.
 
 ### Task 3: Correct repository status documentation
 
@@ -47,6 +47,6 @@
 
 **Interfaces:** Distinguish pushed Git refs, GitHub protection and CI evidence, local tests, Dev replay, source archive, knowledge, Platform and pilot gates.
 
-- [ ] **Step 1:** Replace README claims that the DAQ repository has no remote. State the observed `origin/master` SHA and the verification date, plus the remaining protected-ref/CI proof gap.
-- [ ] **Step 2:** Record a task-book gate matrix with evidence and remaining work. Label local archive as staging until storage controls and restore evidence are accepted; label the camera branch ignore change as pending merge.
-- [ ] **Step 3:** Run `git diff --check`, verify both repository statuses, and commit the documentation with Task 2. Do not call a Git push a production deployment.
+- [x] **Step 1:** Replace README claims that the DAQ repository has no remote. State the observed `origin/master` SHA and the verification date, plus the remaining protected-ref/CI proof gap.
+- [x] **Step 2:** Record a task-book gate matrix with evidence and remaining work. Label local archive as staging until storage controls and restore evidence are accepted; label the camera branch ignore change as pending merge.
+- [x] **Step 3:** Run `git diff --check`, verify both repository statuses, and commit the documentation with Task 2. Do not call a Git push a production deployment.
