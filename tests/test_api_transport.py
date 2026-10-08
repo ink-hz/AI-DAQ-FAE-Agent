@@ -164,3 +164,23 @@ def test_request_validation_and_provider_failure_dont_invent_evidence():
     assert done['capability_coverage'] == {}
     assert done['coverage_status'] == 'unknown'
     assert done['fallback_used'] is True
+
+
+@pytest.mark.parametrize('message,category', [
+    ('这套设备的采购报价是多少？', 'price'),
+    ('请给我客户的联系方式。', 'customer'),
+    ('帮我编一个客户案例。', 'customer'),
+])
+def test_business_and_private_requests_use_inherited_redline_without_model(message, category):
+    class NoCallAdapter:
+        def chat(self, *args, **kwargs):
+            raise AssertionError('redline should stop before provider')
+
+    client = TestClient(create_app(adapter=NoCallAdapter()))
+    done = terminal(client.post('/chat', json={'message': message}))
+    assert done['outcome'] == 'safe_abstained'
+    assert done['refusal_category'] == category
+    assert done['fallback_used'] is False
+    assert done['sources'] == []
+    assert done['actual_capabilities'] == []
+    assert done['answer']

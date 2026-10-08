@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from src.agent.loop.adapters import AnthropicAdapter
 from src.agent.loop.runtime import LoopRuntime
+from src.agent.guardrails import categorize_refusal
 
 from daq_fae.api_attachments import configure_attachments
 from src.attachments.models import AttachmentDescriptor, AttachmentError, AttachmentLimits
@@ -28,7 +29,7 @@ from daq_fae.api_transport import ChatRequest, LocalRequestRegistry, RequestReco
 from src.agent.session import SessionStore
 from src.api.stream import StreamHeartbeat, iter_with_heartbeat, sse_event
 from src.api.concurrency import ChatConcurrencyGate
-from src.agent.tracing import NoopTraceSink, TraceRecorder, install_trace_ctx
+from src.agent.tracing import TraceConfig, build_recorder, install_trace_ctx
 from src.agent.protocol import RUNTIME_FAILURE_OUTCOMES
 
 
@@ -70,6 +71,15 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                attachment_dir: Path | None = None, attachment_limits=None,
                attachment_clock=None, webui_dist: Path | None = None,
                state_db_path: Path | None = None, vision_adapter=None) -> FastAPI:
+    identity_mode = os.getenv("DAQ_PLATFORM_IDENTITY_ENABLED", "false")
+    if identity_mode not in {"true", "false"}:
+        raise ValueError("daq_platform_identity_enabled_invalid")
+    if identity_mode == "true":
+        # This factory's session and request stores are intentionally local and
+        # ownerless. A Platform session must never enter these routes.
+        if not os.getenv("DAQ_DATABASE_URL") or not os.getenv("DAQ_AUTHENTICATED_CONTENT_KEYRING_FILE"):
+            raise ValueError("daq_authenticated_persistence_configuration_missing")
+        raise ValueError("daq_authenticated_routes_not_wired")
     knowledge_dir = knowledge_dir or _ROOT / "knowledge"
     if not knowledge_dir.is_dir():
         raise ValueError("empty knowledge directory is missing")
@@ -87,7 +97,10 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
 
     app.state.session_store = SessionStore(ttl_seconds=3600)
     app.state.chat_concurrency_gate = ChatConcurrencyGate(max_concurrent)
-    app.state.trace_recorder = trace_recorder or TraceRecorder([NoopTraceSink()])
+    app.state.trace_recorder = trace_recorder or build_recorder(TraceConfig(
+        log_path=Path(os.getenv("DAQ_TRACE_LOG_PATH", str(_ROOT / "data" / "daq_traces.jsonl"))),
+        environment="development", release=RUNTIME_RELEASE,
+    ))
     app.state.local_state = LocalStateStore(
         state_db_path or Path(os.getenv("DAQ_DEV_STATE_DB", str(_ROOT / "data" / "daq_dev.sqlite3"))),
         agent_id=AGENT_ID,
@@ -125,7 +138,7 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
             "platform_identity_enabled": False,
             "session_persistence": "local_sqlite_dev",
             "request_idempotency": "local_sqlite_dev",
-            "trace_persistence": "configured_sink" if trace_recorder else "disabled",
+            "trace_persistence": "configured_sink" if trace_recorder else "daq_jsonl_dev",
         }
 
     @app.get("/history")
@@ -232,7 +245,7 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
             prior_history = list(session.messages)
 
         ctx = app.state.trace_recorder.start_trace("daq_chat_request", {
-            "session_id": session.session_id, "message": request.message,
+            "session_id": session.session_id, "message_length": len(request.message),
             "agent_id": AGENT_ID, "channel": session.channel,
         })
         started_at = time.monotonic()
@@ -242,45 +255,55 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
             plan = None
             try:
                 with install_trace_ctx(ctx):
-                    visible_attachments = session.visible_attachments()
-                    image_source_ids = [
-                        item.source_id for item in visible_attachments if item.kind == "image"
-                    ]
-                    text_source_ids = [
-                        item.source_id for item in visible_attachments if item.kind != "image"
-                    ]
-                    plan = prepare_turn(
-                        request.message,
-                        previous=app.state.local_state.load_context(session.session_id),
-                        attachment_source_ids=text_source_ids,
-                        image_source_ids=image_source_ids,
-                    )
-                    base_toolbox = DaqToolBox(context=plan.context.tool_context())
-                    toolbox = (
-                        extend_with_attachments(
-                            base_toolbox, session=session,
-                            store=app.state.attachment_store, vision=vision_adapter,
-                        ) if request.attachment_ids else base_toolbox
-                    )
-                    runtime = LoopRuntime(
-                        adapter=adapter,
-                        toolbox=toolbox,
-                        system_prompt_path=_ROOT / "prompts" / "empty_knowledge_system.md",
-                        evidence_policy=DaqEvidencePolicy(),
-                    )
                     done = None
-                    for event in runtime.run(
-                        request.message, history=prior_history,
-                        entity_note=plan.context_note,
-                        evidence_requirements=plan.evidence_requirements(),
-                        required_attachment_source_ids=(
-                            list(toolbox.attachment_source_ids) if request.attachment_ids else None
-                        ),
-                        required_image_source_ids=image_source_ids,
-                        attachment_dependency=(
-                            "required_for_answer" if request.attachment_ids else "unknown"
-                        ),
-                    ):
+                    refusal = categorize_refusal(request.message)
+                    if refusal:
+                        category, answer = refusal
+                        events = iter(({"type": "done", "answer": answer,
+                                        "outcome": "safe_abstained", "sources": [],
+                                        "tool_calls": [], "planned_capabilities": [],
+                                        "actual_capabilities": [], "capability_coverage": {},
+                                        "refusal_category": category},))
+                    else:
+                        visible_attachments = session.visible_attachments()
+                        image_source_ids = [
+                            item.source_id for item in visible_attachments if item.kind == "image"
+                        ]
+                        text_source_ids = [
+                            item.source_id for item in visible_attachments if item.kind != "image"
+                        ]
+                        plan = prepare_turn(
+                            request.message,
+                            previous=app.state.local_state.load_context(session.session_id),
+                            attachment_source_ids=text_source_ids,
+                            image_source_ids=image_source_ids,
+                        )
+                        base_toolbox = DaqToolBox(context=plan.context.tool_context())
+                        toolbox = (
+                            extend_with_attachments(
+                                base_toolbox, session=session,
+                                store=app.state.attachment_store, vision=vision_adapter,
+                            ) if request.attachment_ids else base_toolbox
+                        )
+                        runtime = LoopRuntime(
+                            adapter=adapter,
+                            toolbox=toolbox,
+                            system_prompt_path=_ROOT / "prompts" / "empty_knowledge_system.md",
+                            evidence_policy=DaqEvidencePolicy(),
+                        )
+                        events = runtime.run(
+                            request.message, history=prior_history,
+                            entity_note=plan.context_note,
+                            evidence_requirements=plan.evidence_requirements(),
+                            required_attachment_source_ids=(
+                                list(toolbox.attachment_source_ids) if request.attachment_ids else None
+                            ),
+                            required_image_source_ids=image_source_ids,
+                            attachment_dependency=(
+                                "required_for_answer" if request.attachment_ids else "unknown"
+                            ),
+                        )
+                    for event in events:
                         if event.get("type") == "tool_call":
                             progress.append(event)
                             yield "stage", {"stage": "tool_call", **event}
@@ -384,14 +407,18 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                 })
                 done.pop("turn_id", None)
                 session.messages[-1]["content"] = done["answer"]
-            ctx.finalize({"outcome": done["outcome"], "answer": done["answer"],
+            ctx.finalize({"outcome": done["outcome"], "answer_length": len(done["answer"]),
                           "fallback_used": done["fallback_used"],
                           "fallback_reason": done["fallback_reason"],
                           "capability_coverage": coverage,
                           "planned_capabilities": done["planned_capabilities"],
                           "actual_capabilities": actual,
                           "coverage_status": coverage_status,
-                          "tool_calls": calls,
+                          "tool_calls": [
+                              {key: call.get(key) for key in ("tool", "status", "duration_ms")
+                               if key in call}
+                              for call in calls if isinstance(call, dict)
+                          ],
                           "duration_ms": done["duration_ms"],
                           "provider_status_code": done.get("provider_status_code"),
                           "error_type": done.get("error_type")}, metadata={

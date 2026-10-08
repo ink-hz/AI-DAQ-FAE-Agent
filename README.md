@@ -1,37 +1,51 @@
 # AI DAQ FAE Agent
 
-数采（数据采集）产品的独立 FAE Agent 工作目录。首期服务内部 FAE / 技术支持，复用现有 AI FAE 的通用运行能力，但独立发布数采知识和服务版本。
+数采 FAE 是与相机 FAE 同级的独立项目，首期面向内部 FAE 和技术支持。它复用受版本约束的通用运行时，采用自己的 Agent 身份、会话、附件目录和数采知识发布。
 
-当前有一个**本地 Dev 空知识启动版**：复制已核对生产构建身份的 FAE `a6234f6` 源码快照，新增数采 API 装配。`knowledge/` 为空，不会载入相机资料；任何确定性答案都须等数采证据工具和知识发布完成后才能交付。快照来源见 [upstream-source.json](upstream-source.json)。它是可运行起点，**并未达到原相机 FAE 的非知识能力等价**，也不代表完整设计的里程碑 0 已通过。逐项差异见[能力对照审查](docs/reviews/2026-10-08-bootstrap-capability-parity-audit.md)。
+## 当前状态
 
-## 本地启动
+`feat/full-daq-fae-parity` 已有可运行的**本机 Dev 实例**。当前知识发布 `empty-dev-v0` 没有已审核数采事实，因此产品参数、兼容性、操作步骤和下载链接应明确缺证。当前共享 `src/` 是 [upstream-source.json](upstream-source.json) 记录的本地集成快照；它还没有受保护的持久 Git ref，不是正式依赖 pin。
+
+| 能力 | 当前接入情况 |
+| --- | --- |
+| Provider/Loop/终稿协议、SSE/心跳、trace、错误归因 | 已在数采 API 实际装配；Opus 5.5 使用 `submit_only_auto` |
+| 数采多能力计划、任务上下文、需求账本和证据门 | 已装配；空知识或未核验来源不能交付 `resolved` |
+| 会话续接、请求去重、反馈 | 本机 Dev 使用独立 SQLite 持久化；重启续聊和完成请求重放已测试 |
+| 附件上传、会话内检索/精读、图片分析入口 | 已装配；资料只算本轮用户证据；视觉 Provider 尚未配置时明确失败 |
+| WebUI | 已迁入数采仓，可在本机 `/app/` 使用；`/daq/` 内部 Platform 入口尚未接通 |
+| Platform 身份、Postgres 会话/反馈、review、HTTP Task | 共享组件与 DAQ 身份装配已有代码；尚未接入当前服务和完成跨端验收 |
+| 数采事实、关系、权限和知识发布 | 空知识；待资料归档、裁决、可见性与发布清单 |
+
+**不能把当前 Dev 启动和通过单元测试称为完整能力等价或试点可发布。** [迁移计划](docs/superpowers/plans/2026-10-08-full-runtime-parity-migration.md)与[完整设计](docs/2026-10-08-数采FAE完整设计.md)列出剩余合同和发布门。
+
+## 本机启动
 
 ```bash
 python3.11 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 cp .env.example .env
+cd webui && npm ci && npm run build && cd ..
 .venv/bin/uvicorn daq_fae.app:app --env-file .env --host 127.0.0.1 --port 8081
 ```
 
-`.env.example` 默认 `offline`：它明确使用本地烟测适配器走完整 Loop、空知识工具和 `submit_answer`，不调用模型。另开终端验证：
+`.env.example` 默认 `offline`，只做不调用模型的 Loop/工具合同烟测。本机服务拒绝非 loopback 请求；SQLite 和附件文件位于 `data/`，相机 FAE 的资料与数据库不进入本应用。
 
 ```bash
 curl -fsS http://127.0.0.1:8081/health
 curl -fsSN -H 'content-type: application/json' \
-  -d '{"question":"EG-DB 的深度精度是多少？"}' \
+  -d '{"message":"EG-DB 的深度精度是多少？"}' \
   http://127.0.0.1:8081/chat
 ```
 
-`/chat` 返回 SSE `tool_call`、`text_delta`、`done`。空知识的正常终态是 `safe_abstained`，`capability_coverage.search_knowledge=missing`，`sources=[]`，并带 `trace_id`。如果 Provider 提交无证据 `resolved`，服务阻断交付并记录 `invalid_answer_contract`、`fallback_used` 和原因。Provider HTTP 400 与 503 分别归为配置错误和上游不可用。
+浏览器可打开 `http://127.0.0.1:8081/app/`。`/chat` 返回具名 `session`、`stage`、`text_delta`、`sources`、`done` 事件；正常空知识终态是 `safe_abstained`，并附需求状态、能力覆盖、trace 与 turn ID。Provider HTTP 400 与 503 分别归为配置错误和上游不可用。
 
-需要对**开发网关**做真实模型烟测时，在 `.env` 中设 `DAQ_PROVIDER_MODE=anthropic`、`DAQ_ANTHROPIC_AUTH_TOKEN` 或 `DAQ_ANTHROPIC_API_KEY`、`DAQ_ANTHROPIC_BASE_URL`、`DAQ_ANTHROPIC_MODEL`。Opus 5.5 固定采用 adaptive/high 与 `submit_only_auto`，避免 forced `tool_choice`。不要把凭据提交到仓库。
+若要在**开发环境**调用真实模型，设置 `DAQ_PROVIDER_MODE=anthropic`、`DAQ_ANTHROPIC_AUTH_TOKEN` 或 `DAQ_ANTHROPIC_API_KEY`、`DAQ_ANTHROPIC_BASE_URL` 和 `DAQ_ANTHROPIC_MODEL`。不要提交凭据。当前默认模型为 Opus 5.5 adaptive/high；不得对它发送 forced `tool_choice`。
 
-测试：
+验证命令：
 
 ```bash
-.venv/bin/python -m pytest tests/test_empty_bootstrap.py -q
+.venv/bin/python -m pytest -q tests
+cd webui && npm test && npm run build
 ```
 
-这个启动版只提供本地 `/health` 和 `/chat`。Platform 身份、附件、反馈、数采实体/拓扑/版本证据、治理后的知识发布和部署，仍按[完整设计](docs/2026-10-08-数采FAE完整设计.md)及[开发任务书](docs/superpowers/plans/2026-10-08-data-acquisition-fae-development-task-brief.md)实施。上游源码快照在正式里程碑 0 前须换成受保护持久 Git ref 的固定依赖，不能长期双仓复制维护。
-
-现有 FAE 的实现基线、数采资料盘点、需求基线与 A/B 决策保存在相邻的 `AI-FAE-Agent` 仓库；本目录的设计记录后续实施所需的具体接口、数据、验收和发布边界。
+正式依赖 pin 之前还需完成旧 FAE Dev 回归、双服务合同、上游受保护 ref、数采真实 Dev 回放与独立答案复审。数采资料和用户附件不能自动进入知识库；发布仍受来源、事实裁决和角色权限约束。
