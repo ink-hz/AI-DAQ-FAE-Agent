@@ -6,11 +6,14 @@ import pytest
 
 
 def _events(response):
-    return [
-        json.loads(line.removeprefix("data: "))
-        for line in response.text.splitlines()
-        if line.startswith("data: ")
-    ]
+    result = []
+    for block in response.text.strip().split("\n\n"):
+        lines = block.splitlines()
+        name = next((line.removeprefix("event: ") for line in lines if line.startswith("event: ")), None)
+        payload = next((json.loads(line.removeprefix("data: ")) for line in lines if line.startswith("data: ")), None)
+        if isinstance(payload, dict):
+            result.append({**payload, "type": name})
+    return result
 
 
 def test_health_identifies_independent_empty_dev_service():
@@ -38,7 +41,8 @@ def test_empty_knowledge_request_uses_loop_and_explicitly_abstains():
     done = next(event for event in events if event["type"] == "done")
     assert done["outcome"] == "safe_abstained"
     assert done["sources"] == []
-    assert done["planned_capabilities"] == ["search_knowledge"]
+    assert done["planned_capabilities"] == []
+    assert done["coverage_status"] == "unknown"
     assert done["capability_coverage"] == {"search_knowledge": "missing"}
     assert done["tool_calls"][0]["status"] == "not_found"
     assert done["fallback_used"] is False

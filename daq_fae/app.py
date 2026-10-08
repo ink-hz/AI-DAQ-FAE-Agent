@@ -2,21 +2,24 @@
 
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
-from uuid import uuid4
+import time
 
-from fastapi import FastAPI
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse, StreamingResponse
 import httpx
-from pydantic import BaseModel, Field
 
 from src.agent.loop.adapters import AnthropicAdapter
 from src.agent.loop.runtime import LoopRuntime
 
 from daq_fae.empty_knowledge import EmptyKnowledgeToolBox
 from daq_fae.offline_adapter import OfflineAdapter
+from daq_fae.api_transport import ChatRequest, LocalRequestRegistry, RequestRecord, is_local_peer
+from src.agent.session import SessionStore
+from src.api.stream import StreamHeartbeat, iter_with_heartbeat, sse_event
+from src.api.concurrency import ChatConcurrencyGate
+from src.agent.tracing import NoopTraceSink, TraceRecorder, install_trace_ctx
 
 
 AGENT_ID = "ai-daq-fae-agent"
@@ -31,10 +34,6 @@ _UNGROUNDED_ANSWER = (
     "本次模型在空知识库下提交了无证据的确定结论，答案已拦截。"
     "请检查终稿协议与证据门。"
 )
-
-
-class ChatRequest(BaseModel):
-    question: str = Field(min_length=1)
 
 
 def _anthropic_dev_adapter() -> AnthropicAdapter:
@@ -53,12 +52,9 @@ def _anthropic_dev_adapter() -> AnthropicAdapter:
     )
 
 
-def _sse(event: dict) -> str:
-    return "data: " + json.dumps(event, ensure_ascii=False) + "\n\n"
-
-
 def create_app(*, provider_mode: str | None = None, adapter=None,
-               knowledge_dir: Path | None = None) -> FastAPI:
+               knowledge_dir: Path | None = None, heartbeat_interval_seconds: float = 10,
+               max_concurrent: int = 2, trace_recorder=None) -> FastAPI:
     knowledge_dir = knowledge_dir or _ROOT / "knowledge"
     if not knowledge_dir.is_dir():
         raise ValueError("empty knowledge directory is missing")
@@ -74,6 +70,17 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
 
     app = FastAPI(title="AI DAQ FAE Agent Dev Bootstrap")
 
+    app.state.session_store = SessionStore(ttl_seconds=3600)
+    app.state.chat_concurrency_gate = ChatConcurrencyGate(max_concurrent)
+    app.state.trace_recorder = trace_recorder or TraceRecorder([NoopTraceSink()])
+    registry = LocalRequestRegistry()
+
+    @app.middleware("http")
+    async def local_dev_guard(request: Request, call_next):
+        if request.client is None or not is_local_peer(request.client.host):
+            return JSONResponse(status_code=403, content={"detail": "local_dev_only"})
+        return await call_next(request)
+
     @app.get("/health")
     def health():
         return {
@@ -83,25 +90,80 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
             "knowledge_release": KNOWLEDGE_RELEASE,
             "runtime_release": RUNTIME_RELEASE,
             "provider_mode": mode,
+            "local_dev_only": True,
+            "platform_identity_enabled": False,
+            "session_persistence": "process_memory",
+            "request_idempotency": "process_memory",
+            "trace_persistence": "configured_sink" if trace_recorder else "disabled",
         }
+
+    @app.get("/history")
+    def history(session_id: str):
+        session = app.state.session_store.get(session_id)
+        if session is None:
+            raise HTTPException(404, "session not found or expired")
+        return {"session_id": session.session_id, "channel": session.channel,
+                "messages": list(session.messages), "current_schema": None}
 
     @app.post("/chat")
     def chat(request: ChatRequest):
-        trace_id = uuid4().hex
+        if request.attachment_ids:
+            raise HTTPException(422, "attachments_not_enabled")
+        fingerprint = (request.message, request.session_id, request.channel)
+        with registry.lock:
+            registry.prune()
+            existing = registry.records.get(request.client_request_id) if request.client_request_id else None
+            if existing:
+                if existing.fingerprint != fingerprint:
+                    raise HTTPException(409, "client_request_id_conflict")
+                if not existing.finished:
+                    raise HTTPException(409, "request_in_progress")
+                if app.state.session_store.get(existing.session_id) is None:
+                    raise HTTPException(404, "session not found or expired")
+                return StreamingResponse(iter(tuple(existing.events)), media_type="text/event-stream")
+            session = app.state.session_store.get(request.session_id) if request.session_id else None
+            if request.session_id and session is None:
+                raise HTTPException(404, "session not found or expired")
+            if session is not None and request.channel != session.channel:
+                raise HTTPException(409, "session_channel_conflict")
+            if session is None:
+                # No trusted Platform identity exists in this localhost-only Dev service.
+                session = app.state.session_store.create(channel=request.channel)
+            if session.session_id in registry.active_sessions:
+                raise HTTPException(409, "session_request_in_progress")
+            if not app.state.chat_concurrency_gate.acquire(timeout=0):
+                raise HTTPException(429, "chat_concurrency_limit")
+            registry.active_sessions.add(session.session_id)
+            record = RequestRecord(fingerprint=fingerprint, session_id=session.session_id)
+            if request.client_request_id:
+                registry.records[request.client_request_id] = record
+            prior_history = list(session.messages)
 
-        def stream():
+        ctx = app.state.trace_recorder.start_trace("daq_chat_request", {
+            "session_id": session.session_id, "message": request.message,
+            "agent_id": AGENT_ID, "channel": session.channel,
+        })
+        started_at = time.monotonic()
+
+        def runtime_events():
             runtime = LoopRuntime(
                 adapter=adapter,
                 toolbox=EmptyKnowledgeToolBox(),
                 system_prompt_path=_ROOT / "prompts" / "empty_knowledge_system.md",
             )
+            progress = []
             try:
-                events = list(runtime.run(request.question))
-                done = next(event for event in reversed(events)
-                            if event.get("type") == "done")
-                progress = [event for event in events if event.get("type") == "tool_call"]
+                with install_trace_ctx(ctx):
+                    done = None
+                    for event in runtime.run(request.message, history=prior_history):
+                        if event.get("type") == "tool_call":
+                            progress.append(event)
+                            yield "stage", {"stage": "tool_call", **event}
+                        elif event.get("type") == "done":
+                            done = dict(event)
+                    if done is None:
+                        raise RuntimeError("runtime_missing_terminal")
             except httpx.HTTPStatusError as exc:
-                progress = []
                 status_code = exc.response.status_code
                 outcome = (
                     "provider_configuration_error" if status_code in {400, 401, 403, 404, 422}
@@ -120,7 +182,6 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                     "fallback_reason": f"provider_http_{status_code}",
                 }
             except httpx.TransportError as exc:
-                progress = []
                 done = {
                     "type": "done",
                     "answer": "本次数采 Dev 模型连接失败，未生成答案。请检查网关连接。",
@@ -132,7 +193,6 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                     "fallback_reason": "provider_transport_error",
                 }
             except Exception as exc:
-                progress = []
                 done = {
                     "type": "done",
                     "answer": "本次数采 Dev 服务运行失败，未生成答案。请检查服务日志。",
@@ -166,18 +226,74 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                 done.setdefault("fallback_used", False)
                 done.setdefault("fallback_reason", None)
 
+            calls = done.get("tool_calls") or progress
+            actual = list(dict.fromkeys(call.get("tool") for call in calls if call.get("tool")))
+            coverage = {}
+            for call in calls:
+                if call.get("tool") == "search_knowledge":
+                    coverage["search_knowledge"] = (
+                        "missing" if call.get("status") == "not_found" else "unknown"
+                    )
             done.update({
                 "agent_id": AGENT_ID,
                 "knowledge_release": KNOWLEDGE_RELEASE,
                 "runtime_release": RUNTIME_RELEASE,
-                "trace_id": trace_id,
-                "planned_capabilities": ["search_knowledge"],
-                "capability_coverage": {"search_knowledge": "missing"},
+                "trace_id": ctx.trace_id,
+                "session_id": session.session_id,
+                "client_request_id": request.client_request_id,
+                "planned_capabilities": [],
+                "actual_capabilities": actual,
+                "capability_coverage": coverage,
+                "coverage_status": "unknown",
+                "duration_ms": int((time.monotonic() - started_at) * 1000),
             })
-            for event in progress:
-                yield _sse(event)
-            yield _sse({"type": "text_delta", "text": done["answer"]})
-            yield _sse(done)
+            session.append_message("user", request.message)
+            session.append_message("assistant", done["answer"])
+            ctx.finalize({"outcome": done["outcome"], "answer": done["answer"],
+                          "fallback_used": done["fallback_used"],
+                          "fallback_reason": done["fallback_reason"],
+                          "capability_coverage": coverage,
+                          "planned_capabilities": done["planned_capabilities"],
+                          "actual_capabilities": actual,
+                          "coverage_status": "unknown",
+                          "tool_calls": calls,
+                          "duration_ms": done["duration_ms"],
+                          "provider_status_code": done.get("provider_status_code"),
+                          "error_type": done.get("error_type")}, metadata={
+                "agent_id": AGENT_ID, "knowledge_release": KNOWLEDGE_RELEASE,
+                "runtime_release": RUNTIME_RELEASE, "session_id": session.session_id,
+            })
+            yield "text_delta", {"delta": done["answer"]}
+            yield "sources", done["sources"]
+            yield "done", done
+
+        def produce():
+            try:
+                def opening_events():
+                    yield "session", {"session_id": session.session_id, "agent_id": AGENT_ID,
+                                      "client_request_id": request.client_request_id}
+                    yield "stage", {"stage": "loop", "status": "running"}
+                    yield from runtime_events()
+
+                for name, payload in opening_events():
+                    encoded = sse_event(name, payload)
+                    with registry.lock:
+                        record.events.append(encoded)
+                        if name == "done":
+                            record.finished = True
+                    yield encoded
+            finally:
+                with registry.lock:
+                    registry.active_sessions.discard(session.session_id)
+                    app.state.chat_concurrency_gate.release()
+
+        def stream():
+            # The worker owns execution and gate release even after HTTP disconnect.
+            for item in iter_with_heartbeat(produce(), heartbeat_interval_seconds=heartbeat_interval_seconds):
+                if isinstance(item, StreamHeartbeat):
+                    yield sse_event("heartbeat", {"elapsed_ms": item.elapsed_ms, "count": item.count})
+                    continue
+                yield item
 
         return StreamingResponse(stream(), media_type="text/event-stream")
 
