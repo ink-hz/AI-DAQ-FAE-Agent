@@ -13,6 +13,7 @@ import httpx
 from pydantic import BaseModel, Field
 
 from src.agent.loop.adapters import AnthropicAdapter
+from src.agent.anthropic_transport import AnthropicTransportError
 from src.agent.loop.runtime import LoopRuntime
 from src.agent.guardrails import categorize_refusal
 
@@ -23,7 +24,12 @@ from daq_fae.domain_tools import DaqToolBox
 from daq_fae.attachment_evidence import extend_with_attachments
 from daq_fae.task_context import prepare_turn
 from daq_fae.local_state import LocalStateError, LocalStateStore
-from daq_fae.webui import mount_local_webui
+from daq_fae.authenticated_chat import authenticated_chat
+from daq_fae.provider_errors import anthropic_failure
+from daq_fae.authenticated_persistence import configure_authenticated_persistence
+from daq_fae.durable_state import configure_durable_state
+from daq_fae.platform_identity import configure_platform_identity
+from daq_fae.webui import mount_authenticated_webui, mount_local_webui
 from daq_fae.offline_adapter import OfflineAdapter
 from daq_fae.api_transport import ChatRequest, LocalRequestRegistry, RequestRecord, is_local_peer
 from src.agent.session import SessionStore
@@ -31,6 +37,9 @@ from src.api.stream import StreamHeartbeat, iter_with_heartbeat, sse_event
 from src.api.concurrency import ChatConcurrencyGate
 from src.agent.tracing import TraceConfig, build_recorder, install_trace_ctx
 from src.agent.protocol import RUNTIME_FAILURE_OUTCOMES
+from src.api.review_routes import register_review_routes
+from src.platform_identity.models import PlatformIdentityError
+from src.storage.authenticated_conversations import ConversationNotFound, ConversationStoreError
 
 
 AGENT_ID = "ai-daq-fae-agent"
@@ -70,16 +79,17 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                max_concurrent: int = 2, trace_recorder=None,
                attachment_dir: Path | None = None, attachment_limits=None,
                attachment_clock=None, webui_dist: Path | None = None,
-               state_db_path: Path | None = None, vision_adapter=None) -> FastAPI:
+               state_db_path: Path | None = None, vision_adapter=None,
+               platform_client=None, identity_repository=None,
+               conversation_repository=None, feedback_store=None, review_store=None,
+               durable_state=None) -> FastAPI:
     identity_mode = os.getenv("DAQ_PLATFORM_IDENTITY_ENABLED", "false")
     if identity_mode not in {"true", "false"}:
         raise ValueError("daq_platform_identity_enabled_invalid")
-    if identity_mode == "true":
-        # This factory's session and request stores are intentionally local and
-        # ownerless. A Platform session must never enter these routes.
+    auth_mode = identity_mode == "true"
+    if auth_mode:
         if not os.getenv("DAQ_DATABASE_URL") or not os.getenv("DAQ_AUTHENTICATED_CONTENT_KEYRING_FILE"):
             raise ValueError("daq_authenticated_persistence_configuration_missing")
-        raise ValueError("daq_authenticated_routes_not_wired")
     knowledge_dir = knowledge_dir or _ROOT / "knowledge"
     if not knowledge_dir.is_dir():
         raise ValueError("empty knowledge directory is missing")
@@ -101,7 +111,7 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
         log_path=Path(os.getenv("DAQ_TRACE_LOG_PATH", str(_ROOT / "data" / "daq_traces.jsonl"))),
         environment="development", release=RUNTIME_RELEASE,
     ))
-    app.state.local_state = LocalStateStore(
+    app.state.local_state = None if auth_mode else LocalStateStore(
         state_db_path or Path(os.getenv("DAQ_DEV_STATE_DB", str(_ROOT / "data" / "daq_dev.sqlite3"))),
         agent_id=AGENT_ID,
     )
@@ -113,7 +123,7 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
 
     @app.middleware("http")
     async def local_dev_guard(request: Request, call_next):
-        if request.client is None or not is_local_peer(request.client.host):
+        if not auth_mode and (request.client is None or not is_local_peer(request.client.host)):
             return JSONResponse(status_code=403, content={"detail": "local_dev_only"})
         return await call_next(request)
 
@@ -126,7 +136,7 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
             "knowledge_release": KNOWLEDGE_RELEASE,
             "runtime_release": RUNTIME_RELEASE,
             "provider_mode": mode,
-            "local_dev_only": True,
+            "local_dev_only": not auth_mode,
             "attachment_capability": "session_bound_tools",
             "attachment_model_evidence_enabled": True,
             "attachment_archive_enabled": False,
@@ -135,14 +145,25 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                 "vision_enabled": vision_adapter is not None,
                 "vision_reason": "ready" if vision_adapter is not None else "disabled_by_config",
             },
-            "platform_identity_enabled": False,
-            "session_persistence": "local_sqlite_dev",
-            "request_idempotency": "local_sqlite_dev",
+            "platform_identity_enabled": auth_mode,
+            "session_persistence": "postgres_daq_authenticated" if auth_mode else "local_sqlite_dev",
+            "request_idempotency": "postgres_daq_ledger" if auth_mode else "local_sqlite_dev",
             "trace_persistence": "configured_sink" if trace_recorder else "daq_jsonl_dev",
         }
 
     @app.get("/history")
-    def history(session_id: str):
+    def history(session_id: str, request: Request):
+        if auth_mode:
+            try:
+                return app.state.daq_authenticated_persistence.history(
+                    request.state.platform_identity, session_id,
+                )
+            except ConversationNotFound:
+                raise HTTPException(404, "conversation not found") from None
+            except ConversationStoreError:
+                raise HTTPException(503, "daq_conversation_storage_unavailable") from None
+            except PlatformIdentityError as exc:
+                raise HTTPException(exc.status_code, exc.code) from None
         session = app.state.session_store.get(session_id)
         if session is None:
             restored = app.state.local_state.load_session(session_id)
@@ -154,7 +175,22 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                 "messages": list(session.messages), "current_schema": None}
 
     @app.post("/feedback")
-    def feedback(body: FeedbackRequest):
+    def feedback(body: FeedbackRequest, request: Request):
+        if auth_mode:
+            try:
+                feedback_id = app.state.daq_authenticated_persistence.record_feedback(
+                    request.state.platform_identity,
+                    session_id=body.session_id, message_index=body.message_index,
+                    rating=body.rating, comment=body.comment, turn_id=body.turn_id,
+                    trace_id=body.trace_id, reason_code=body.reason_code,
+                )
+            except ConversationNotFound:
+                raise HTTPException(404, "feedback target not found") from None
+            except ConversationStoreError:
+                raise HTTPException(503, "daq_feedback_storage_unavailable") from None
+            except PlatformIdentityError as exc:
+                raise HTTPException(exc.status_code, exc.code) from None
+            return {"ok": True, "feedback_id": feedback_id}
         session = app.state.session_store.get(body.session_id)
         if session is None:
             restored = app.state.local_state.load_session(body.session_id)
@@ -172,7 +208,15 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
         return {"ok": True, "feedback_id": feedback_id}
 
     @app.post("/chat")
-    def chat(request: ChatRequest):
+    def chat(request: ChatRequest, http_request: Request):
+        if auth_mode:
+            return authenticated_chat(
+                app, request, http_request.state.platform_identity,
+                adapter=adapter, vision_adapter=vision_adapter,
+                heartbeat_interval_seconds=heartbeat_interval_seconds,
+                root=_ROOT, agent_id=AGENT_ID,
+                knowledge_release=KNOWLEDGE_RELEASE, runtime_release=RUNTIME_RELEASE,
+            )
         fingerprint = (request.message, request.session_id, request.channel, tuple(request.attachment_ids))
         with registry.lock:
             registry.prune()
@@ -311,6 +355,8 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                             done = dict(event)
                     if done is None:
                         raise RuntimeError("runtime_missing_terminal")
+            except AnthropicTransportError as exc:
+                done = anthropic_failure(exc)
             except httpx.HTTPStatusError as exc:
                 status_code = exc.response.status_code
                 outcome = (
@@ -463,7 +509,57 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
 
         return StreamingResponse(stream(), media_type="text/event-stream")
 
-    mount_local_webui(app, dist=webui_dist or _ROOT / "webui" / "dist")
+    if auth_mode:
+        configure_authenticated_persistence(
+            app, runtime_release=RUNTIME_RELEASE, knowledge_release=KNOWLEDGE_RELEASE,
+            conversation_repository=conversation_repository,
+            feedback_store=feedback_store, review_store=review_store,
+        )
+        app.state.daq_durable_state = durable_state or configure_durable_state(app)
+        @app.get("/authenticated/conversations")
+        def list_authenticated_conversations(request: Request, cursor: str | None = None,
+                                             limit: int = 30):
+            try:
+                return app.state.daq_authenticated_persistence.list_conversations(
+                    request.state.platform_identity, cursor=cursor, limit=limit,
+                )
+            except ValueError:
+                raise HTTPException(400, "invalid pagination request") from None
+            except ConversationStoreError:
+                raise HTTPException(503, "daq_conversation_storage_unavailable") from None
+
+        @app.get("/authenticated/conversations/{session_id}")
+        def authenticated_conversation(session_id: str, request: Request):
+            try:
+                return app.state.daq_authenticated_persistence.conversation_detail(
+                    request.state.platform_identity, session_id,
+                )
+            except ConversationNotFound:
+                raise HTTPException(404, "conversation not found") from None
+            except ConversationStoreError:
+                raise HTTPException(503, "daq_conversation_storage_unavailable") from None
+
+        app.state.review_center_store = app.state.daq_authenticated_persistence._review
+        register_review_routes(app)
+
+        @app.middleware("http")
+        async def daq_reviewer_boundary(request: Request, call_next):
+            path = request.url.path
+            if path == "/review" or path.startswith("/review/"):
+                try:
+                    app.state.daq_authenticated_persistence.review_for(
+                        getattr(request.state, "platform_identity", None),
+                    )
+                except PlatformIdentityError as exc:
+                    return JSONResponse({"error": {"code": exc.code}}, status_code=exc.status_code)
+            return await call_next(request)
+
+        configure_platform_identity(
+            app, repository=identity_repository, platform_client=platform_client,
+        )
+        mount_authenticated_webui(app, dist=webui_dist or _ROOT / "webui" / "dist")
+    else:
+        mount_local_webui(app, dist=webui_dist or _ROOT / "webui" / "dist")
     return app
 
 

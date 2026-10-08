@@ -184,3 +184,31 @@ def test_business_and_private_requests_use_inherited_redline_without_model(messa
     assert done['sources'] == []
     assert done['actual_capabilities'] == []
     assert done['answer']
+
+
+@pytest.mark.parametrize('reason,status,expected', [
+    ('read_error', None, 'provider_unavailable'),
+    ('http_error', 400, 'provider_configuration_error'),
+    ('invalid_sse_json', None, 'provider_protocol_error'),
+])
+def test_buffered_anthropic_transport_failures_keep_their_failure_layer(reason, status, expected):
+    from src.agent.anthropic_transport import AnthropicTransportError, AnthropicTransportTelemetry
+
+    telemetry = AnthropicTransportTelemetry(
+        mode='anthropic_sse_buffered', attempts=3, retry_count=2,
+        retry_reasons=(reason,), first_event_ms=None, complete_message_ms=None,
+        message_stop_received=False, discarded_incomplete_attempts=3,
+        http_status=status,
+    )
+
+    class FailingAdapter:
+        def chat(self, *args, **kwargs):
+            raise AnthropicTransportError(reason, retryable=False, telemetry=telemetry)
+            yield
+
+    done = terminal(TestClient(create_app(adapter=FailingAdapter())).post(
+        '/chat', json={'message': 'EGO 规格'}))
+    assert done['outcome'] == expected
+    assert done['fallback_used'] is True
+    assert done['provider_status_code'] == status
+    assert done['transport_reason'] == reason
