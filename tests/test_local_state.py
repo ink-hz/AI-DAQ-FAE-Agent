@@ -54,3 +54,37 @@ def test_local_request_id_conflict_survives_restart(tmp_path):
     assert second.post("/chat", json={
         "message": "问题 B", "client_request_id": "same",
     }).status_code == 409
+
+
+def test_daq_context_survives_restart_and_topic_switch(tmp_path):
+    from daq_fae.offline_adapter import OfflineAdapter
+
+    class CaptureAdapter(OfflineAdapter):
+        def __init__(self):
+            self.system_prompts = []
+
+        def chat(self, messages, tools=None, required_tool=None):
+            self.system_prompts.append(messages[0]["content"])
+            yield from super().chat(messages, tools, required_tool)
+
+    database = tmp_path / "state.sqlite3"
+    first = TestClient(create_app(provider_mode="offline", state_db_path=database))
+    initial = _done(first.post("/chat", json={
+        "message": "设备是 EGO；SDK 版本为 2.0；录制报错",
+    }))
+    assert {"resolve_entity", "check_software_support", "lookup_procedure"} <= set(
+        initial["planned_capabilities"]
+    )
+    adapter = CaptureAdapter()
+    second = TestClient(create_app(adapter=adapter, state_db_path=database))
+    followup = _done(second.post("/chat", json={
+        "session_id": initial["session_id"], "message": "还是不行，下一步？",
+    }))
+    assert "EGO" in adapter.system_prompts[0]
+    assert "sdk_version" in adapter.system_prompts[0]
+    assert "2.0" in adapter.system_prompts[0]
+    _done(second.post("/chat", json={
+        "session_id": initial["session_id"], "message": "换个场景：另一台设备的规格",
+    }))
+    assert "EGO" not in adapter.system_prompts[-1]
+    assert followup["evidence_policy"]["requirement_status"]

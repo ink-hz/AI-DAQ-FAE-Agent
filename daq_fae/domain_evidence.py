@@ -26,6 +26,8 @@ class _Requirement:
     id: str
     capability: str
     critical: bool
+    evidence_class: str
+    source_ids: tuple[str, ...]
 
 
 class DaqEvidencePolicy:
@@ -44,8 +46,18 @@ class DaqEvidencePolicy:
                     or not isinstance(capability, str) or not capability.strip()
                     or requirement_id in ids):
                 raise ValueError("daq_requirement_invalid")
+            evidence_class = entry.get("evidence_class", "governed_required")
+            source_ids = entry.get("source_ids", [])
+            if (evidence_class not in {"governed_required", "user_evidence_required"}
+                    or not isinstance(source_ids, list)
+                    or any(not isinstance(value, str) or not value for value in source_ids)
+                    or (evidence_class == "user_evidence_required" and not source_ids)):
+                raise ValueError("daq_requirement_evidence_class_invalid")
             ids.add(requirement_id)
-            parsed.append(_Requirement(requirement_id, capability, entry.get("critical", True) is True))
+            parsed.append(_Requirement(
+                requirement_id, capability, entry.get("critical", True) is True,
+                evidence_class, tuple(dict.fromkeys(source_ids)),
+            ))
         if not parsed:
             raise ValueError("daq_requirements_empty")
         return DaqEvidenceSession(tuple(parsed))
@@ -58,6 +70,7 @@ class DaqEvidenceSession:
         self.actual: list[str] = []
         self.tool_failed = False
         self.attachment_failed = False
+        self._observed_user_sources = {item.id: set() for item in requirements}
 
     def observe(self, tool_name: str, result: ToolResult) -> None:
         if tool_name not in self.actual:
@@ -80,7 +93,25 @@ class DaqEvidenceSession:
         ) else set()
         empty_release = content.get("reason") == "empty_knowledge_release"
         for item in self.requirements:
+            if empty_release and result.status == "not_found" and item.evidence_class == "governed_required":
+                if self.status[item.id] != "satisfied":
+                    self.status[item.id] = "missing"
+                continue
             if item.capability != tool_name:
+                continue
+            if item.evidence_class == "user_evidence_required":
+                if result.status == "ok":
+                    observed = {
+                        source.get("source_id") for source in result.sources
+                        if isinstance(source, dict) and source.get("type") == "user_attachment"
+                    }
+                    self._observed_user_sources[item.id].update(
+                        observed.intersection(item.source_ids)
+                    )
+                    if set(item.source_ids) <= self._observed_user_sources[item.id]:
+                        self.status[item.id] = "satisfied"
+                elif result.status == "not_found":
+                    self.status[item.id] = "missing"
                 continue
             if item.id not in matched_ids and not (empty_release and result.status == "not_found"):
                 continue

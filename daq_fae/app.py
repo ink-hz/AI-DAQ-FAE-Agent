@@ -17,9 +17,10 @@ from src.agent.loop.runtime import LoopRuntime
 
 from daq_fae.api_attachments import configure_attachments
 from src.attachments.models import AttachmentDescriptor, AttachmentError, AttachmentLimits
-from daq_fae.domain_evidence import DaqEvidencePolicy, question_requirements
+from daq_fae.domain_evidence import DaqEvidencePolicy
 from daq_fae.domain_tools import DaqToolBox
 from daq_fae.attachment_evidence import extend_with_attachments
+from daq_fae.task_context import prepare_turn
 from daq_fae.local_state import LocalStateError, LocalStateStore
 from daq_fae.webui import mount_local_webui
 from daq_fae.offline_adapter import OfflineAdapter
@@ -33,7 +34,7 @@ from src.agent.protocol import RUNTIME_FAILURE_OUTCOMES
 
 AGENT_ID = "ai-daq-fae-agent"
 KNOWLEDGE_RELEASE = "empty-dev-v0"
-RUNTIME_RELEASE = "fae-3d0b06d-dev"
+RUNTIME_RELEASE = "fae-61c7da8-dev"
 _ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -237,29 +238,41 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
         started_at = time.monotonic()
 
         def runtime_events():
-            toolbox = (
-                extend_with_attachments(
-                    DaqToolBox(), session=session,
-                    store=app.state.attachment_store, vision=vision_adapter,
-                ) if request.attachment_ids else DaqToolBox()
-            )
-            runtime = LoopRuntime(
-                adapter=adapter,
-                toolbox=toolbox,
-                system_prompt_path=_ROOT / "prompts" / "empty_knowledge_system.md",
-                evidence_policy=DaqEvidencePolicy(),
-            )
             progress = []
+            plan = None
             try:
                 with install_trace_ctx(ctx):
-                    done = None
+                    visible_attachments = session.visible_attachments()
                     image_source_ids = [
-                        item.source_id for item in session.visible_attachments()
-                        if item.kind == "image"
+                        item.source_id for item in visible_attachments if item.kind == "image"
                     ]
+                    text_source_ids = [
+                        item.source_id for item in visible_attachments if item.kind != "image"
+                    ]
+                    plan = prepare_turn(
+                        request.message,
+                        previous=app.state.local_state.load_context(session.session_id),
+                        attachment_source_ids=text_source_ids,
+                        image_source_ids=image_source_ids,
+                    )
+                    base_toolbox = DaqToolBox(context=plan.context.tool_context())
+                    toolbox = (
+                        extend_with_attachments(
+                            base_toolbox, session=session,
+                            store=app.state.attachment_store, vision=vision_adapter,
+                        ) if request.attachment_ids else base_toolbox
+                    )
+                    runtime = LoopRuntime(
+                        adapter=adapter,
+                        toolbox=toolbox,
+                        system_prompt_path=_ROOT / "prompts" / "empty_knowledge_system.md",
+                        evidence_policy=DaqEvidencePolicy(),
+                    )
+                    done = None
                     for event in runtime.run(
                         request.message, history=prior_history,
-                        evidence_requirements=question_requirements(request.message),
+                        entity_note=plan.context_note,
+                        evidence_requirements=plan.evidence_requirements(),
                         required_attachment_source_ids=(
                             list(toolbox.attachment_source_ids) if request.attachment_ids else None
                         ),
@@ -332,7 +345,7 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
             calls = done.get("tool_calls") or progress
             done.setdefault(
                 "planned_capabilities",
-                ["user_attachment"] if request.attachment_ids else ["search_knowledge"],
+                list(plan.planned_capabilities) if plan is not None else ["search_knowledge"],
             )
             actual = done.get("actual_capabilities", [])
             coverage = done.get("capability_coverage", {})
@@ -358,7 +371,10 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
             session.append_message("user", request.message)
             session.append_message("assistant", done["answer"])
             try:
-                app.state.local_state.save_turn(session, done)
+                app.state.local_state.save_turn(
+                    session, done,
+                    context_checkpoint=plan.context.to_checkpoint() if plan is not None else None,
+                )
             except Exception:
                 done.update({
                     "answer": "本轮会话无法安全保存，答案未交付。请检查数采 Dev 存储。",

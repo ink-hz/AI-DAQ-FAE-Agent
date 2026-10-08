@@ -32,6 +32,10 @@ class LocalStateStore:
                     channel text not null, created_at real not null,
                     last_active real not null, messages_json text not null
                 );
+                create table if not exists task_contexts (
+                    session_id text primary key, agent_id text not null,
+                    checkpoint_json text not null
+                );
                 create table if not exists turns (
                     turn_id text primary key, agent_id text not null,
                     session_id text not null, turn_index integer not null,
@@ -77,7 +81,15 @@ class LocalStateStore:
             messages=messages,
         )
 
-    def save_turn(self, session: Session, done: dict) -> str:
+    def load_context(self, session_id: str) -> dict | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "select checkpoint_json from task_contexts where session_id=? and agent_id=?",
+                (session_id, self.agent_id),
+            ).fetchone()
+        return json.loads(row["checkpoint_json"]) if row else None
+
+    def save_turn(self, session: Session, done: dict, *, context_checkpoint: dict | None = None) -> str:
         if session.owner_subject_id is not None:
             raise LocalStateError("authenticated_session_requires_platform_repository")
         turn_id = str(uuid4())
@@ -103,6 +115,18 @@ class LocalStateStore:
                 turn_id, self.agent_id, session.session_id, turn_index,
                 done["trace_id"], json.dumps(done, ensure_ascii=False),
             ))
+            if context_checkpoint is not None:
+                changed = connection.execute("""
+                    insert into task_contexts(session_id, agent_id, checkpoint_json)
+                    values (?, ?, ?)
+                    on conflict(session_id) do update set checkpoint_json=excluded.checkpoint_json
+                    where task_contexts.agent_id=excluded.agent_id
+                """, (
+                    session.session_id, self.agent_id,
+                    json.dumps(context_checkpoint, ensure_ascii=False),
+                )).rowcount
+                if changed != 1:
+                    raise LocalStateError("context_agent_conflict")
         return turn_id
 
     def lookup_request(self, request_id: str, fingerprint: tuple) -> tuple[str, list[str] | None] | None:

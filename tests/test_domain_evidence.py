@@ -95,3 +95,25 @@ def test_vision_unavailable_allows_explicit_abstention_but_no_resolution():
     decision = session.evaluate(AnswerSubmission(outcome="resolved", conclusion="图中是 EGO"))
     assert decision.action == "reject"
     assert decision.reason_code == "daq_attachment_evidence_failed"
+
+
+def test_attachment_source_is_tracked_separately_from_governed_claims():
+    session = DaqEvidencePolicy().begin({"requirements": [
+        {"id": "product", "capability": "lookup_spec", "evidence_class": "governed_required"},
+        {"id": "user_log", "capability": "search_attachments",
+         "evidence_class": "user_evidence_required", "source_ids": ["user-src"]},
+    ]})
+    session.observe("search_knowledge", ToolResult(
+        status="not_found", content={"reason": "empty_knowledge_release"},
+    ))
+    assert session.snapshot().requirement_status == {
+        "product": "missing", "user_log": "unknown",
+    }
+    session.observe("search_attachments", ToolResult(
+        status="ok", content={"hits": []},
+        sources=[{"type": "user_attachment", "source_id": "user-src"}],
+    ))
+    assert session.snapshot().requirement_status == {
+        "product": "missing", "user_log": "satisfied",
+    }
+    assert session.evaluate(AnswerSubmission(outcome="resolved", conclusion="设备支持")).action == "reject"

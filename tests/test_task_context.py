@@ -75,11 +75,15 @@ def test_syntactic_extraction_is_generic_and_no_free_question_becomes_product_fa
 
 
 def test_attachment_requirements_remain_separate_user_evidence():
-    plan = prepare_turn('日志报错', attachment_source_ids=['att-src-test'])
+    plan = prepare_turn('日志报错', attachment_source_ids=['att-src-test'],
+                        image_source_ids=['image-src-test'])
     attached = [item for item in plan.requirements if item['capability'] == 'search_attachments']
     assert attached[0]['source_ids'] == ['att-src-test']
     assert attached[0]['evidence_class'] == 'user_evidence_required'
     assert attached[0]['status'] == 'unknown'
+    image = [item for item in plan.requirements if item['capability'] == 'analyze_image']
+    assert image[0]['source_ids'] == ['image-src-test']
+    assert image[0]['evidence_class'] == 'user_evidence_required'
 
 
 def test_distinct_procedures_and_software_surfaces_have_distinct_requirements():

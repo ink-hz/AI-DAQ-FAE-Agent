@@ -128,7 +128,7 @@ def _extract(message):
 
 
 def prepare_turn(message: str, *, previous=None, updates=None, topic_switch=None,
-                 attachment_source_ids=()) -> TurnPlan:
+                 attachment_source_ids=(), image_source_ids=()) -> TurnPlan:
     """Prepare a turn without mutating prior state or granting facts/permissions.
 
     Pass the returned context into the next turn/checkpoint, tool_context() to the
@@ -196,14 +196,20 @@ def prepare_turn(message: str, *, previous=None, updates=None, topic_switch=None
             digest = hashlib.sha256(json.dumps(requirement, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
             requirement['id'] = f'req_{capability}_{digest}'
             requirements.append(requirement)
-    if attachment_source_ids:
-        ids = sorted(set(attachment_source_ids))
-        if not all(isinstance(item, str) and item for item in ids):
-            raise ValueError('daq_attachment_sources_invalid')
-        payload = json.dumps([topic_id, ids], sort_keys=True)
-        requirements.append({'id': 'req_search_attachments_' + hashlib.sha256(payload.encode()).hexdigest()[:16],
-                             'capability': 'search_attachments', 'critical': True, 'status': 'unknown',
-                             'source_ids': ids, 'evidence_class': 'user_evidence_required'})
+    for capability, provided in (
+        ('search_attachments', attachment_source_ids),
+        ('analyze_image', image_source_ids),
+    ):
+        if provided:
+            ids = sorted(set(provided))
+            if not all(isinstance(item, str) and item for item in ids):
+                raise ValueError('daq_attachment_sources_invalid')
+            payload = json.dumps([topic_id, capability, ids], sort_keys=True)
+            requirements.append({
+                'id': f'req_{capability}_' + hashlib.sha256(payload.encode()).hexdigest()[:16],
+                'capability': capability, 'critical': True, 'status': 'unknown',
+                'source_ids': ids, 'evidence_class': 'user_evidence_required',
+            })
     planned = tuple(dict.fromkeys(item['capability'] for item in requirements))
     note = 'DAQ session context: user declarations only; not verified product facts.\n' + json.dumps(context.tool_context(), ensure_ascii=False, sort_keys=True)
     return TurnPlan(context, requirements, planned, status, note)
