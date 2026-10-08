@@ -32,7 +32,9 @@ def test_question_requirement_is_explicit_and_not_satisfied_by_absence():
     assert snapshot.planned_capabilities == ("search_knowledge",)
     assert snapshot.requirement_status == {"question_evidence": "unknown"}
     assert session.evaluate(AnswerSubmission(outcome="resolved", conclusion="可以配对")).action == "request_evidence"
-    session.observe("search_knowledge", ToolResult(status="not_found", content={"matches": []}))
+    session.observe("search_knowledge", ToolResult(
+        status="not_found", content={"reason": "empty_knowledge_release", "matches": []},
+    ))
     assert session.snapshot().requirement_status == {"question_evidence": "missing"}
     assert session.evaluate(AnswerSubmission(outcome="safe_abstained", missing="缺少已审核资料")).action == "allow"
     assert session.evaluate(AnswerSubmission(outcome="resolved", conclusion="可以配对")).action == "reject"
@@ -47,13 +49,27 @@ def test_evidence_requires_real_source_and_all_planned_requirements():
     session.observe("lookup_spec", ToolResult(status="ok", content={"value": "120 mm"}))
     assert session.snapshot().requirement_status["spec"] == "unknown"
     session.observe("lookup_spec", ToolResult(
-        status="ok", content={"value": "120 mm"},
-        sources=[{"source_id": "reviewed-spec", "type": "governed_claim"}],
+        status="ok", content={"value": "120 mm", "matched_requirement_ids": ["other"]},
+        sources=[{"source_id": "reviewed-spec", "type": "daq_governed_claim",
+                  "verification_status": "verified", "release_id": "reviewed-v1"}],
+    ))
+    assert session.snapshot().requirement_status["spec"] == "unknown"
+    session.observe("lookup_spec", ToolResult(
+        status="ok", content={"value": "120 mm", "matched_requirement_ids": ["spec"]},
+        sources=[{"source_id": "user-log", "type": "user_attachment",
+                  "verification_status": "verified", "release_id": "reviewed-v1"}],
+    ))
+    assert session.snapshot().requirement_status["spec"] == "unknown"
+    session.observe("lookup_spec", ToolResult(
+        status="ok", content={"value": "120 mm", "matched_requirement_ids": ["spec"]},
+        sources=[{"source_id": "reviewed-spec", "type": "daq_governed_claim",
+                  "verification_status": "verified", "release_id": "reviewed-v1"}],
     ))
     assert session.snapshot().requirement_status["spec"] == "satisfied"
     assert session.evaluate(AnswerSubmission(outcome="resolved", conclusion="可用")).action == "request_evidence"
     session.observe("check_software_support", ToolResult(
-        status="conflict", content={"candidates": []}, sources=[{"source_id": "a"}],
+        status="conflict", content={"candidates": [], "matched_requirement_ids": ["software"]},
+        sources=[{"source_id": "a"}],
     ))
     assert session.snapshot().requirement_status["software"] == "conflict"
     assert session.evaluate(AnswerSubmission(outcome="resolved", conclusion="可用")).action == "reject"

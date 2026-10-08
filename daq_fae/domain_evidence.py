@@ -73,8 +73,16 @@ class DaqEvidenceSession:
             else:
                 self.tool_failed = True
             return
+        content = result.content if isinstance(result.content, dict) else {}
+        matched = content.get("matched_requirement_ids", [])
+        matched_ids = set(matched) if isinstance(matched, list) and all(
+            isinstance(value, str) for value in matched
+        ) else set()
+        empty_release = content.get("reason") == "empty_knowledge_release"
         for item in self.requirements:
             if item.capability != tool_name:
+                continue
+            if item.id not in matched_ids and not (empty_release and result.status == "not_found"):
                 continue
             previous = self.status[item.id]
             if result.status == "conflict":
@@ -135,6 +143,10 @@ class DaqEvidenceSession:
 def _has_governed_source(result: ToolResult) -> bool:
     return any(
         isinstance(source, dict)
+        and source.get("type") == "daq_governed_claim"
+        and source.get("verification_status") == "verified"
+        and isinstance(source.get("release_id"), str)
+        and bool(source["release_id"].strip())
         and isinstance(source.get("source_id"), str)
         and bool(source["source_id"].strip())
         for source in result.sources
