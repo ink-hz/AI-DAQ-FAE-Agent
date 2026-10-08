@@ -247,7 +247,7 @@ export function bootstrapEnterpriseIdentity(): Promise<EnterpriseAuthenticationM
 }
 
 export function enterpriseMutationHeaders(): Record<string, string> {
-  return csrfToken ? { 'X-FAE-Enterprise-CSRF': csrfToken } : {};
+  return csrfToken ? { 'X-DAQ-Enterprise-CSRF': csrfToken } : {};
 }
 
 export function currentAuthenticationMode(): EnterpriseAuthenticationMode {

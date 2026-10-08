@@ -61,7 +61,7 @@ describe('FAE enterprise identity bootstrap', () => {
     expect(init.method).toBe('POST');
     expect(JSON.parse(String(init.body))).toEqual({ code: launchCode });
     expect(enterpriseMutationHeaders()).toEqual({
-      'X-FAE-Enterprise-CSRF': 'csrf-from-fae',
+      'X-DAQ-Enterprise-CSRF': 'csrf-from-fae',
     });
   });
 
@@ -246,7 +246,7 @@ describe('FAE enterprise identity bootstrap', () => {
     await bootstrapEnterpriseIdentity();
 
     expect(enterpriseMutationHeaders()).toEqual({
-      'X-FAE-Enterprise-CSRF': 'rotated-csrf',
+      'X-DAQ-Enterprise-CSRF': 'rotated-csrf',
     });
   });
 

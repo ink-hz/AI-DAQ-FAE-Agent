@@ -10,8 +10,8 @@ Run `npm ci`, `npm test`, and `npm run build` in this directory.
 
 The server mounts built assets with `fae-browser-base` and `fae-api-base` meta
 values. `/app` uses root API routes for local Dev; internal `/daq` uses
-`/daq/api`. These legacy meta names and the `X-FAE-Enterprise-CSRF` header
-remain transport contracts. Agent launch is bound to `ai-daq-fae-agent`;
+`/daq/api`. The legacy meta names remain transport contracts. DAQ uses a dedicated
+`__Host-daq_enterprise_session` cookie and `X-DAQ-Enterprise-CSRF` header. Agent launch is bound to `ai-daq-fae-agent`;
 return paths and launch URLs accept the `/daq` workspace only.
 
 Platform integration requires a DAQ card, launch URL at
@@ -29,3 +29,9 @@ access control boundary.
 The inherited lens logo filename and FAE-prefixed code/type/CSS identifiers
 remain. UI copy names the DAQ Agent and describes acquisition tasks; no camera
 model recommendations or catalog have been embedded in the frontend.
+
+
+Dependency audit at import (`npm ci`, 2026-10-08) reported nine inherited
+lockfile vulnerabilities: one low, two moderate, four high and two critical.
+Dependency remediation is a separate batch; the UI migration did not upgrade
+or silently replace the reviewed lockfile dependencies.
