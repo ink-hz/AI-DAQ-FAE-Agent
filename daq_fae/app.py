@@ -19,6 +19,7 @@ from daq_fae.api_attachments import configure_attachments
 from src.attachments.models import AttachmentDescriptor, AttachmentError, AttachmentLimits
 from daq_fae.domain_evidence import DaqEvidencePolicy, question_requirements
 from daq_fae.domain_tools import DaqToolBox
+from daq_fae.attachment_evidence import extend_with_attachments
 from daq_fae.local_state import LocalStateError, LocalStateStore
 from daq_fae.webui import mount_local_webui
 from daq_fae.offline_adapter import OfflineAdapter
@@ -67,7 +68,7 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                max_concurrent: int = 2, trace_recorder=None,
                attachment_dir: Path | None = None, attachment_limits=None,
                attachment_clock=None, webui_dist: Path | None = None,
-               state_db_path: Path | None = None) -> FastAPI:
+               state_db_path: Path | None = None, vision_adapter=None) -> FastAPI:
     knowledge_dir = knowledge_dir or _ROOT / "knowledge"
     if not knowledge_dir.is_dir():
         raise ValueError("empty knowledge directory is missing")
@@ -112,9 +113,14 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
             "runtime_release": RUNTIME_RELEASE,
             "provider_mode": mode,
             "local_dev_only": True,
-            "attachment_capability": "http_storage_only",
-            "attachment_model_evidence_enabled": False,
+            "attachment_capability": "session_bound_tools",
+            "attachment_model_evidence_enabled": True,
             "attachment_archive_enabled": False,
+            "attachments": {
+                "enabled": True,
+                "vision_enabled": vision_adapter is not None,
+                "vision_reason": "ready" if vision_adapter is not None else "disabled_by_config",
+            },
             "platform_identity_enabled": False,
             "session_persistence": "local_sqlite_dev",
             "request_idempotency": "local_sqlite_dev",
@@ -231,37 +237,44 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
         started_at = time.monotonic()
 
         def runtime_events():
+            toolbox = (
+                extend_with_attachments(
+                    DaqToolBox(), session=session,
+                    store=app.state.attachment_store, vision=vision_adapter,
+                ) if request.attachment_ids else DaqToolBox()
+            )
             runtime = LoopRuntime(
                 adapter=adapter,
-                toolbox=DaqToolBox(),
+                toolbox=toolbox,
                 system_prompt_path=_ROOT / "prompts" / "empty_knowledge_system.md",
                 evidence_policy=DaqEvidencePolicy(),
             )
             progress = []
             try:
                 with install_trace_ctx(ctx):
-                    if request.attachment_ids:
-                        done = {
-                            "type": "done", "outcome": "attachment_evidence_unavailable",
-                            "answer": "附件已安全接收并绑定当前会话，但本次数采 Dev 尚未接入附件取证工具，无法根据附件内容回答。",
-                            "sources": [], "tool_calls": [],
-                            "fallback_used": True,
-                            "fallback_reason": "attachment_model_evidence_not_enabled",
-                            "attachment_capability": "http_storage_only",
-                        }
-                    else:
-                        done = None
-                        for event in runtime.run(
-                            request.message, history=prior_history,
-                            evidence_requirements=question_requirements(request.message),
-                        ):
-                            if event.get("type") == "tool_call":
-                                progress.append(event)
-                                yield "stage", {"stage": "tool_call", **event}
-                            elif event.get("type") == "done":
-                                done = dict(event)
-                        if done is None:
-                            raise RuntimeError("runtime_missing_terminal")
+                    done = None
+                    image_source_ids = [
+                        item.source_id for item in session.visible_attachments()
+                        if item.kind == "image"
+                    ]
+                    for event in runtime.run(
+                        request.message, history=prior_history,
+                        evidence_requirements=question_requirements(request.message),
+                        required_attachment_source_ids=(
+                            list(toolbox.attachment_source_ids) if request.attachment_ids else None
+                        ),
+                        required_image_source_ids=image_source_ids,
+                        attachment_dependency=(
+                            "required_for_answer" if request.attachment_ids else "unknown"
+                        ),
+                    ):
+                        if event.get("type") == "tool_call":
+                            progress.append(event)
+                            yield "stage", {"stage": "tool_call", **event}
+                        elif event.get("type") == "done":
+                            done = dict(event)
+                    if done is None:
+                        raise RuntimeError("runtime_missing_terminal")
             except httpx.HTTPStatusError as exc:
                 status_code = exc.response.status_code
                 outcome = (
@@ -313,6 +326,9 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
             else:
                 done.setdefault("fallback_used", False)
                 done.setdefault("fallback_reason", None)
+            if done.get("attachment_fallback_used"):
+                done["fallback_used"] = True
+                done["fallback_reason"] = done.get("attachment_fallback_reason")
             calls = done.get("tool_calls") or progress
             done.setdefault(
                 "planned_capabilities",

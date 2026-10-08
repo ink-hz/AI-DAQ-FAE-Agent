@@ -57,12 +57,21 @@ class DaqEvidenceSession:
         self.status = {item.id: "unknown" for item in requirements}
         self.actual: list[str] = []
         self.tool_failed = False
+        self.attachment_failed = False
 
     def observe(self, tool_name: str, result: ToolResult) -> None:
         if tool_name not in self.actual:
             self.actual.append(tool_name)
         if result.status == "tool_error":
-            self.tool_failed = True
+            code = result.content.get("error") if isinstance(result.content, dict) else None
+            if tool_name == "analyze_image" and code in {
+                "vision_unavailable", "vision_timeout", "vision_http_error",
+                "vision_transport_error", "vision_invalid_response",
+                "vision_output_truncated", "vision_runtime_error",
+            }:
+                self.attachment_failed = True
+            else:
+                self.tool_failed = True
             return
         for item in self.requirements:
             if item.capability != tool_name:
@@ -80,6 +89,8 @@ class DaqEvidenceSession:
     def evaluate(self, submission: AnswerSubmission) -> EvidenceDecision:
         if self.tool_failed:
             return EvidenceDecision("reject", "daq_evidence_tool_failure")
+        if self.attachment_failed and submission.outcome == "resolved":
+            return EvidenceDecision("reject", "daq_attachment_evidence_failed")
         if submission.outcome != "resolved":
             if submission.conclusion and not any(
                 value == "satisfied" for value in self.status.values()

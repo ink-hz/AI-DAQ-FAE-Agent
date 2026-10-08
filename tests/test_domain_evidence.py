@@ -66,3 +66,16 @@ def test_tool_error_is_protocol_failure_not_missing_knowledge():
     decision = session.evaluate(AnswerSubmission(outcome="safe_abstained", missing="资料不足"))
     assert decision.action == "reject"
     assert decision.reason_code == "daq_evidence_tool_failure"
+
+
+def test_vision_unavailable_allows_explicit_abstention_but_no_resolution():
+    session = DaqEvidencePolicy().begin(question_requirements("看一下这张图"))
+    session.observe("analyze_image", ToolResult(
+        status="tool_error", content={"error": "vision_unavailable"},
+    ))
+    assert session.evaluate(AnswerSubmission(
+        outcome="safe_abstained", missing="图片视觉分析不可用",
+    )).action == "allow"
+    decision = session.evaluate(AnswerSubmission(outcome="resolved", conclusion="图中是 EGO"))
+    assert decision.action == "reject"
+    assert decision.reason_code == "daq_attachment_evidence_failed"

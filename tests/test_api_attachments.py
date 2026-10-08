@@ -58,23 +58,41 @@ def test_batch_limits_and_rate_gate_are_enforced(tmp_path):
 
 
 def test_attachment_session_binding_is_exclusive_and_model_use_is_explicit(tmp_path):
-    app = create_app(attachment_dir=tmp_path / 'daq')
+    class ProbeAdapter:
+        model = 'attachment-contract'
+        tool_choice_strategy = 'submit_only_auto'
+
+        def chat(self, messages, tools=None, required_tool=None):
+            tool_messages = [item for item in messages if item.get('role') == 'tool']
+            names = {item['function']['name'] for item in tools}
+            if 'search_attachments' in names and not tool_messages:
+                name, arguments = 'search_attachments', {'query': 'status=ready'}
+            elif not any('empty_knowledge_release' in str(item.get('content')) for item in tool_messages):
+                name, arguments = 'search_knowledge', {'query': 'EGO status'}
+            else:
+                name, arguments = 'submit_answer', {
+                    'outcome': 'safe_abstained', 'missing': '缺少已审核的产品事实资料。',
+                }
+            yield {'type': 'tool_call', 'id': name, 'name': name, 'arguments': arguments}
+            yield {'type': 'stop', 'stop_reason': 'tool_use', 'usage': None}
+
+    app = create_app(attachment_dir=tmp_path / 'daq', adapter=ProbeAdapter())
     client = TestClient(app)
     aid = upload(client)['attachment_id']
     first = terminal(client.post('/chat', json={'message': '看日志', 'attachment_ids': [aid]}))
     sid = first['session_id']
     assert app.state.attachment_store.get(aid).bound_session_id == sid
-    assert first['outcome'] == 'attachment_evidence_unavailable'
-    assert first['fallback_used'] is True
-    assert first['attachment_capability'] == 'http_storage_only'
-    assert first['sources'] == []
-    assert first['actual_capabilities'] == []
+    assert first['outcome'] == 'safe_abstained'
+    assert first['fallback_used'] is False
+    assert first['sources'][0]['type'] == 'user_attachment'
+    assert first['attachment_coverage'] == 'full'
+    assert first['actual_capabilities'] == ['search_attachments', 'search_knowledge', 'user_attachment']
     second_sid = terminal(client.post('/chat', json={'message': '新会话'}))['session_id']
     denied = client.post('/chat', json={'session_id': second_sid, 'message': '看日志', 'attachment_ids': [aid]})
     assert denied.status_code == 409
     assert 'attachment' in denied.json()['detail']
     assert app.state.attachment_store.get(aid).bound_session_id == sid
-    assert client.get('/health').json()['attachment_capability'] == 'http_storage_only'
+    assert client.get('/health').json()['attachment_capability'] == 'session_bound_tools'
 
 
 def test_binding_failure_is_atomic_and_upload_identity_does_not_come_from_headers(tmp_path):
