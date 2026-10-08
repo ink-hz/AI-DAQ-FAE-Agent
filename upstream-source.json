@@ -1,0 +1,6 @@
+{
+  "repository": "AI-FAE-Agent",
+  "revision": "a6234f6be546efebb230ffc74bd9a00bebdc2814",
+  "source": "tracked git archive of src/ and requirements.txt",
+  "purpose": "temporary local Dev bootstrap snapshot; replace with a protected pinned dependency before milestone 0 completion"
+}
