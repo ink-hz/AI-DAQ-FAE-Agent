@@ -254,19 +254,8 @@ def _validate_database(database_url, old_database_url):
             raise ValueError("daq_database_identity_invalid")
 
 
-def configure_authenticated_persistence(
-    app, *, runtime_release: str, knowledge_release: str, environ: Mapping[str, str] | None = None,
-    conversation_repository=None, feedback_store=None, review_store=None,
-):
-    """Explicit assembly; never downgrades an authenticated turn to local storage."""
-    env = os.environ if environ is None else environ
-    database_url = env.get("DAQ_DATABASE_URL", "")
+def _load_content_codec(env):
     keyring_file = env.get("DAQ_AUTHENTICATED_CONTENT_KEYRING_FILE", "")
-    if not database_url or not keyring_file:
-        raise ValueError("daq_authenticated_persistence_configuration_missing")
-    if not all(isinstance(value, str) and value.strip() for value in (runtime_release, knowledge_release)):
-        raise ValueError("daq_persistence_release_missing")
-    _validate_database(database_url, env.get("DATABASE_URL"))
     content_path = Path(keyring_file)
     for key in ("DAQ_PLATFORM_SESSION_KEYRING_FILE", "DAQ_PLATFORM_TASK_CONTENT_KEYRING_FILE"):
         if env.get(key) and content_path.resolve() == Path(env[key]).resolve():
@@ -283,6 +272,23 @@ def configure_authenticated_persistence(
             # independent keys merely because their filenames differ.
             if set(codec._keys.values()) & set(other_keyring._keys.values()):
                 raise ValueError("daq_content_keyring_conflict")
+    return codec
+
+
+def configure_authenticated_persistence(
+    app, *, runtime_release: str, knowledge_release: str, environ: Mapping[str, str] | None = None,
+    conversation_repository=None, feedback_store=None, review_store=None,
+):
+    """Explicit assembly; never downgrades an authenticated turn to local storage."""
+    env = os.environ if environ is None else environ
+    database_url = env.get("DAQ_DATABASE_URL", "")
+    keyring_file = env.get("DAQ_AUTHENTICATED_CONTENT_KEYRING_FILE", "")
+    if not database_url or not keyring_file:
+        raise ValueError("daq_authenticated_persistence_configuration_missing")
+    if not all(isinstance(value, str) and value.strip() for value in (runtime_release, knowledge_release)):
+        raise ValueError("daq_persistence_release_missing")
+    _validate_database(database_url, env.get("DATABASE_URL"))
+    codec = _load_content_codec(env)
     try:
         reviewers = frozenset(UUID(item.strip()) for item in env.get("DAQ_PLATFORM_REVIEWER_SUBJECT_IDS", "").split(",") if item.strip())
     except ValueError:
