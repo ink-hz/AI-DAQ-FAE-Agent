@@ -117,6 +117,7 @@ def _extract(message):
         ('equipment', r'(?:设备|型号|equipment|device)\s*(?:是|为|[:：=]|is)\s*([^；;，,。\n]+)'),
         ('variant', r'(?:变体|硬件修订|variant|revision)\s*(?:是|为|[:：=]|is)\s*([^；;，,。\n]+)'),
         ('platform', r'(?:平台|操作系统|platform|os)\s*(?:是|为|[:：=]|is)\s*([^；;，,。\n]+)'),
+        ('connection', r'(?:连接方式|连接|connection(?: mode)?)\s*(?:是|为|[:：=]|is)\s*([^；;，,。\n]+)'),
     ):
         match = re.search(pattern, message, re.I)
         if match:

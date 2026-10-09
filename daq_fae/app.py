@@ -27,6 +27,7 @@ from daq_fae.empty_knowledge_synthesis import (EMPTY_KNOWLEDGE_RELEASE,
 from daq_fae.attachment_evidence import extend_with_attachments
 from daq_fae.task_context import prepare_turn
 from daq_fae.local_state import LocalStateError, LocalStateStore
+from daq_fae.knowledge.reviewed_view import ReviewedKnowledge
 from daq_fae.authenticated_chat import authenticated_chat
 from daq_fae.provider_errors import anthropic_failure
 from daq_fae.authenticated_persistence import configure_authenticated_persistence
@@ -80,6 +81,7 @@ def _anthropic_dev_adapter() -> AnthropicAdapter:
 
 def create_app(*, provider_mode: str | None = None, adapter=None,
                knowledge_dir: Path | None = None, heartbeat_interval_seconds: float = 10,
+               knowledge_release_root: Path | None = None,
                request_lease_renew_interval_seconds: float = 60,
                max_concurrent: int = 2, trace_recorder=None,
                attachment_dir: Path | None = None, attachment_limits=None,
@@ -116,6 +118,13 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
     if any(path.is_file() and path.name not in {".gitkeep", "README.md"}
            for path in knowledge_dir.rglob("*")):
         raise ValueError("empty knowledge bootstrap cannot load unreviewed knowledge files")
+    release_root = knowledge_release_root or Path(os.getenv(
+        "DAQ_KNOWLEDGE_RELEASE_ROOT", str(_ROOT / "data" / "knowledge" / "published"),
+    ))
+    knowledge = ReviewedKnowledge.load_active(release_root)
+    if auth_mode and knowledge is not None:
+        raise ValueError("daq_knowledge_role_contract_missing")
+    knowledge_release = knowledge.release_id if knowledge is not None else EMPTY_KNOWLEDGE_RELEASE
 
     mode = provider_mode or os.getenv("DAQ_PROVIDER_MODE", "offline")
     if mode not in {"offline", "anthropic"}:
@@ -124,6 +133,7 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
         adapter = OfflineAdapter() if mode == "offline" else _anthropic_dev_adapter()
 
     app = FastAPI(title="AI DAQ FAE Agent Dev Bootstrap")
+    app.state.daq_knowledge = knowledge
 
     app.state.session_store = SessionStore(ttl_seconds=3600)
     app.state.chat_concurrency_gate = ChatConcurrencyGate(max_concurrent)
@@ -165,7 +175,7 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
             "status": "ok",
             "environment": "development",
             "agent_id": AGENT_ID,
-            "knowledge_release": KNOWLEDGE_RELEASE,
+            "knowledge_release": knowledge_release,
             "runtime_release": RUNTIME_RELEASE,
             "provider_mode": mode,
             "local_dev_only": not auth_mode,
@@ -250,7 +260,7 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                 heartbeat_interval_seconds=heartbeat_interval_seconds,
                 request_lease_renew_interval_seconds=request_lease_renew_interval_seconds,
                 root=_ROOT, agent_id=AGENT_ID,
-                knowledge_release=KNOWLEDGE_RELEASE, runtime_release=RUNTIME_RELEASE,
+                knowledge_release=knowledge_release, runtime_release=RUNTIME_RELEASE,
             )
         fingerprint = (request.message, request.session_id, request.channel, tuple(request.attachment_ids))
         with registry.lock:
@@ -357,7 +367,11 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                             attachment_source_ids=text_source_ids,
                             image_source_ids=image_source_ids,
                         )
-                        base_toolbox = DaqToolBox(context=plan.context.tool_context())
+                        base_toolbox = DaqToolBox(
+                            context=plan.context.tool_context(), knowledge=knowledge,
+                            role="internal_fae" if knowledge is not None else None,
+                            requirements=plan.requirements,
+                        )
                         toolbox = (
                             extend_with_attachments(
                                 base_toolbox, session=session,
@@ -367,7 +381,10 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                         runtime = LoopRuntime(
                             adapter=adapter,
                             toolbox=toolbox,
-                            system_prompt_path=_ROOT / "prompts" / "empty_knowledge_system.md",
+                            system_prompt_path=_ROOT / "prompts" / (
+                                "reviewed_knowledge_system.md" if knowledge is not None
+                                else "empty_knowledge_system.md"
+                            ),
                             evidence_policy=DaqEvidencePolicy(),
                         )
                         events = runtime.run(
@@ -461,7 +478,7 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
             )
             done.update({
                 "agent_id": AGENT_ID,
-                "knowledge_release": KNOWLEDGE_RELEASE,
+                "knowledge_release": knowledge_release,
                 "runtime_release": RUNTIME_RELEASE,
                 "trace_id": ctx.trace_id,
                 "session_id": session.session_id,
@@ -474,7 +491,7 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
             done.pop("provenance", None)
             refine_empty_release_answer(
                 done, planned_capabilities=done["planned_capabilities"],
-                knowledge_release=KNOWLEDGE_RELEASE,
+                knowledge_release=knowledge_release,
             )
             session.append_message("user", request.message)
             session.append_message("assistant", done["answer"])
@@ -508,7 +525,7 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                           "duration_ms": done["duration_ms"],
                           "provider_status_code": done.get("provider_status_code"),
                           "error_type": done.get("error_type")}, metadata={
-                "agent_id": AGENT_ID, "knowledge_release": KNOWLEDGE_RELEASE,
+                "agent_id": AGENT_ID, "knowledge_release": knowledge_release,
                 "runtime_release": RUNTIME_RELEASE, "session_id": session.session_id,
             })
             yield "text_delta", {"delta": done["answer"]}
@@ -551,7 +568,7 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
 
     if auth_mode:
         configure_authenticated_persistence(
-            app, runtime_release=RUNTIME_RELEASE, knowledge_release=KNOWLEDGE_RELEASE,
+            app, runtime_release=RUNTIME_RELEASE, knowledge_release=knowledge_release,
             conversation_repository=conversation_repository,
             feedback_store=feedback_store, review_store=review_store,
         )

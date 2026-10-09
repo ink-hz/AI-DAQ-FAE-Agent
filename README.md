@@ -85,6 +85,8 @@ cd webui && npm test && npm run build
 
 K-3 配方 `review_recipes/k3.json` 用同一命令生成软件、固件与交付链接的候选包；`asset_path` 选择器只记录二进制的文件哈希、大小和路径，不读取包内内容。当前本机演练有 15 个待审议题，软件/固件目录的 30 个二进制资产已定位，但官网逐页记录、模块投影及全部权限/兼容裁决仍待完成。见 [K-3 复审指引](docs/knowledge/2026-10-09-daq-k3-review-guide.md)和[演练结果](docs/reviews/2026-10-09-daq-k3-candidate-rehearsal.md)。此候选包不改变在线 `empty-dev-v0`。
 
+本机 Dev 可选用 `DAQ_KNOWLEDGE_RELEASE_ROOT` 指向 K-1 已审核发布目录；启动时读取活动指针并冻结该知识版本，健康和 trace 报告其确切哈希。工具先按 `internal_fae` 查看权限过滤；链接还要求转发权限。发布目录无活动指针时继续使用 `empty-dev-v0`。切换或回滚活动指针后须重启本机 Dev 服务；认证/Platform 模式在细粒度角色合同完成前拒绝加载非空快照。合成验证见 [K-4 本机消费者设计](docs/superpowers/specs/2026-10-09-daq-k4-dev-consumer-design.md)。当前没有经裁决的真实知识发布，也未设置该活动指针。
+
 ## 内部认证模式的装配
 
 独立 DAQ Postgres 须先按清单执行 `PYTHONPATH=. python scripts/migrate_daq_pg.py` 查看迁移顺序，再由有数据库权限的操作者设置 `DAQ_DATABASE_URL`，确认数据库名后执行 `PYTHONPATH=. python scripts/migrate_daq_pg.py --apply --confirm-database-name <数采数据库名>`。脚本只读取 `DAQ_DATABASE_URL`，ASGI 启动不会自动改表。迁移先排除相机身份会话，再用数采专属约束替换共享表内的相机 Agent ID 限制；认证模式启动会核验该约束和 DAQ 安装标记。
