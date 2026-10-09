@@ -122,3 +122,60 @@ def test_changed_source_that_loses_match_enters_unmapped_review_queue():
     assert delta["sources"]["changed"] == ["spec/ego.pdf"]
     assert delta["cases"]["changed"] == ["claim:baseline"]
     assert delta["unmapped_source_changes"] == ["spec/ego.pdf"]
+
+
+def test_asset_path_selector_exposes_only_metadata_and_stays_pending():
+    snapshot = _snapshot()
+    snapshot["sources"][2]["size"] = 123
+    recipe = {"version": "k3-test", "cases": [{
+        "id": "software:package", "group": "software", "question": "Which version was tested?",
+        "owner": "product_rd", "selectors": [{"match_on": "asset_path",
+                                               "source_glob": "software/*",
+                                               "pattern": r"[.]zip$"}],
+    }]}
+    packet = build_review_packet(snapshot, recipe)
+    hit = packet["cases"][0]["evidence"][0]
+    assert hit == {
+        "selector_index": 0, "source_ref": {
+            "path": "software/new.zip", "sha256": "d" * 64,
+            "locator": {"kind": "file"},
+        }, "evidence_basis": "asset_metadata_only", "size": 123,
+    }
+    assert packet["cases"][0]["status"] == "pending"
+    assert packet["access_review"]["software/new.zip"]["view_roles"]["internal_fae"] == "pending"
+    assert "software/new.zip" not in packet["unmapped_sources"]
+
+
+def test_asset_change_is_reported_and_unknown_selector_type_rejected():
+    snapshot = _snapshot()
+    snapshot["sources"][2]["size"] = 123
+    recipe = {"version": "k3-test", "cases": [{
+        "id": "software:package", "group": "software", "question": "Which version was tested?",
+        "owner": "product_rd", "selectors": [{"match_on": "asset_path",
+                                               "source_glob": "software/*",
+                                               "pattern": r"[.]zip$"}],
+    }]}
+    before = build_review_packet(snapshot, recipe)
+    snapshot["sources"][2]["sha256"] = "1" * 64
+    after = build_review_packet(snapshot, recipe)
+    assert compare_review_packets(before, after)["cases"]["changed"] == ["software:package"]
+    recipe["cases"][0]["selectors"][0]["match_on"] = "unreviewed_bytes"
+    with pytest.raises(ValueError, match="match_on"):
+        build_review_packet(snapshot, recipe)
+
+
+def test_asset_pattern_matches_file_name_not_parent_directory():
+    snapshot = _snapshot()
+    snapshot["sources"].append({
+        "path": "software/EgoLowBle/other-vendor-firmware.bin",
+        "sha256": "1" * 64, "kind": "asset", "size": 12,
+    })
+    recipe = {"version": "k3-test", "cases": [{
+        "id": "software:ego-low-ble", "group": "software", "question": "Which package?",
+        "owner": "product_rd", "selectors": [{"match_on": "asset_path",
+                                               "source_glob": "software/*",
+                                               "pattern": "EgoLowBle"}],
+    }]}
+    packet = build_review_packet(snapshot, recipe)
+    assert packet["cases"][0]["evidence"] == []
+    assert "software/EgoLowBle/other-vendor-firmware.bin" in packet["unmapped_sources"]

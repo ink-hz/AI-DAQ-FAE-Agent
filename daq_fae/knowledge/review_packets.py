@@ -49,6 +49,8 @@ def _validate_recipe(recipe: dict) -> None:
         for selector in selectors:
             if not isinstance(selector, dict):
                 raise ValueError("selector must be an object")
+            if selector.get("match_on", "text") not in {"text", "asset_path"}:
+                raise ValueError("selector match_on invalid")
             glob = _require_string(selector.get("source_glob"), "source_glob")
             if glob.startswith("/") or ".." in glob.split("/"):
                 raise ValueError("source_glob must be relative")
@@ -128,9 +130,26 @@ def build_review_packet(snapshot: dict, recipe: dict) -> dict:
         missing = []
         for index, selector in enumerate(case["selectors"]):
             pattern = re.compile(selector["pattern"], re.I)
+            match_on = selector.get("match_on", "text")
             found = 0
             for path in sorted(sources):
                 if not fnmatchcase(path, selector["source_glob"]):
+                    continue
+                if match_on == "asset_path":
+                    source = sources[path]
+                    if source.get("kind") != "asset" or not pattern.search(path.rsplit("/", 1)[-1]):
+                        continue
+                    size = source.get("size")
+                    if type(size) is not int or size < 0:
+                        raise ValueError("asset size missing or invalid")
+                    found += 1
+                    mapped.add(path)
+                    hits.append({
+                        "selector_index": index,
+                        "source_ref": {"path": path, "sha256": source["sha256"],
+                                       "locator": {"kind": "file"}},
+                        "evidence_basis": "asset_metadata_only", "size": size,
+                    })
                     continue
                 for chunk in by_path[path]:
                     match = pattern.search(chunk["text"])

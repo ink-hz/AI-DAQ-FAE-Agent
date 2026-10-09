@@ -1,0 +1,152 @@
+{
+  "version": "k3-20261009-2",
+  "cases": [
+    {
+      "id": "software:orbbec-sdk-v2.9-packages",
+      "group": "package_inventory",
+      "question": "核对 OrbbecSDK v2.9.0 各平台包的版本、架构与来源；逐设备/修订/连接方式/功能另提供测试证据。",
+      "owner": "product_rd",
+      "selectors": [
+        {"match_on": "asset_path", "source_glob": "开发工具包/SDK/SDK&OrbbecViewer/*", "pattern": "OrbbecSDK_v2[.]9[.]0"},
+        {"source_glob": "开发工具包/SDK/SDK&OrbbecViewer/changelog.txt", "pattern": "v2[.]9[.]0_20260910"}
+      ]
+    },
+    {
+      "id": "software:orbbec-viewer-v2.9-packages",
+      "group": "package_inventory",
+      "question": "核对 OrbbecViewer v2.9.0 各平台安装包；包存在不证明 DAQ 设备或功能可用。",
+      "owner": "product_rd",
+      "selectors": [
+        {"match_on": "asset_path", "source_glob": "开发工具包/SDK/SDK&OrbbecViewer/*", "pattern": "OrbbecViewer_v2[.]9[.]0"}
+      ]
+    },
+    {
+      "id": "software:android-wrapper-beta",
+      "group": "package_inventory",
+      "question": "核对 Android Wrapper beta 包和 AAR 的版本、适用平台及正式支持范围；beta 名称不等于生产承诺。",
+      "owner": "product_rd",
+      "selectors": [
+        {"match_on": "asset_path", "source_glob": "开发工具包/SDK/SDK&OrbbecViewer/Android/*", "pattern": "Wrapper-beta|EgoLowBle"}
+      ]
+    },
+    {
+      "id": "software:ego-low-ble",
+      "group": "package_inventory",
+      "question": "核对 EgoLowBle 1.1.6/1.1.7 各平台包及设备配对接口条件；不能由文件名推断端到端配对成功。",
+      "owner": "product_rd",
+      "selectors": [
+        {"match_on": "asset_path", "source_glob": "开发工具包/SDK/SDK&OrbbecViewer/*", "pattern": "EgoLowBle"},
+        {"source_glob": "开发工具包/SDK/SDK&OrbbecViewer/changelog.txt", "pattern": "配对信息"}
+      ]
+    },
+    {
+      "id": "software:ego-viewer-desktop",
+      "group": "package_inventory",
+      "question": "分别核对 EGOViewer Windows/Linux v2.0.11 与旧包 v2.0.6 的版本、平台、连接和录制能力。",
+      "owner": "product_rd",
+      "selectors": [
+        {"match_on": "asset_path", "source_glob": "开发工具包/Tool/EgoViewer/*", "pattern": "EGOViewer_v2[.]0[.](11|6)"},
+        {"source_glob": "开发工具包/Tool/EgoViewer/linux/ChangeLog.txt", "pattern": "v2[.]0[.]11"},
+        {"source_glob": "开发工具包/Tool/EgoViewer/windows/ChangeLog.txt", "pattern": "v2[.]0[.]11"}
+      ]
+    },
+    {
+      "id": "software:ego-viewer-android",
+      "group": "package_inventory",
+      "question": "核对 Android EGO_APP v1.0.10 包与变更记录；逐设备和功能标注已测条件。",
+      "owner": "product_rd",
+      "selectors": [
+        {"match_on": "asset_path", "source_glob": "开发工具包/Tool/EgoViewer/android/*", "pattern": "EGO_APP_1[.]0[.]10"},
+        {"source_glob": "开发工具包/Tool/EgoViewer/android/changeLog.txt", "pattern": "v1[.]0[.]10"}
+      ]
+    },
+    {
+      "id": "software:viewer-pairing-recording",
+      "group": "capability_boundary",
+      "question": "Viewer 配对组、录制和固件升级条目分别适用哪些设备、固件及连接方式？需要实测，不能只据变更记录发布兼容结论。",
+      "owner": "product_rd",
+      "selectors": [
+        {"source_glob": "开发工具包/Tool/EgoViewer/linux/ChangeLog.txt", "pattern": "配对组"},
+        {"source_glob": "开发工具包/Tool/EgoViewer/windows/ChangeLog.txt", "pattern": "固件升级"},
+        {"source_glob": "开发工具包/Tool/EgoViewer/android/changeLog.txt", "pattern": "配对"}
+      ]
+    },
+    {
+      "id": "firmware:ego-bin",
+      "group": "firmware_inventory",
+      "question": "核对 EGO 双目固件 v1.0.6/v1.1.6 的适用 SKU、修订、升级路径和回退；变更记录不是安装许可。",
+      "owner": "product_rd",
+      "selectors": [
+        {"match_on": "asset_path", "source_glob": "开发工具包/firmware/双目/*", "pattern": "Ego_v1[.](0[.]6|1[.]6)_update[.]bin$"},
+        {"source_glob": "开发工具包/firmware/双目/ChangeList.txt", "pattern": "v1[.]1[.]6"}
+      ]
+    },
+    {
+      "id": "firmware:ego-pro-img",
+      "group": "firmware_inventory",
+      "question": "核对 EGO Pro 固件 v1.0.3 与烧录/升级工具的适用硬件及标定保护边界；不得把设备端 SDK 包当整机固件。",
+      "owner": "product_rd",
+      "selectors": [
+        {"match_on": "asset_path", "source_glob": "开发工具包/firmware/四目/*", "pattern": "EgoPro_v1[.]0[.]3_update[.]img$"},
+        {"source_glob": "开发工具包/firmware/四目/ChangeList.txt", "pattern": "V1[.]0[.]3"},
+        {"match_on": "asset_path", "source_glob": "开发工具包/SDK/设备端SDK-四目EGO使用/*", "pattern": "libobkit"}
+      ]
+    },
+    {
+      "id": "firmware:ego-wristcam-sync",
+      "group": "capability_boundary",
+      "question": "EGO 与 WristCam 同步相关固件变更需要对应设备版本、主从拓扑和实际同步测试；不能由变更描述推导全组合支持。",
+      "owner": "product_rd",
+      "selectors": [
+        {"source_glob": "开发工具包/firmware/双目/ChangeList.txt", "pattern": "Ego与WirstCam多机同步|Ego与腕带配对"}
+      ]
+    },
+    {
+      "id": "firmware:upgrade-tools",
+      "group": "asset_boundary",
+      "question": "核对双目和四目升级工具、说明文档与视频的设备/固件适用性、标定保护和交付许可；本地资产不得自动成为下载入口。",
+      "owner": "product_rd",
+      "selectors": [
+        {"match_on": "asset_path", "source_glob": "开发工具包/firmware/双目/升级工具/*", "pattern": "[.](zip|docx|wmv)$"},
+        {"match_on": "asset_path", "source_glob": "开发工具包/firmware/四目/升级工具/*", "pattern": "[.]zip$"}
+      ]
+    },
+    {
+      "id": "firmware:calibration-flash-tool",
+      "group": "asset_boundary",
+      "question": "标定烧录工具需研发确认操作目的、风险、适用硬件和内部交付范围；不能据包名生成用户操作步骤。",
+      "owner": "product_rd",
+      "selectors": [
+        {"match_on": "asset_path", "source_glob": "开发工具包/标定烧录工具/*", "pattern": "[.]rar$"}
+      ]
+    },
+    {
+      "id": "delivery:readme-link-candidates",
+      "group": "link_gap",
+      "question": "原包索引中的外部地址逐页核验页面语义、最终 URL、有效期和各角色查看/转发权限；未核验前不交付。",
+      "owner": "source_owner",
+      "selectors": [
+        {"source_glob": "README.txt", "pattern": "https?://|飞书|feishu"}
+      ]
+    },
+    {
+      "id": "delivery:official-daq-pages",
+      "group": "link_gap",
+      "question": "EGO、EGO Pro、EG-DB、WristCam、UMI 和 HUB 的官方产品/下载页需逐页核验并确认角色授权；原包当前无可发布链接记录。",
+      "owner": "source_owner",
+      "selectors": [
+        {"source_glob": "external-official/*", "pattern": "orbbec[.]com"}
+      ]
+    },
+    {
+      "id": "module:eg-db-gemini-335l",
+      "group": "module_boundary",
+      "question": "先裁决 EG-DB 是否包含确切修订的 Gemini 335L，再由相机事实维护者提供固定版本只读模块投影；模块标称值不得成为整机能力。",
+      "owner": "module_fact_owner",
+      "selectors": [
+        {"source_glob": "English-Datasheet/深度EGO/*.pdf", "pattern": "Gemini\\s*335L"},
+        {"source_glob": "camera-module-projection/*", "pattern": "Gemini\\s*335L"}
+      ]
+    }
+  ]
+}
