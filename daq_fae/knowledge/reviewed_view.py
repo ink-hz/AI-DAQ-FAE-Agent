@@ -29,6 +29,30 @@ def _url_bearing_strings(value: object) -> list[str]:
     return []
 
 
+def _scannable_data(row: dict, source_hashes: dict[str, str]) -> dict:
+    """Exclude only validated conflict provenance from the delivery URL scan."""
+    data = row["data"]
+    if row["status"] != "conflict":
+        return data
+    candidates = data.get("candidates")
+    if not isinstance(candidates, list) or len(candidates) < 2:
+        raise ValueError("knowledge conflict candidates invalid")
+    scannable = []
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            raise ValueError("knowledge conflict candidate invalid")
+        ref = candidate.get("source_ref")
+        if not isinstance(ref, dict) or set(ref) != {"path", "sha256", "locator"} or \
+                not isinstance(ref.get("path"), str) or \
+                source_hashes.get(ref["path"]) != ref.get("sha256") or \
+                not isinstance(ref.get("locator"), dict) or \
+                _url_bearing_strings(ref["locator"]):
+            raise ValueError("knowledge conflict source reference invalid")
+        scannable.append({key: value for key, value in candidate.items()
+                          if key != "source_ref"})
+    return {**data, "candidates": scannable}
+
+
 class ReviewedKnowledge:
     def __init__(self, release_id: str, manifest: dict):
         self.release_id = release_id
@@ -74,10 +98,6 @@ class ReviewedKnowledge:
                     not isinstance(row.get("scope"), dict) or not row["scope"] or \
                     not isinstance(row.get("data"), dict):
                 raise ValueError("knowledge record schema invalid")
-            urls = _url_bearing_strings(row["scope"]) + _url_bearing_strings(row["data"])
-            if (row["kind"] != "link" and urls) or (row["kind"] == "link" and
-                    any(value != row["data"].get("url") for value in urls)):
-                raise ValueError("knowledge URL must be a reviewed link record")
             expected_answerable = row.get("status") in {"verified", "unsupported"}
             if row.get("answerable") is not expected_answerable:
                 raise ValueError("knowledge record answerability invalid")
@@ -87,6 +107,11 @@ class ReviewedKnowledge:
                 or not isinstance(ref.get("locator"), dict) for ref in refs
             ):
                 raise ValueError("knowledge source reference invalid")
+            urls = _url_bearing_strings(row["scope"]) + _url_bearing_strings(
+                _scannable_data(row, source_hashes))
+            if (row["kind"] != "link" and urls) or (row["kind"] == "link" and
+                    any(value != row["data"].get("url") for value in urls)):
+                raise ValueError("knowledge URL must be a reviewed link record")
             if not expected_answerable:
                 continue
             answerable += 1

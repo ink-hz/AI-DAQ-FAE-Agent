@@ -392,6 +392,62 @@ def test_non_link_record_cannot_hide_delivery_link_in_data_key(tmp_path):
         ReviewedKnowledge.load_active(tmp_path)
 
 
+def test_conflict_candidate_pdf_source_refs_are_provenance_not_links(tmp_path):
+    snapshot = deepcopy(SNAPSHOT)
+    pdf_path = "specs/EG-DB-v1.0.pdf"
+    snapshot["sources"][0].update(path=pdf_path, kind="pdf")
+    snapshot["chunks"][0]["source_path"] = pdf_path
+    ref = deepcopy(SOURCE_REF)
+    ref["path"] = pdf_path
+    second_ref = deepcopy(ref)
+    second_ref["path"] = "specs/EG-DB-v1.1.pdf"
+    second_ref["sha256"] = "b" * 64
+    second_ref["locator"] = {"kind": "lines", "start": 3, "end": 4}
+    snapshot["sources"].append({"path": second_ref["path"],
+                                "sha256": second_ref["sha256"], "size": 20, "kind": "pdf"})
+    snapshot["chunks"].append({"source_path": second_ref["path"],
+                               "source_sha256": second_ref["sha256"],
+                               "locator": second_ref["locator"], "text": "another value"})
+    row = {"id": "claim:rgb-camera-count", "kind": "claim", "status": "conflict",
+           "scope": {"product": "eg-db"}, "source_refs": [ref],
+           "data": {"entity_id": "entity:eg-db", "field": "rgb_camera_count",
+                    "unit": "camera", "conditions": {}, "candidates": [
+                        {"value": 2, "source_ref": deepcopy(ref)},
+                        {"value": 3, "source_ref": second_ref},
+                    ]}}
+    release_id = publish_release(tmp_path, snapshot, [row], None, RELEASE_REVIEW)
+    activate_release(tmp_path, release_id)
+    view = ReviewedKnowledge.load_active(tmp_path)
+    assert view.records_for("internal_fae") == []
+    assert view.manifest["records"][0]["data"]["candidates"][0]["source_ref"] == ref
+    assert view.manifest["records"][0]["data"]["candidates"][1]["source_ref"] == second_ref
+    tampered = deepcopy(view.manifest)
+    tampered["records"][0]["data"]["candidates"][1]["source_ref"]["path"] = \
+        "www.example.com/private"
+    with pytest.raises(ValueError, match="source reference"):
+        ReviewedKnowledge.from_manifest(release_id, tampered)
+
+
+def test_conflict_candidate_value_cannot_hide_unreviewed_url(tmp_path):
+    snapshot = deepcopy(SNAPSHOT)
+    pdf_path = "specs/EG-DB-v1.0.pdf"
+    snapshot["sources"][0].update(path=pdf_path, kind="pdf")
+    snapshot["chunks"][0]["source_path"] = pdf_path
+    ref = deepcopy(SOURCE_REF)
+    ref["path"] = pdf_path
+    row = {"id": "claim:rgb-camera-count", "kind": "claim", "status": "conflict",
+           "scope": {"product": "eg-db"}, "source_refs": [ref],
+           "data": {"entity_id": "entity:eg-db", "field": "rgb_camera_count",
+                    "unit": "camera", "conditions": {}, "candidates": [
+                        {"value": "https://example.com/private", "source_ref": deepcopy(ref)},
+                        {"value": 3, "source_ref": deepcopy(ref)},
+                    ]}}
+    release_id = publish_release(tmp_path, snapshot, [row], None, RELEASE_REVIEW)
+    activate_release(tmp_path, release_id)
+    with pytest.raises(ValueError, match="URL"):
+        ReviewedKnowledge.load_active(tmp_path)
+
+
 def test_procedure_and_software_require_exact_product_topology_and_applicability(tmp_path):
     rows = _records()
     rows.append(_row("topology:ego-single", "topology", {
