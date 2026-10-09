@@ -20,6 +20,8 @@
 
 `verified` 和明确 `unsupported` 需要具名 `fact_review` 与独立的 `access_review`。两个审核均写日期与 `record_sha256`；后者还含 `view_roles`、`forward_roles`。当前角色键是 `internal_fae`、`tmall_support`、`channel`，最终资料角色表须由 K-2 负责人签认。`link` 的已核验状态还需要逐页核验的 `link_review`，其 `final_url` 必须与交付 URL 完全一致。
 
+候选数据中的 `pending_external_selector`、`module_revision_unconfirmed`、`needs_interface_reconciliation`、`variant_unconfirmed`、`software_version_unconfirmed` 表示仍有产品或适用条件未核清。任何一项仍为 `true` 时，即使附上审核字段也不能成为可答记录；负责人必须先裁决并更新数据，再重新生成审核指纹。
+
 `scripts/daq_knowledge.py fingerprint --records <记录文件>` 分别计算事实、权限和链接审核应绑定的摘要。摘要只是把审核结果固定到具体记录和权限集合，**不能代替审核人判断**。修改值、条件、适用范围或来源后，旧事实和权限审核失效；扩大可见/转发角色时权限审核单独失效。数据所有者和产品/研发负责人可以是不同人。
 
 ## 发布边界

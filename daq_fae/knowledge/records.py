@@ -14,6 +14,11 @@ KINDS = {"entity", "claim", "topology", "procedure", "software", "link"}
 STATUSES = {"candidate", "verified", "conflict", "unknown", "unsupported"}
 ROLES = {"internal_fae", "tmall_support", "channel"}
 _ID = re.compile(r"^[a-z][a-z0-9_.:-]{2,127}$")
+_UNRESOLVED_MARKERS = {
+    "pending_external_selector", "module_revision_unconfirmed",
+    "needs_interface_reconciliation", "variant_unconfirmed",
+    "software_version_unconfirmed",
+}
 _REQUIRED_DATA = {
     "entity": {"name", "entity_type"},
     "claim": {"entity_id", "field", "unit", "conditions"},
@@ -203,6 +208,8 @@ def validate_records(records: list[dict], snapshot: dict) -> tuple[list[dict], l
                         findings.append(_finding(record_id, code))
         answerable = status in {"verified", "unsupported"}
         if answerable:
+            if any(data.get(marker) is True for marker in _UNRESOLVED_MARKERS):
+                findings.append(_finding(record_id, "unresolved_review_marker"))
             fingerprint = record_fingerprint(row) if all(
                 key in row for key in ("id", "kind", "status", "scope", "source_refs", "data")
             ) else None

@@ -188,6 +188,35 @@ def test_review_is_bound_to_exact_source_and_value():
     }
 
 
+def test_verified_claim_with_unresolved_selector_cannot_be_published():
+    entity = _record(kind="entity", id="entity:ego-1600")
+    for marker in ("pending_external_selector", "module_revision_unconfirmed",
+                   "needs_interface_reconciliation"):
+        claim = _record(data={
+            "entity_id": "entity:ego-1600", "field": "front_stereo_baseline",
+            "value": 100, "unit": "mm", "conditions": {}, marker: True,
+        })
+        normalized, findings = validate_records([entity, claim], SNAPSHOT)
+        assert "unresolved_review_marker" in {item["code"] for item in findings
+                                              if item["record_id"] == claim["id"]}
+        assert normalized[1]["answerable"] is False
+
+
+def test_verified_procedure_with_unconfirmed_variant_cannot_be_published():
+    entity = _record(kind="entity", id="entity:ego-1600")
+    topology = _record(kind="topology", id="topology:single")
+    for marker in ("variant_unconfirmed", "software_version_unconfirmed"):
+        procedure = _record(kind="procedure", data={
+            "task": "record", "topology_id": "topology:single",
+            "prerequisites": [], "steps": ["start"], "checks": ["file"],
+            "failure_branches": [], marker: True,
+        })
+        normalized, findings = validate_records([entity, topology, procedure], SNAPSHOT)
+        assert "unresolved_review_marker" in {item["code"] for item in findings
+                                              if item["record_id"] == procedure["id"]}
+        assert normalized[2]["answerable"] is False
+
+
 def test_access_expansion_requires_new_access_review():
     row = _record()
     row["access_review"]["view_roles"].append("channel")
