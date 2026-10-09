@@ -165,3 +165,25 @@ def test_conjoined_equipment_stays_separate_across_followup():
     second = prepare_turn('那 Viewer 版本和落盘步骤呢？', previous=first.context)
     assert first.context.get('equipment') == ['Unit A', '双 Sensor B', 'Hub C']
     assert second.context.get('equipment') == ['Unit A', '双 Sensor B', 'Hub C']
+
+
+def test_explicit_ego_resolution_variant_and_horizontal_fov_plan_exact_requirement():
+    plan = prepare_turn('设备是 EGO；分辨率版本是 1600×1200；水平视场角是多少？')
+    spec = [item for item in plan.requirements
+            if item['capability'] == 'lookup_spec']
+    assert len(spec) == 1
+    assert spec[0]['field'] == 'horizontal_fov'
+    assert spec[0]['entities'] == ['EGO']
+    assert spec[0]['conditions']['resolution_variant'] == '1600x1200'
+    assert plan.context.values['resolution_variant'].authority == 'user_supplied'
+
+
+def test_ego_variant_written_in_device_declaration_is_kept_as_user_selector():
+    plan = prepare_turn('设备是 EGO 1600×1200；水平视场角是多少？')
+    assert plan.context.get('equipment') == ['EGO']
+    assert plan.context.get('resolution_variant') == '1600x1200'
+    spec = next(item for item in plan.requirements
+                if item['capability'] == 'lookup_spec')
+    assert spec['field'] == 'horizontal_fov'
+    assert spec['entities'] == ['EGO']
+    assert spec['conditions']['resolution_variant'] == '1600x1200'

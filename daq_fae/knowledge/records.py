@@ -159,6 +159,15 @@ def validate_records(records: list[dict], snapshot: dict) -> tuple[list[dict], l
             findings.append(_finding(record_id, "status_invalid"))
         if not isinstance(row.get("scope"), dict) or not row["scope"]:
             findings.append(_finding(record_id, "scope_invalid"))
+        elif "required_selectors" in row["scope"]:
+            selectors = row["scope"]["required_selectors"]
+            if not isinstance(selectors, list) or not selectors or not all(
+                isinstance(key, str) and key != "required_selectors" and
+                bool(_ID.fullmatch(key)) and key in row["scope"] and
+                row["scope"][key] not in (None, "", [], {})
+                for key in selectors
+            ) or len(set(selectors)) != len(selectors):
+                findings.append(_finding(record_id, "scope_selector_invalid"))
         refs = row.get("source_refs")
         if not isinstance(refs, list) or not refs:
             findings.append(_finding(record_id, "source_refs_missing"))
@@ -239,6 +248,53 @@ def validate_records(records: list[dict], snapshot: dict) -> tuple[list[dict], l
                     findings.append(_finding(record_id, "link_review_stale"))
         row["answerable"] = answerable
         normalized.append(row)
+    entity_rows = {row["id"]: row for row in normalized
+                   if row.get("kind") == "entity" and isinstance(row.get("id"), str)}
+    entities_by_name: dict[str, list[dict]] = {}
+    for entity in entity_rows.values():
+        data = entity.get("data")
+        if isinstance(data, dict) and isinstance(data.get("name"), str):
+            entities_by_name.setdefault(data["name"].strip().casefold(), []).append(entity)
+    for group in entities_by_name.values():
+        if len(group) < 2:
+            continue
+        seen_selectors: dict[str, str] = {}
+        for entity in group:
+            scope = entity.get("scope")
+            if not isinstance(scope, dict) or not scope.get("required_selectors"):
+                findings.append(_finding(entity["id"],
+                                         "duplicate_variant_name_without_selector"))
+                continue
+            selectors = scope["required_selectors"]
+            if not isinstance(selectors, list) or not all(
+                isinstance(key, str) and key in scope for key in selectors
+            ):
+                continue
+            signature = json.dumps([[key, scope[key]] for key in sorted(selectors)],
+                                   ensure_ascii=False, sort_keys=True, default=str)
+            previous = seen_selectors.get(signature)
+            if previous:
+                findings.append(_finding(previous, "duplicate_variant_selector_value"))
+                findings.append(_finding(entity["id"], "duplicate_variant_selector_value"))
+            else:
+                seen_selectors[signature] = entity["id"]
+    for row in normalized:
+        if row.get("kind") not in {"claim", "software"} or not isinstance(row.get("data"), dict):
+            continue
+        entity_id = row["data"].get("entity_id")
+        entity = entity_rows.get(entity_id) if isinstance(entity_id, str) else None
+        entity_scope = entity.get("scope") if entity else None
+        row_scope = row.get("scope")
+        if not isinstance(entity_scope, dict) or not isinstance(row_scope, dict):
+            continue
+        selectors = entity_scope.get("required_selectors")
+        if isinstance(selectors, list) and selectors and all(isinstance(key, str) for key in selectors):
+            inherited = row_scope.get("required_selectors")
+            if not isinstance(inherited, list) or any(
+                key not in inherited or row_scope.get(key) != entity_scope.get(key)
+                for key in selectors
+            ):
+                findings.append(_finding(row.get("id"), "entity_selector_not_propagated"))
     claims_by_key: dict[str, list[dict]] = {}
     for row in normalized:
         if row.get("kind") != "claim" or row.get("status") not in {

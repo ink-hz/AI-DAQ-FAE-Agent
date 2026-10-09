@@ -208,6 +208,71 @@ def test_empty_claim_fields_and_unknown_role_are_invalid_even_with_matching_revi
     }
 
 
+def test_required_scope_selector_must_name_a_present_field():
+    row = _record()
+    row["scope"] = {"product": "ego", "required_selectors": ["resolution_variant"]}
+    _bind_reviews(row)
+    _, findings = validate_records([row], SNAPSHOT)
+    assert "scope_selector_invalid" in {finding["code"] for finding in findings}
+
+
+def test_claim_inherits_required_variant_selector_from_entity():
+    entity = _record(kind="entity", id="entity:ego-1600",
+                     scope={"product": "ego", "resolution_variant": "1600x1200",
+                            "required_selectors": ["resolution_variant"]},
+                     data={"name": "EGO", "entity_type": "variant"})
+    claim = _record(id="claim:ego-fov", scope={"product": "ego"}, data={
+        "entity_id": "entity:ego-1600", "field": "horizontal_fov", "value": 165,
+        "unit": "deg", "conditions": {},
+    })
+    _, findings = validate_records([entity, claim], SNAPSHOT)
+    assert "entity_selector_not_propagated" in {item["code"] for item in findings}
+
+
+def test_duplicate_variant_name_requires_selectors_on_entities():
+    first = _record(kind="entity", id="entity:ego-1600",
+                    scope={"product": "ego", "resolution_variant": "1600x1200"},
+                    data={"name": "EGO", "entity_type": "variant"})
+    second = _record(kind="entity", id="entity:ego-1920",
+                     scope={"product": "ego", "resolution_variant": "1920x1200"},
+                     data={"name": "EGO", "entity_type": "variant"})
+    _, findings = validate_records([first, second], SNAPSHOT)
+    assert "duplicate_variant_name_without_selector" in {
+        item["code"] for item in findings
+    }
+
+
+def test_duplicate_name_cannot_bypass_selector_by_entity_type():
+    first = _record(kind="entity", id="entity:ego-1600",
+                    data={"name": "EGO", "entity_type": "device"})
+    second = _record(kind="entity", id="entity:ego-1920",
+                     data={"name": "EGO", "entity_type": "variant"})
+    _, findings = validate_records([first, second], SNAPSHOT)
+    assert "duplicate_variant_name_without_selector" in {
+        item["code"] for item in findings
+    }
+
+
+def test_duplicate_name_with_same_selector_value_is_ambiguous():
+    scope = {"product": "ego", "resolution_variant": "1600x1200",
+             "required_selectors": ["resolution_variant"]}
+    first = _record(kind="entity", id="entity:ego-one", scope=scope,
+                    data={"name": "EGO", "entity_type": "variant"})
+    second = _record(kind="entity", id="entity:ego-two", scope=scope,
+                     data={"name": "EGO", "entity_type": "variant"})
+    _, findings = validate_records([first, second], SNAPSHOT)
+    assert "duplicate_variant_selector_value" in {
+        item["code"] for item in findings
+    }
+
+
+def test_unhashable_entity_reference_returns_finding():
+    row = _record(data={"entity_id": [], "field": "horizontal_fov", "value": 165,
+                        "unit": "deg", "conditions": {}})
+    _, findings = validate_records([row], SNAPSHOT)
+    assert "claim_data_invalid" in {item["code"] for item in findings}
+
+
 def test_impact_report_includes_conflict_candidate_sources():
     row = _record(status="conflict", data={"entity_id": "entity:ego-pro", "field": "baseline",
                                            "unit": "mm", "conditions": {}, "candidates": [

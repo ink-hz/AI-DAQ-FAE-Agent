@@ -13,7 +13,8 @@ import re
 from dataclasses import asdict, dataclass, field
 
 _FIELDS = frozenset({
-    'equipment', 'variant', 'topology', 'platform', 'viewer_version', 'sdk_version',
+    'equipment', 'variant', 'resolution_variant', 'topology', 'platform',
+    'viewer_version', 'sdk_version',
     'firmware_version', 'connection', 'power', 'recording_format', 'storage', 'task',
 })
 _SWITCH = re.compile(r'^(?:换个场景|换个问题|另一个问题|重新开始|new topic|switch topic)', re.I)
@@ -22,7 +23,7 @@ _INTENTS = {
     'catalog': r'有哪些|有多少|型号列表|产品目录|产品线|\b(?:catalog|product list|product range)\b',
     'selection': r'推荐|选型|选择|适合|选哪个|选什么|怎么选|如何选|怎样选|选用|方案建议|\b(?:recommend|selection|choose|suitable)\b',
     'resolve_entity': r'设备|型号|变体|配置|套件|\b(?:device|model|variant|kit)\b',
-    'lookup_spec': r'规格|参数|精度|分辨率|帧率|带宽|功耗|基线|\b(?:spec|specification|accuracy|resolution|fps|bandwidth)\b',
+    'lookup_spec': r'规格|参数|精度|分辨率|帧率|带宽|功耗|基线|视场角|\b(?:spec|specification|accuracy|resolution|fps|bandwidth|fov)\b',
     'inspect_topology': r'接线|连接|主从|同步|组合|端口|供电|\b(?:topology|connection|sync|wiring|hub|power)\b',
     'lookup_procedure': r'步骤|安装|配置|采集|录制|落盘|保存|启动|\b(?:procedure|install|setup|record|capture|save)\b',
     'check_software_support': r'版本|兼容|支持|固件|viewer|sdk|firmware|\b(?:version|compatible|support)\b',
@@ -45,9 +46,12 @@ _TASKS = {
 }
 _SOFTWARE = {'sdk': r'\bsdk\b', 'viewer': r'\bviewer\b', 'firmware': r'固件|\bfirmware\b'}
 _SPEC_FIELDS = {
-    'accuracy': r'精度|accuracy', 'resolution': r'分辨率|resolution',
+    'accuracy': r'精度|accuracy',
+    'resolution': r'分辨率(?!版本)|resolution(?!\s*variant)',
     'frame_rate': r'帧率|\bfps\b', 'bandwidth': r'带宽|bandwidth',
     'power_consumption': r'功耗|power consumption', 'baseline': r'基线|baseline',
+    'horizontal_fov': r'水平视场角|横向视场角|\bhfov\b',
+    'vertical_fov': r'垂直视场角|纵向视场角|\bvfov\b',
 }
 
 
@@ -116,13 +120,26 @@ def _extract(message):
     for key, pattern in (
         ('equipment', r'(?:设备|型号|equipment|device)\s*(?:是|为|[:：=]|is)\s*([^；;，,。\n]+)'),
         ('variant', r'(?:变体|硬件修订|variant|revision)\s*(?:是|为|[:：=]|is)\s*([^；;，,。\n]+)'),
+        ('resolution_variant', r'(?:分辨率版本|resolution\s*variant)\s*(?:是|为|[:：=]|is)\s*([0-9]{3,4}\s*[x×X]\s*[0-9]{3,4})'),
         ('platform', r'(?:平台|操作系统|platform|os)\s*(?:是|为|[:：=]|is)\s*([^；;，,。\n]+)'),
         ('connection', r'(?:连接方式|连接|connection(?: mode)?)\s*(?:是|为|[:：=]|is)\s*([^；;，,。\n]+)'),
     ):
         match = re.search(pattern, message, re.I)
         if match:
             value = match.group(1).strip()
+            if key == 'resolution_variant':
+                value = re.sub(r'\s*[x×X]\s*', 'x', value)
             updates[key] = [part.strip() for part in re.split(r'\s*\+\s*|、|\s+(?:和|与|及)\s+', value)] if key == 'equipment' else value
+    equipment = updates.get('equipment')
+    if isinstance(equipment, list) and len(equipment) == 1:
+        ego = re.fullmatch(r'EGO\s+([0-9]{3,4})\s*[x×X]\s*([0-9]{3,4})',
+                           equipment[0], re.I)
+        if ego:
+            selected = f'{ego.group(1)}x{ego.group(2)}'
+            updates['equipment'] = ['EGO']
+            updates['resolution_variant'] = (
+                selected if updates.get('resolution_variant', selected) == selected else None
+            )
     for key, label in (('viewer_version', 'viewer'), ('sdk_version', 'sdk'), ('firmware_version', r'固件|firmware')):
         matches = list(re.finditer(rf'(?:{label})\s*(?:版本)?\s*(?:为|是|[:：=]|is)?\s*v?([0-9]+(?:\.[0-9A-Za-z_-]+)+)', message, re.I))
         if matches:

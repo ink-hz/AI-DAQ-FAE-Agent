@@ -14,6 +14,8 @@
 
 `claim` 的 `data` 含 `entity_id / field / value / unit / conditions`；冲突记录改用至少两个保留各自来源的 `candidates`，不可挑选一个覆盖。`topology` 显式列成员、角色、连接、供电、平台、同步对象和存储位置；`procedure` 指向已核验拓扑，并保留准备、步骤、检查点和失败分支；`software` 保留实体/修订、平台、连接模式、软件、版本、功能和证据层级；`link` 单独记录交付入口。已核验主张、软件关系、拓扑与流程的实体/拓扑引用必须在同一发布中闭合。
 
+同一正式产品名下有不同变体时，`scope` 可列 `required_selectors`，每个键必须在该记录的 `scope` 中有确定值。例如 EGO 的 `resolution_variant`。同名实体必须列出能区分彼此的选择器，引用变体实体的主张和软件关系必须继承相同选择器。规格检索和需求覆盖只有在请求条件明确给出且匹配全部必需选择器时才使用该记录；没有结构化选择器的全文、经验、风险、拓扑、流程和软件查询不返回受限记录。宽泛的“规格是什么”不能由一条主张证明需求已覆盖。选择器不能由文件名或模型猜测代填。
+
 ## 双重审核和可见范围
 
 `verified` 和明确 `unsupported` 需要具名 `fact_review` 与独立的 `access_review`。两个审核均写日期与 `record_sha256`；后者还含 `view_roles`、`forward_roles`。当前角色键是 `internal_fae`、`tmall_support`、`channel`，最终资料角色表须由 K-2 负责人签认。`link` 的已核验状态还需要逐页核验的 `link_review`，其 `final_url` 必须与交付 URL 完全一致。

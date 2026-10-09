@@ -13,10 +13,10 @@ _TOOLS: dict[str, tuple[str, dict[str, dict], tuple[str, ...]]] = {
     "catalog": ("List governed DAQ products, kits, and release scope.", {"query": {"type": "string"}}, ("query",)),
     "selection": ("Evaluate a DAQ configuration against all stated acquisition constraints.", {"query": {"type": "string"}}, ("query",)),
     "resolve_entity": ("Resolve a DAQ product, variant, kit, or component.", {"text": {"type": "string"}}, ("text",)),
-    "lookup_spec": ("Look up a governed DAQ claim with conditions and revision.", {"entity": {"type": "string"}, "field": {"type": "string"}, "conditions": {"type": "object"}}, ("entity", "field")),
+    "lookup_spec": ("Look up a governed DAQ claim. Include required variant selectors in conditions; a generic product name cannot select a variant.", {"entity": {"type": "string"}, "field": {"type": "string"}, "conditions": {"type": "object"}}, ("entity", "field")),
     "inspect_topology": ("Inspect a verified acquisition system topology.", {"query": {"type": "string"}}, ("query",)),
     "lookup_procedure": ("Find an applicable, reviewed acquisition procedure.", {"task": {"type": "string"}, "entity": {"type": "string"}}, ("task",)),
-    "check_software_support": ("Check exact product, revision, connection, platform, software version and capability.", {"entity": {"type": "string"}, "software": {"type": "string"}, "platform": {"type": "string"}, "version": {"type": "string"}, "hardware_revision": {"type": "string"}, "connection_mode": {"type": "string"}, "capability": {"type": "string"}}, ("entity", "software", "platform", "version", "hardware_revision", "connection_mode", "capability")),
+    "check_software_support": ("Check exact product, revision, connection, platform, software version and capability; include variant selectors in conditions.", {"entity": {"type": "string"}, "software": {"type": "string"}, "platform": {"type": "string"}, "version": {"type": "string"}, "hardware_revision": {"type": "string"}, "connection_mode": {"type": "string"}, "capability": {"type": "string"}, "conditions": {"type": "object"}}, ("entity", "software", "platform", "version", "hardware_revision", "connection_mode", "capability")),
     "search_knowledge": ("Search the governed DAQ knowledge release.", {"query": {"type": "string"}}, ("query",)),
     "sdk_evidence": ("Find reviewed SDK evidence for DAQ products and combinations.", {"query": {"type": "string"}}, ("query",)),
     "official_links": ("Find authorized and verified official DAQ links.", {"query": {"type": "string"}}, ("query",)),
@@ -116,6 +116,15 @@ class DaqToolBox:
         return json.dumps({"data": row["data"], "scope": row["scope"]},
                           ensure_ascii=False, sort_keys=True).casefold()
 
+    @staticmethod
+    def _scope_selectors_match(scope: dict, conditions: dict) -> bool:
+        selectors = scope.get("required_selectors", [])
+        return isinstance(selectors, list) and all(
+            isinstance(key, str) and key in scope and
+            key in conditions and conditions[key] == scope[key]
+            for key in selectors
+        )
+
     def _attempted_requirement_ids(self, name: str, arguments: dict) -> list[str]:
         ids = []
         for requirement in self.requirements:
@@ -158,6 +167,11 @@ class DaqToolBox:
         data = row["data"]
         text = cls._record_text(row)
         query = str(arguments.get("query") or arguments.get("text") or "").strip().casefold()
+        if name not in {"catalog", "resolve_entity", "lookup_spec",
+                        "check_software_support"} and not cls._scope_selectors_match(
+            row["scope"], {}
+        ):
+            return False
         if name == "catalog":
             return kind == "entity" and (not query or query in text)
         if name == "resolve_entity":
@@ -171,7 +185,8 @@ class DaqToolBox:
             if not isinstance(conditions, dict) or any(
                 {**row["scope"], **data["conditions"]}.get(key) != value
                 for key, value in conditions.items()
-            ) or any(key not in conditions for key in data["conditions"]):
+            ) or any(key not in conditions for key in data["conditions"]) or \
+                    not cls._scope_selectors_match(row["scope"], conditions):
                 return False
             return kind == "claim" and bool(field and entity) and \
                 data["field"].casefold() == field and entity in cls._entity_names(row, entities, topologies)
@@ -185,6 +200,14 @@ class DaqToolBox:
                 entity in cls._entity_names(row, entities, topologies)
         if name == "check_software_support":
             if kind != "software":
+                return False
+            conditions = arguments.get("conditions") or {}
+            if not isinstance(conditions, dict) or any(
+                key in arguments and arguments[key] != value
+                for key, value in conditions.items()
+            ) or not cls._scope_selectors_match(
+                row["scope"], {**arguments, **conditions}
+            ):
                 return False
             software = str(arguments.get("software") or "").casefold()
             entity = str(arguments.get("entity") or "").casefold()
@@ -201,7 +224,8 @@ class DaqToolBox:
         if name in {"experience", "risk"}:
             return kind == "claim" and data.get("field") == name and bool(query) and query in text
         if name == "search_knowledge":
-            return kind != "link" and bool(query) and query in text
+            return kind != "link" and bool(query) and query in text and \
+                (kind == "entity" or cls._scope_selectors_match(row["scope"], {}))
         return False
 
     @classmethod
@@ -211,6 +235,8 @@ class DaqToolBox:
                 requirement.get("conditions_authority") == "platform_context_unverified":
             return False
         field = requirement.get("field")
+        if requirement.get("capability") == "lookup_spec" and not field:
+            return False
         if field is not None and (row["kind"] != "claim" or row["data"].get("field") != field):
             return False
         software = requirement.get("software")
@@ -232,7 +258,9 @@ class DaqToolBox:
         )):
             return False
         conditions = requirement.get("conditions") or {}
-        if not isinstance(conditions, dict):
+        if not isinstance(conditions, dict) or not cls._scope_selectors_match(
+            row["scope"], conditions
+        ):
             return False
         known = {**row["scope"], **row["data"].get("conditions", {})}
         if row["kind"] == "software":

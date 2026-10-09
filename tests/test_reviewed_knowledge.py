@@ -165,6 +165,118 @@ def test_lookup_spec_requires_scope_when_verified_values_differ(tmp_path):
     assert [row["data"]["value"] for row in selected.content["matches"]] == ["1600x1200"]
 
 
+def test_shared_product_name_requires_explicit_resolution_variant(tmp_path):
+    rows = []
+    for variant, fov in (("1600x1200", 165), ("1920x1200", 149)):
+        suffix = variant.split("x")[0]
+        scope = {"product": "ego", "resolution_variant": variant,
+                 "required_selectors": ["resolution_variant"]}
+        entity = _row(f"entity:ego-{suffix}", "entity",
+                      {"name": "EGO", "entity_type": "variant"})
+        claim = _row(f"claim:ego-{suffix}-fov", "claim", {
+            "entity_id": entity["id"], "field": "horizontal_fov", "value": fov,
+            "unit": "deg", "conditions": {},
+        })
+        for row in (entity, claim):
+            row["scope"] = deepcopy(scope)
+            row["fact_review"]["record_sha256"] = record_fingerprint(row)
+            row["access_review"]["record_sha256"] = access_fingerprint(row)
+            rows.append(row)
+    release_id = publish_release(tmp_path, SNAPSHOT, rows, None, RELEASE_REVIEW)
+    activate_release(tmp_path, release_id)
+    requirements = [
+        {"id": "generic", "capability": "lookup_spec", "field": "horizontal_fov",
+         "entities": ["EGO"], "conditions": {}},
+        {"id": "selected", "capability": "lookup_spec", "field": "horizontal_fov",
+         "entities": ["EGO"], "conditions": {"resolution_variant": "1600x1200"}},
+    ]
+    box = DaqToolBox(knowledge=ReviewedKnowledge.load_active(tmp_path),
+                     role="internal_fae", requirements=requirements)
+    generic = box.dispatch("lookup_spec", {"entity": "EGO", "field": "horizontal_fov"})
+    assert generic.status == "not_found"
+    selected = box.dispatch("lookup_spec", {
+        "entity": "EGO", "field": "horizontal_fov",
+        "conditions": {"resolution_variant": "1600x1200"},
+    })
+    assert [row["data"]["value"] for row in selected.content["matches"]] == [165]
+    assert selected.content["matched_requirement_ids"] == ["selected"]
+    search = box.dispatch("search_knowledge", {"query": "EGO"})
+    assert all(row["kind"] != "claim" for row in search.content["matches"])
+    single_root = tmp_path / "single"
+    single_release = publish_release(single_root, SNAPSHOT, rows[:2], None, RELEASE_REVIEW)
+    activate_release(single_root, single_release)
+    single = DaqToolBox(knowledge=ReviewedKnowledge.load_active(single_root),
+                        role="internal_fae")
+    assert single.dispatch("lookup_spec", {
+        "entity": "EGO", "field": "horizontal_fov",
+    }).status == "not_found"
+    planned = prepare_turn("设备是 EGO；分辨率版本是 1600×1200；水平视场角是多少？")
+    planned_box = DaqToolBox(knowledge=ReviewedKnowledge.load_active(tmp_path),
+                             role="internal_fae", requirements=planned.requirements)
+    planned_result = planned_box.dispatch("lookup_spec", {
+        "entity": "EGO", "field": "horizontal_fov",
+        "conditions": {"resolution_variant": "1600x1200"},
+    })
+    assert planned_result.content["matched_requirement_ids"] == [
+        next(item["id"] for item in planned.requirements
+             if item["capability"] == "lookup_spec")
+    ]
+    broad = prepare_turn("设备是 EGO；分辨率版本是 1600×1200；规格是什么？")
+    broad_box = DaqToolBox(knowledge=ReviewedKnowledge.load_active(tmp_path),
+                           role="internal_fae", requirements=broad.requirements)
+    broad_result = broad_box.dispatch("lookup_spec", {
+        "entity": "EGO", "field": "horizontal_fov",
+        "conditions": {"resolution_variant": "1600x1200"},
+    })
+    assert broad_result.content["matched_requirement_ids"] == []
+
+
+def test_query_only_experience_cannot_expose_variant_scoped_claim(tmp_path):
+    entity = _row("entity:ego-1600", "entity",
+                  {"name": "EGO", "entity_type": "variant"})
+    claim = _row("claim:ego-experience", "claim", {
+        "entity_id": entity["id"], "field": "experience",
+        "value": "EGO variant observation", "unit": "note", "conditions": {},
+    })
+    for row in (entity, claim):
+        row["scope"] = {"product": "ego", "resolution_variant": "1600x1200",
+                        "required_selectors": ["resolution_variant"]}
+        row["fact_review"]["record_sha256"] = record_fingerprint(row)
+        row["access_review"]["record_sha256"] = access_fingerprint(row)
+    release_id = publish_release(tmp_path, SNAPSHOT, [entity, claim], None, RELEASE_REVIEW)
+    activate_release(tmp_path, release_id)
+    box = DaqToolBox(knowledge=ReviewedKnowledge.load_active(tmp_path), role="internal_fae")
+    assert box.dispatch("experience", {"query": "EGO"}).status == "not_found"
+
+
+def test_software_support_accepts_explicit_variant_selector(tmp_path):
+    entity = _row("entity:ego-1600", "entity",
+                  {"name": "EGO", "entity_type": "variant"})
+    software = _row("software:ego-viewer-1600", "software", {
+        "entity_id": entity["id"], "hardware_revision": "A", "platform": "Windows",
+        "connection_mode": "USB", "software": "EgoViewer", "version": "2.0",
+        "capability": "record", "evidence_level": "end_to_end_verified",
+    })
+    for row in (entity, software):
+        row["scope"] = {"product": "ego", "resolution_variant": "1600x1200",
+                        "required_selectors": ["resolution_variant"]}
+        row["fact_review"]["record_sha256"] = record_fingerprint(row)
+        row["access_review"]["record_sha256"] = access_fingerprint(row)
+    release_id = publish_release(tmp_path, SNAPSHOT, [entity, software], None, RELEASE_REVIEW)
+    activate_release(tmp_path, release_id)
+    box = DaqToolBox(knowledge=ReviewedKnowledge.load_active(tmp_path), role="internal_fae")
+    args = {"entity": "EGO", "software": "EgoViewer", "platform": "Windows",
+            "version": "2.0", "hardware_revision": "A", "connection_mode": "USB",
+            "capability": "record"}
+    assert box.dispatch("check_software_support", args).status == "not_found"
+    assert box.dispatch("check_software_support", {
+        **args, "conditions": {"resolution_variant": "1600x1200"},
+    }).status == "ok"
+    schema = next(item["function"] for item in box.tool_schemas()
+                  if item["function"]["name"] == "check_software_support")
+    assert "conditions" in schema["parameters"]["properties"]
+
+
 def test_local_dev_app_reports_loaded_immutable_release(tmp_path):
     release_id = publish_release(tmp_path, SNAPSHOT, _records(), None, RELEASE_REVIEW)
     activate_release(tmp_path, release_id)
