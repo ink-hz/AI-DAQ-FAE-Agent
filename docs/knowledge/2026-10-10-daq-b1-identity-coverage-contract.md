@@ -14,7 +14,7 @@ Status: 工程已实现待真实验收. This offline compiler indexes existing e
 
 ## Coverage and role boundaries
 
-Coverage includes entity × observed field cells and separate entity, field, topology, source and role indexes. Section coverage retains its separate candidate evidence layer, scope and gap IDs; a chapter's existence does not fill a structured fact gap. Cross-product topics retain their explicit topic scope without invented entity bindings.
+Coverage includes entity × observed field cells and separate entity, field, topology, source and role indexes. Section coverage retains its separate candidate evidence layer, scope and gap IDs; a chapter's existence does not fill a structured fact gap. Cross-product topics retain their explicit topic scope without invented entity bindings. Every nonempty section `topology_id` must reference an existing topology record; dangling topology references reject compilation.
 
 Status aggregation is `conflict` first, then `verified`, then `candidate`. Counts and record IDs expose every contributing status. This is an inventory rollup, not evidence that all versions or conditions are covered. No aggregation selects a value or combines measurement conditions.
 

@@ -177,3 +177,22 @@ def test_cross_product_topic_does_not_invent_entity_binding():
     result = api().build_dictionary(rows, sources, [section], config)
     assert result['section_coverage'][0]['entity_ids'] == []
     assert result['section_coverage'][0]['scope'] == {'product': 'cross-product'}
+
+
+def test_rejects_section_with_unknown_topology_reference():
+    rows, sources, config = inputs()
+    section = {'section_id': 'section:alpha', 'entity_id': 'entity:alpha',
+               'topology_id': 'topology:does-not-exist',
+               'source_refs': rows[0]['source_refs'], 'review_status': 'candidate'}
+    with pytest.raises(ValueError, match='unknown section topology'):
+        api().build_dictionary(rows, sources, [section], config)
+
+
+@pytest.mark.parametrize('topology_id', ['topology:pair', None, ''])
+def test_section_accepts_registered_or_empty_topology(topology_id):
+    rows, sources, config = inputs()
+    section = {'section_id': 'section:alpha', 'entity_id': 'entity:alpha',
+               'topology_id': topology_id,
+               'source_refs': rows[0]['source_refs'], 'review_status': 'candidate'}
+    result = api().build_dictionary(rows, sources, [section], config)
+    assert result['section_coverage'][0]['topology_id'] == topology_id

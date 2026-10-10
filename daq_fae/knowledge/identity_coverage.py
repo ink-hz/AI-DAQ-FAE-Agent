@@ -152,6 +152,8 @@ def build_dictionary(records: list[dict], sources: list[dict], sections: list[di
             entities_valid(ids)
         elif section.get('knowledge_type') != 'topic' or not section.get('scope'):
             raise ValueError('section needs entity or topic scope')
+        if section.get('topology_id') and section['topology_id'] not in topologies:
+            raise ValueError('unknown section topology')
         if section['review_status'] != 'candidate' or section.get('view_roles') or section.get('forward_roles'):
             raise ValueError('candidate section permission boundary')
         section_coverage.append({'section_id': section['section_id'], 'entity_ids': ids,
