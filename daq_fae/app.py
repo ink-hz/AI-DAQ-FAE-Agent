@@ -28,6 +28,7 @@ from daq_fae.attachment_evidence import extend_with_attachments
 from daq_fae.task_context import prepare_turn
 from daq_fae.local_state import LocalStateError, LocalStateStore
 from daq_fae.knowledge.reviewed_view import ReviewedKnowledge
+from daq_fae.knowledge.entitlements import KnowledgeEntitlements
 from daq_fae.authenticated_chat import authenticated_chat
 from daq_fae.provider_errors import anthropic_failure
 from daq_fae.authenticated_persistence import configure_authenticated_persistence
@@ -122,8 +123,17 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
         "DAQ_KNOWLEDGE_RELEASE_ROOT", str(_ROOT / "data" / "knowledge" / "published"),
     ))
     knowledge = ReviewedKnowledge.load_active(release_root)
+    entitlements = None
     if auth_mode and knowledge is not None:
-        raise ValueError("daq_knowledge_role_contract_missing")
+        entitlement_path = os.getenv("DAQ_KNOWLEDGE_ENTITLEMENTS_FILE")
+        if not entitlement_path:
+            raise ValueError("daq_knowledge_role_contract_missing")
+        try:
+            entitlements = KnowledgeEntitlements(Path(entitlement_path))
+        except PlatformIdentityError:
+            raise ValueError("daq_knowledge_role_contract_invalid") from None
+        if task_flag == "true":
+            raise ValueError("daq_knowledge_task_role_replay_contract_missing")
     knowledge_release = knowledge.release_id if knowledge is not None else EMPTY_KNOWLEDGE_RELEASE
 
     mode = provider_mode or os.getenv("DAQ_PROVIDER_MODE", "offline")
@@ -134,6 +144,7 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
 
     app = FastAPI(title="AI DAQ FAE Agent Dev Bootstrap")
     app.state.daq_knowledge = knowledge
+    app.state.daq_knowledge_entitlements = entitlements
 
     app.state.session_store = SessionStore(ttl_seconds=3600)
     app.state.chat_concurrency_gate = ChatConcurrencyGate(max_concurrent)
@@ -573,6 +584,10 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
             feedback_store=feedback_store, review_store=review_store,
         )
         app.state.daq_durable_state = durable_state or configure_durable_state(app)
+        if entitlements is not None:
+            app.state.daq_authenticated_persistence.knowledge_access = (
+                entitlements, app.state.daq_durable_state, knowledge_release,
+            )
         @app.get("/authenticated/conversations")
         def list_authenticated_conversations(request: Request, cursor: str | None = None,
                                              limit: int = 30):

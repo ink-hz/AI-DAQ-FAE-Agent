@@ -144,7 +144,8 @@ def test_conflicting_reviewed_support_results_fail_closed(tmp_path):
     b = DaqToolBox(knowledge=ReviewedKnowledge.load_active(tmp_path), role='internal_fae')
     r = b.dispatch('check_software_support', ARGS)
     assert r.status == 'not_found'
-    assert r.content['claim_status'] == 'conflict'
+    assert r.content['claim_status'] == 'unknown'
+    assert r.content['reason'] == 'reviewed_evidence_unavailable'
 
 
 def test_end_to_end_exact_combination_passes_pure_matcher():

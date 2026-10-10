@@ -98,6 +98,7 @@ class _FailClosedFeedbackWriter:
 class DaqAuthenticatedPersistence:
     def __init__(self, *, conversation_repository, feedback_store, review_store,
                  runtime_release, knowledge_release, reviewer_subject_ids):
+        self.knowledge_access = None
         self.conversations = conversation_repository
         self.feedback = feedback_store
         self._review = review_store
@@ -125,6 +126,15 @@ class DaqAuthenticatedPersistence:
         except Exception:
             raise ConversationStoreError("daq_conversation_storage_unavailable") from None
         _assert_owner(subject, session)
+        if self.knowledge_access is not None:
+            policy, durable, release = self.knowledge_access
+            binding = policy.binding_for(subject, release)
+            try:
+                checkpoint = durable.load_context(subject, session_id)
+            except Exception:
+                raise ConversationStoreError("daq_knowledge_context_unavailable") from None
+            if checkpoint is None or checkpoint.state.roles.get("knowledge_role") != binding["role"] or checkpoint.state.knowledge_release != release:
+                raise ConversationNotFound("conversation_not_found")
         if store is not None:
             session = store.adopt(session)
             _assert_owner(subject, session)
@@ -156,9 +166,17 @@ class DaqAuthenticatedPersistence:
                 _assert_session_id(item.external_session_id)
             except ConversationNotFound:
                 raise ConversationStoreError("daq_conversation_agent_mismatch") from None
+        visible_items = []
+        for item in page.items:
+            if self.knowledge_access is not None:
+                try:
+                    self.load_session(subject, item.external_session_id)
+                except ConversationNotFound:
+                    continue
+            visible_items.append(item)
         return {"items": [{"session_id": item.external_session_id, "title": item.title,
                            "channel": item.channel, "created_at": item.created_at.isoformat(),
-                           "last_active_at": item.last_active_at.isoformat()} for item in page.items],
+                           "last_active_at": item.last_active_at.isoformat()} for item in visible_items],
                 "next_cursor": page.next_cursor}
 
     def save_turn(self, subject, session, *, turn, attachment_relations=(), connection=None):

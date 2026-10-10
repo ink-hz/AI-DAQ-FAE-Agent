@@ -12,6 +12,7 @@ from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 
 from src.agent.guardrails import categorize_refusal
+from src.platform_identity.models import PlatformIdentityError
 from src.agent.anthropic_transport import AnthropicTransportError
 from src.agent.loop.runtime import LoopRuntime
 from src.agent.protocol import RUNTIME_FAILURE_OUTCOMES
@@ -42,6 +43,15 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
         raise HTTPException(422, "client_request_id_required")
     if body.channel != "fae":
         raise HTTPException(409, "authenticated_channel_conflict")
+    knowledge = getattr(app.state, "daq_knowledge", None)
+    policy = getattr(app.state, "daq_knowledge_entitlements", None)
+    try:
+        binding = policy.binding_for(subject, knowledge_release) if knowledge is not None else None
+    except PlatformIdentityError as exc:
+        raise HTTPException(exc.status_code, exc.code) from None
+    payload = body.model_dump(mode="json")
+    if binding is not None:
+        payload["knowledge_access"] = binding
     persistence = app.state.daq_authenticated_persistence
     durable = app.state.daq_durable_state
     if body.session_id:
@@ -55,7 +65,7 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
         session = persistence.create_session(subject, store=app.state.session_store)
     try:
         reservation = durable.reserve(
-            subject, body.client_request_id, body.model_dump(mode="json"), session.session_id,
+            subject, body.client_request_id, payload, session.session_id,
         )
     except (RequestConflict, SessionBusy):
         raise HTTPException(409, "daq_request_conflict_or_busy") from None
@@ -95,6 +105,10 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
         interrupt("context_load_failed")
         app.state.chat_concurrency_gate.release()
         raise HTTPException(503, "daq_durable_storage_unavailable") from None
+
+    def assert_current_access():
+        if binding is not None and policy.binding_for(subject, knowledge_release) != binding:
+            raise PlatformIdentityError("daq_knowledge_role_changed", status_code=403)
 
     prior_history = list(session.messages)
     lease_lost = threading.Event()
@@ -140,7 +154,10 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
                 previous = checkpoint.state.task_context if checkpoint is not None else None
                 plan = prepare_turn(body.message, previous=previous,
                                     attachment_source_ids=texts, image_source_ids=images)
-                toolbox = DaqToolBox(context=plan.context.tool_context())
+                assert_current_access()
+                toolbox = DaqToolBox(context=plan.context.tool_context(), knowledge=knowledge,
+                                     role=binding["role"] if binding else None,
+                                     requirements=plan.requirements, access_guard=assert_current_access)
                 if body.attachment_ids:
                     toolbox = extend_with_attachments(
                         toolbox, session=session, store=app.state.attachment_store,
@@ -148,7 +165,8 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
                     )
                 runtime = LoopRuntime(
                     adapter=adapter, toolbox=toolbox,
-                    system_prompt_path=root / "prompts" / "empty_knowledge_system.md",
+                    system_prompt_path=root / "prompts" / (
+                        "reviewed_knowledge_system.md" if knowledge is not None else "empty_knowledge_system.md"),
                     evidence_policy=DaqEvidencePolicy(),
                 )
                 try:
@@ -163,6 +181,7 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
                             "required_for_answer" if body.attachment_ids else "unknown"
                         ),
                     ):
+                        assert_current_access()
                         if event.get("type") == "tool_call":
                             calls.append(event)
                             yield emit("stage", {"stage": "tool_call", **event})
@@ -219,6 +238,7 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
                 done, planned_capabilities=done["planned_capabilities"],
                 knowledge_release=knowledge_release,
             )
+            assert_current_access()
             if lease_lost.is_set():
                 raise RequestInterrupted("daq_execution_lease_lost")
             working_session = copy.deepcopy(session)
@@ -240,7 +260,11 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
                 # writing the durable turn so expiry cannot create a visible
                 # turn with an interrupted request ID.
                 durable.renew(subject, reservation)
-                context = DaqContextState(task_context=plan.context.to_checkpoint()) if plan else None
+                context = DaqContextState(
+                    task_context=plan.context.to_checkpoint() if plan else None,
+                    roles={"knowledge_role": binding["role"]} if binding else {},
+                    knowledge_release=knowledge_release if binding else None,
+                ) if plan or binding else None
                 def terminal_events(turn_id):
                     done["turn_id"] = turn_id
                     return [*frames,
@@ -280,6 +304,12 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
                                 "knowledge_release": knowledge_release,
                             })
             yield from terminal_frames
+        except PlatformIdentityError as exc:
+            interrupt("knowledge_authorization_changed")
+            trace.finalize({"outcome": "authorization_error", "fallback_used": True,
+                            "fallback_reason": exc.code})
+            yield emit("stage", {"stage": "authorization", "status": "error",
+                                 "reason": exc.code})
         except Exception as exc:
             interrupt("authenticated_execution_failed")
             trace.finalize({"outcome": "internal_error", "fallback_used": True,
@@ -301,7 +331,7 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
                     except (DurableStateError, RequestInterrupted):
                         try:
                             current = durable.reserve(
-                                subject, body.client_request_id, body.model_dump(mode="json"),
+                                subject, body.client_request_id, payload,
                                 session.session_id,
                             )
                         except DurableStateError:

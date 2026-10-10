@@ -169,6 +169,13 @@ class ReviewedKnowledge:
             visible.append(deepcopy(row))
         return visible
 
+    def conflict_notices_for(self, role: str) -> list[dict]:
+        from .conflict_visibility import conflict_notice
+        if role not in ROLES:
+            raise ValueError("knowledge role invalid")
+        return [notice for row in self._records
+                if (notice := conflict_notice(row, role)) is not None]
+
     def sections_for(self, role: str, *, for_delivery: bool = False) -> list[dict]:
         """Filter whole sections before retrieval; never expose a mixed paragraph."""
         if role not in ROLES:

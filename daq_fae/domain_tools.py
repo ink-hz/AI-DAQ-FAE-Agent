@@ -51,7 +51,7 @@ class DaqToolBox:
 
     def __init__(self, *, question: str = "", context: dict | None = None,
                  knowledge: ReviewedKnowledge | None = None, role: str | None = None,
-                 requirements: list[dict] | None = None):
+                 requirements: list[dict] | None = None, access_guard=None):
         if knowledge is not None and role is None:
             raise ValueError("knowledge role required")
         self.question = question
@@ -59,11 +59,12 @@ class DaqToolBox:
         self.knowledge = knowledge
         self.role = role
         self.requirements = list(requirements or [])
+        self.access_guard = access_guard
 
     def with_request_context(self, question: str) -> "DaqToolBox":
         return DaqToolBox(question=question, context=self.context,
                           knowledge=self.knowledge, role=self.role,
-                          requirements=self.requirements)
+                          requirements=self.requirements, access_guard=self.access_guard)
 
     def tool_schemas(self) -> list[dict]:
         return [{
@@ -79,6 +80,8 @@ class DaqToolBox:
         } for name, (description, properties, required) in _TOOLS.items()]
 
     def dispatch(self, name: str, arguments: dict) -> ToolResult:
+        if self.access_guard is not None:
+            self.access_guard()
         if name not in _TOOLS:
             return ToolResult(status="tool_error", content={"error": "unknown_tool"})
         if name == "session_state":
@@ -118,7 +121,7 @@ class DaqToolBox:
         }) > 1:
             return ToolResult(status='not_found', content={
                 'release_id': self.knowledge.release_id,
-                'reason': 'software_support_conflict', 'claim_status': 'conflict',
+                'reason': 'reviewed_evidence_unavailable', 'claim_status': 'unknown',
                 'matches': [], 'matched_requirement_ids': attempted,
             })
         if name == "lookup_spec" and len({
@@ -127,6 +130,14 @@ class DaqToolBox:
         }) > 1:
             return ToolResult(status="not_found", content={
                 "reason": "scope_or_conditions_required", "claim_status": "unknown",
+                "matches": [], "matched_requirement_ids": attempted,
+            })
+        if not matches and name == "lookup_spec" and any(
+            self._matches(name, arguments, notice, entities, topologies)
+            for notice in self.knowledge.conflict_notices_for(self.role)
+        ):
+            return ToolResult(status="not_found", content={
+                "reason": "reviewed_conflict_notice", "claim_status": "conflict",
                 "matches": [], "matched_requirement_ids": attempted,
             })
         if not matches:

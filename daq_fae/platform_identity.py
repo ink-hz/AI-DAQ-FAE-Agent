@@ -148,6 +148,14 @@ def configure_platform_identity(
                 or subject.subject_id not in config.allowed_subject_ids
             ):
                 return JSONResponse({"error": {"code": "daq_subject_not_authorized"}}, status_code=403)
+        policy = getattr(app.state, "daq_knowledge_entitlements", None)
+        if protected and not exchange and policy is not None:
+            try:
+                request.state.daq_knowledge_role = policy.role_for(subject)
+                if path == "/review" or path.startswith("/review/"):
+                    raise PlatformIdentityError("daq_knowledge_review_role_contract_missing", status_code=403)
+            except PlatformIdentityError as exc:
+                return JSONResponse({"error": {"code": exc.code}}, status_code=exc.status_code)
         return await call_next(request)
 
     register_platform_identity_routes(
