@@ -158,11 +158,11 @@ def test_failed_pointer_and_failed_rollback_keep_previous(tmp_path, monkeypatch)
     first = m.stage_release(tmp_path, candidate(), verify_approval=verify)
     m.activate_checked(tmp_path, first, verify_approval=verify, observe=observe)
     second = m.stage_release(tmp_path, candidate(first), verify_approval=verify)
-    original = releases.activate_release
-    monkeypatch.setattr(releases, 'activate_release', lambda *a: (_ for _ in ()).throw(OSError('synthetic failure')))
+    original = releases._activate_release
+    monkeypatch.setattr(releases, '_activate_release', lambda *a: (_ for _ in ()).throw(OSError('synthetic failure')))
     with pytest.raises(OSError): m.activate_checked(tmp_path, second, verify_approval=verify, observe=observe)
     assert releases.read_active_release(tmp_path)['release_id'] == first
-    monkeypatch.setattr(releases, 'activate_release', original)
+    monkeypatch.setattr(releases, '_activate_release', original)
     m.activate_checked(tmp_path, second, verify_approval=verify, observe=observe)
     with pytest.raises(ValueError, match='observation'):
         m.rollback_checked(tmp_path, verify_approval=verify, observe=lambda rid: observe(second))
@@ -217,11 +217,11 @@ def test_failed_restore_does_not_claim_rollback_success(tmp_path, monkeypatch):
     first = m.stage_release(tmp_path, candidate(), verify_approval=verify)
     m.activate_checked(tmp_path, first, verify_approval=verify, observe=observe)
     second = m.stage_release(tmp_path, candidate(first), verify_approval=verify)
-    original = releases.activate_release
+    original = releases._activate_release
     def broken_restore(root, rid):
         if rid == first: raise OSError('rollback pointer failed')
         original(root, rid)
-    monkeypatch.setattr(releases, 'activate_release', broken_restore)
+    monkeypatch.setattr(releases, '_activate_release', broken_restore)
     with pytest.raises(OSError, match='rollback pointer failed'):
         m.activate_checked(tmp_path, second, verify_approval=verify, observe=lambda rid: {})
     assert releases.read_active_release(tmp_path)['release_id'] == second

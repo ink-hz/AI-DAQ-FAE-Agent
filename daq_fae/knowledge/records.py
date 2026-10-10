@@ -165,7 +165,7 @@ def _valid_source_ref(ref: object, sources: dict, chunks: set) -> str | None:
     return None
 
 
-def validate_records(records: list[dict], snapshot: dict) -> tuple[list[dict], list[dict]]:
+def validate_records(records: list[dict], snapshot: dict, *, require_current_links: bool = True) -> tuple[list[dict], list[dict]]:
     """Return normalized records plus findings; callers must reject any findings."""
     sources = {row["path"]: row for row in snapshot.get("sources", [])}
     chunks = {
@@ -276,7 +276,7 @@ def validate_records(records: list[dict], snapshot: dict) -> tuple[list[dict], l
                 findings.append(_finding(record_id, "asset_cannot_verify_support"))
             if kind == "link":
                 review = row.get("link_review")
-                if not link_review_valid(row):
+                if not link_review_valid(row, require_current=require_current_links):
                     findings.append(_finding(record_id, "link_review_missing"))
                 elif review.get("record_sha256") != fingerprint:
                     findings.append(_finding(record_id, "link_review_stale"))

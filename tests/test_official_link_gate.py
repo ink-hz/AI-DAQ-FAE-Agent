@@ -3,7 +3,8 @@ from copy import deepcopy
 import pytest
 from test_reviewed_knowledge import _records, SNAPSHOT, RELEASE_REVIEW
 from daq_fae.knowledge.records import record_fingerprint, access_fingerprint, validate_records
-from daq_fae.knowledge.releases import publish_release, activate_release
+from daq_fae.knowledge.releases import _publish_release as publish_release, _activate_release as activate_release
+from synthetic_release_helpers import load_fixture_active
 from daq_fae.knowledge.reviewed_view import ReviewedKnowledge
 from daq_fae.domain_tools import DaqToolBox
 
@@ -60,7 +61,7 @@ def test_invalid_link_rejected_by_offline_and_runtime_gates(damage):
 def test_verified_link_returned_this_turn_only_to_current_authorized_role(tmp_path):
     rid = publish_release(tmp_path, SNAPSHOT, reviewed_rows(), None, RELEASE_REVIEW)
     activate_release(tmp_path, rid)
-    view = ReviewedKnowledge.load_active(tmp_path)
+    view = load_fixture_active(tmp_path)
     for role, expected in [('internal_fae', 'ok'), ('channel', 'not_found'), ('tmall_support', 'not_found')]:
         result = DaqToolBox(knowledge=view, role=role).dispatch('official_links', {'query': 'EGO'})
         assert result.status == expected
@@ -128,7 +129,7 @@ def test_reload_after_link_expiry_preserves_unrelated_knowledge(tmp_path, monkey
     activate_release(tmp_path, rid)
     pointer = (tmp_path / 'active.json').read_bytes()
     advance_past_link_expiry(monkeypatch)
-    view = ReviewedKnowledge.load_active(tmp_path)
+    view = load_fixture_active(tmp_path)
     assert view.release_id == rid
     box = DaqToolBox(knowledge=view, role='internal_fae')
     assert box.dispatch('official_links', {'query': 'EGO'}).status == 'not_found'
@@ -165,4 +166,4 @@ def test_staging_and_activation_reject_expired_links_without_pointer_change(tmp_
         activate_release(tmp_path, staged)
     assert (tmp_path / 'active.json').read_bytes() == pointer
     assert set((tmp_path / 'releases').iterdir()) == release_dirs
-    assert ReviewedKnowledge.load_active(tmp_path).release_id == baseline
+    assert load_fixture_active(tmp_path).release_id == baseline

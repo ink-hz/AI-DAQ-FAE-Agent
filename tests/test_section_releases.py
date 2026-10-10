@@ -6,6 +6,7 @@ import json
 import pytest
 
 from daq_fae.knowledge import releases
+from synthetic_release_helpers import load_fixture_active
 from daq_fae.knowledge.reviewed_view import ReviewedKnowledge
 from daq_fae.knowledge.section_consistency import render_record
 from test_knowledge_releases import SNAPSHOT, REVIEW, _entity, _record
@@ -36,7 +37,7 @@ def sign(section, body, records):
 
 
 def publish(root, records, section, body, previous=None):
-    return releases.publish_release(root, SNAPSHOT, records, previous, REVIEW,
+    return releases._publish_release(root, SNAPSHOT, records, previous, REVIEW,
                                     sections=[section], bodies={section['section_id']: body})
 
 
@@ -46,8 +47,8 @@ def test_reviewed_sections_are_deterministic_versioned_and_role_filtered(tmp_pat
     release = publish(tmp_path, rows, section, body)
     assert publish(tmp_path, rows, section, body) == release
     assert releases.read_active_release(tmp_path) is None
-    releases.activate_release(tmp_path, release)
-    view = ReviewedKnowledge.load_active(tmp_path)
+    releases._activate_release(tmp_path, release)
+    view = load_fixture_active(tmp_path)
     assert view.manifest['format_version'] == 2
     assert view.manifest['section_count'] == 1
     assert view.manifest['dependency_index'][section['section_id']]['records'] == [rows[1]['id']]
@@ -64,7 +65,7 @@ def test_failed_section_publication_keeps_previous_pointer(tmp_path, mutation):
     rows = [_entity(), _record()]
     section, body = approved_section(rows)
     first = publish(tmp_path, rows, section, body)
-    releases.activate_release(tmp_path, first)
+    releases._activate_release(tmp_path, first)
     if mutation == 'body':
         body += '\nChanged prose'
         section['body_sha256'] = hashlib.sha256(body.encode()).hexdigest()
@@ -110,9 +111,9 @@ def test_link_id_must_be_reviewed_and_deliverable(tmp_path):
 
 
 def test_v1_is_records_only_and_future_versions_are_rejected(tmp_path):
-    rid = releases.publish_release(tmp_path, SNAPSHOT, [_entity(), _record()], None, REVIEW)
-    releases.activate_release(tmp_path, rid)
-    view = ReviewedKnowledge.load_active(tmp_path)
+    rid = releases._publish_release(tmp_path, SNAPSHOT, [_entity(), _record()], None, REVIEW)
+    releases._activate_release(tmp_path, rid)
+    view = load_fixture_active(tmp_path)
     assert view.sections_for('internal_fae') == []
     for version in (1, 3):
         manifest = deepcopy(view.manifest)
@@ -138,8 +139,8 @@ def test_public_manifest_mutation_does_not_change_section_view(tmp_path):
     rows = [_entity(), _record()]
     section, body = approved_section(rows)
     rid = publish(tmp_path, rows, section, body)
-    releases.activate_release(tmp_path, rid)
-    view = ReviewedKnowledge.load_active(tmp_path)
+    releases._activate_release(tmp_path, rid)
+    view = load_fixture_active(tmp_path)
     view.manifest['sections'][0]['view_roles'] = ['channel']
     view.manifest['sections'][0]['body'] = 'injected'
     assert view.sections_for('internal_fae')[0]['body'] == body
@@ -171,8 +172,8 @@ def test_reviewed_link_ids_roundtrip_without_inline_url(tmp_path):
     section['link_ids'] = ['link:synthetic']
     sign(section, body, rows)
     rid = publish(tmp_path, rows, section, body)
-    releases.activate_release(tmp_path, rid)
-    view = ReviewedKnowledge.load_active(tmp_path)
+    releases._activate_release(tmp_path, rid)
+    view = load_fixture_active(tmp_path)
     assert view.sections_for('internal_fae')[0]['link_ids'] == ['link:synthetic']
     assert 'https://' not in view.sections_for('internal_fae')[0]['body']
     assert view.records_for('internal_fae')[-1]['kind'] == 'link'
@@ -206,7 +207,7 @@ def test_valid_new_source_still_invalidates_section_review(tmp_path):
                            'locator': new_ref['locator']})
     section['source_refs'].append(new_ref)
     with pytest.raises(ValueError, match='review.*stale'):
-        releases.publish_release(tmp_path, snap, rows, None, REVIEW,
+        releases._publish_release(tmp_path, snap, rows, None, REVIEW,
                                   sections=[section], bodies={section['section_id']: body})
 
 
@@ -214,7 +215,7 @@ def test_io_failure_preserves_pointer_and_cleans_stage(tmp_path, monkeypatch):
     rows = [_entity(), _record()]
     section, body = approved_section(rows)
     first = publish(tmp_path, rows, section, body)
-    releases.activate_release(tmp_path, first)
+    releases._activate_release(tmp_path, first)
     def fail(*args):
         raise OSError('synthetic storage failure')
     monkeypatch.setattr(releases.os, 'replace', fail)
@@ -250,14 +251,14 @@ def stage_manifest(root, manifest):
     ('dependency_index', {}),
 ])
 def test_v1_reserved_v2_fields_fail_before_pointer_change(tmp_path, key, value):
-    first = releases.publish_release(tmp_path, SNAPSHOT, [_entity(), _record()], None, REVIEW)
-    releases.activate_release(tmp_path, first)
+    first = releases._publish_release(tmp_path, SNAPSHOT, [_entity(), _record()], None, REVIEW)
+    releases._activate_release(tmp_path, first)
     changed = deepcopy(releases.read_active_release(tmp_path)['manifest'])
     changed[key] = value
     forged = stage_manifest(tmp_path, changed)
     with pytest.raises(ValueError, match='format'):
-        releases.activate_release(tmp_path, forged)
-    assert ReviewedKnowledge.load_active(tmp_path).release_id == first
+        releases._activate_release(tmp_path, forged)
+    assert load_fixture_active(tmp_path).release_id == first
     with pytest.raises(ValueError, match='format'):
         ReviewedKnowledge.from_manifest(forged, changed)
 
@@ -272,13 +273,13 @@ def test_v2_summary_tampering_fails_activation_and_loading(tmp_path, key, value)
     rows = [_entity(), _record()]
     section, body = approved_section(rows)
     first = publish(tmp_path, rows, section, body)
-    releases.activate_release(tmp_path, first)
+    releases._activate_release(tmp_path, first)
     changed = deepcopy(releases.read_active_release(tmp_path)['manifest'])
     changed[key] = value
     forged = stage_manifest(tmp_path, changed)
     with pytest.raises(ValueError):
-        releases.activate_release(tmp_path, forged)
-    assert ReviewedKnowledge.load_active(tmp_path).release_id == first
+        releases._activate_release(tmp_path, forged)
+    assert load_fixture_active(tmp_path).release_id == first
     with pytest.raises(ValueError):
         ReviewedKnowledge.from_manifest(forged, changed)
 
@@ -286,12 +287,12 @@ def test_v2_summary_tampering_fails_activation_and_loading(tmp_path, key, value)
 def test_v1_unreadable_record_cannot_replace_previous_pointer(tmp_path):
     from daq_fae.knowledge.records import record_fingerprint, access_fingerprint
     rows = [_entity(), _record()]
-    first = releases.publish_release(tmp_path, SNAPSHOT, rows, None, REVIEW)
-    releases.activate_release(tmp_path, first)
+    first = releases._publish_release(tmp_path, SNAPSHOT, rows, None, REVIEW)
+    releases._activate_release(tmp_path, first)
     rows[1]['data']['value'] = 'https://example.com/unreviewed'
     rows[1]['fact_review']['record_sha256'] = record_fingerprint(rows[1])
     rows[1]['access_review']['record_sha256'] = access_fingerprint(rows[1])
-    staged = releases.publish_release(tmp_path, SNAPSHOT, rows, None, REVIEW)
+    staged = releases._publish_release(tmp_path, SNAPSHOT, rows, None, REVIEW)
     with pytest.raises(ValueError, match='URL'):
-        releases.activate_release(tmp_path, staged)
-    assert ReviewedKnowledge.load_active(tmp_path).release_id == first
+        releases._activate_release(tmp_path, staged)
+    assert load_fixture_active(tmp_path).release_id == first

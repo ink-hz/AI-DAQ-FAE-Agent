@@ -28,7 +28,7 @@ def _archive(tmp_path: Path, text: bytes) -> tuple[Path, str]:
     return archive, info["manifest_sha256"]
 
 
-def test_cli_import_diff_publish_activate_and_rollback(tmp_path: Path):
+def test_cli_import_diff_fingerprint_and_reject_ungoverned_publish(tmp_path: Path):
     first_archive, first_hash = _archive(tmp_path / "a", b"# EGO\n1600\n")
     second_archive, second_hash = _archive(tmp_path / "b", b"# EGO\n1920\n")
     first_path = tmp_path / "first.json"
@@ -83,14 +83,14 @@ def test_cli_import_diff_publish_activate_and_rollback(tmp_path: Path):
     review_path.write_text(json.dumps({"reviewer": "owner", "reviewed_at": "2026-10-08",
                                        "dev_batch": "synthetic-cli"}))
     release_root = tmp_path / "releases-root"
-    release = _cli("publish", "--root", str(release_root), "--snapshot", str(first_path),
-                   "--archive", str(first_archive), "--manifest-sha256", first_hash,
-                   "--records", str(records_path), "--review", str(review_path))["release_id"]
-    assert _cli("active", "--root", str(release_root))["release_id"] is None
-    _cli("activate", "--root", str(release_root), "--release-id", release)
-    assert _cli("active", "--root", str(release_root))["release_id"] == release
-    _cli("rollback", "--root", str(release_root), "--release-id", release)
-    assert _cli("active", "--root", str(release_root))["release_id"] == release
+    result = subprocess.run([sys.executable, 'scripts/daq_knowledge.py', 'publish',
+        '--root', str(release_root), '--snapshot', str(first_path),
+        '--archive', str(first_archive), '--manifest-sha256', first_hash,
+        '--records', str(records_path), '--review', str(review_path)],
+        cwd=ROOT, text=True, capture_output=True)
+    assert result.returncode == 2 and 'readiness' in result.stderr
+    assert not release_root.exists()
+
 
 
 def test_cli_publish_rechecks_archive_against_saved_candidate(tmp_path: Path):

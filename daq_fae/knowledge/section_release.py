@@ -36,7 +36,7 @@ def _same_roles(section, view, forward):
     return set(section['view_roles']) == set(view) and set(section['forward_roles']) == set(forward)
 
 
-def compile_sections(sections, bodies, records, snapshot):
+def compile_sections(sections, bodies, records, snapshot, *, require_current_links=True):
     # Late import avoids the releases/reviewed_view cycle.
     from .reviewed_view import _url_bearing_strings
 
@@ -104,7 +104,7 @@ def compile_sections(sections, bodies, records, snapshot):
                 raise ValueError('section dependency missing')
             if not _same_roles(section, target['view_roles'], target['forward_roles']):
                 raise ValueError('section mixed dependency permissions; split sections')
-    audit = audit_sections(candidates, bodies, records, snapshot)
+    audit = audit_sections(candidates, bodies, records, snapshot, require_current_links=require_current_links)
     if not audit['consistent']:
         raise ValueError('section consistency failed: ' + ', '.join(sorted(
             {f['code'] for f in audit['findings']})))
@@ -147,7 +147,8 @@ def validate_section_manifest(manifest):
     snapshot = {'sources': manifest['sources'], 'chunks': manifest.get('source_locations', [])}
     compiled = compile_sections(
         [{k: v for k, v in s.items() if k != 'body'} for s in sections],
-        {s.get('section_id'): s.get('body') for s in sections}, manifest['records'], snapshot)
+        {s.get('section_id'): s.get('body') for s in sections}, manifest['records'], snapshot,
+        require_current_links=False)
     for key, value in section_indices(compiled, manifest['records']).items():
         if manifest.get(key) != value:
             raise ValueError('section manifest index/count invalid: ' + key)

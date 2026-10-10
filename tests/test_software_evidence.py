@@ -4,9 +4,10 @@ from copy import deepcopy
 import pytest
 
 from daq_fae.domain_tools import DaqToolBox
+from synthetic_release_helpers import load_fixture_active
 from daq_fae.knowledge.reviewed_view import ReviewedKnowledge
 from test_reviewed_knowledge import _row, _records, SNAPSHOT, RELEASE_REVIEW
-from daq_fae.knowledge.releases import publish_release, activate_release
+from daq_fae.knowledge.releases import _publish_release as publish_release, _activate_release as activate_release
 
 ARGS = dict(entity='EGO 1600', software='Capture SDK', version='1.2',
             hardware_revision='A', platform='Linux x64', connection_mode='USB',
@@ -19,7 +20,7 @@ def box(tmp_path, **extra):
     rows = _records() + [_row('software:capture', 'software', data)]
     rid = publish_release(tmp_path, SNAPSHOT, rows, None, RELEASE_REVIEW)
     activate_release(tmp_path, rid)
-    return DaqToolBox(knowledge=ReviewedKnowledge.load_active(tmp_path), role='internal_fae')
+    return DaqToolBox(knowledge=load_fixture_active(tmp_path), role='internal_fae')
 
 
 @pytest.mark.parametrize('tool', ['check_software_support', 'sdk_evidence'])
@@ -141,7 +142,7 @@ def test_conflicting_reviewed_support_results_fail_closed(tmp_path):
     negative['access_review']['record_sha256'] = access_fingerprint(negative)
     rid = publish_release(tmp_path, SNAPSHOT, _records()+[positive, negative], None, RELEASE_REVIEW)
     activate_release(tmp_path, rid)
-    b = DaqToolBox(knowledge=ReviewedKnowledge.load_active(tmp_path), role='internal_fae')
+    b = DaqToolBox(knowledge=load_fixture_active(tmp_path), role='internal_fae')
     r = b.dispatch('check_software_support', ARGS)
     assert r.status == 'not_found'
     assert r.content['claim_status'] == 'unknown'
@@ -176,7 +177,7 @@ def test_topology_required_selectors_are_exact_and_consistent(tmp_path, tool):
     software = _row('software:combo', 'software', data)
     rid = publish_release(tmp_path, SNAPSHOT, _records()+[topology, software], None, RELEASE_REVIEW)
     activate_release(tmp_path, rid)
-    b = DaqToolBox(knowledge=ReviewedKnowledge.load_active(tmp_path), role='internal_fae')
+    b = DaqToolBox(knowledge=load_fixture_active(tmp_path), role='internal_fae')
     args = dict(ARGS, query='Capture SDK', topology_id='topology:combo')
     assert b.dispatch(tool, args).status == 'not_found'
     assert b.dispatch(tool, dict(args, conditions={'cable_revision': 'C1'})).status == 'ok'
@@ -186,7 +187,7 @@ def test_topology_required_selectors_are_exact_and_consistent(tmp_path, tool):
     bare = _row('software:bare', 'software', {k:v for k,v in data.items() if k != 'conditions'})
     rid = publish_release(tmp_path, SNAPSHOT, _records()+[topology, bare], None, RELEASE_REVIEW)
     activate_release(tmp_path, rid)
-    b = DaqToolBox(knowledge=ReviewedKnowledge.load_active(tmp_path), role='internal_fae')
+    b = DaqToolBox(knowledge=load_fixture_active(tmp_path), role='internal_fae')
     missing = b.dispatch(tool, args)
     assert missing.status == 'not_found'
     assert missing.content['reason'] == 'software_topology_conditions_required'
@@ -195,7 +196,7 @@ def test_topology_required_selectors_are_exact_and_consistent(tmp_path, tool):
     contradictory = _row('software:conflicting', 'software', dict(data, conditions={'cable_revision':'C2'}))
     rid = publish_release(tmp_path, SNAPSHOT, _records()+[topology, contradictory], None, RELEASE_REVIEW)
     activate_release(tmp_path, rid)
-    b = DaqToolBox(knowledge=ReviewedKnowledge.load_active(tmp_path), role='internal_fae')
+    b = DaqToolBox(knowledge=load_fixture_active(tmp_path), role='internal_fae')
     conflict = b.dispatch(tool, dict(args, conditions={'cable_revision':'C2'}))
     assert conflict.status == 'not_found'
     assert conflict.content['reason'] == 'software_topology_conditions_required'

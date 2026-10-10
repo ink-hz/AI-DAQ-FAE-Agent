@@ -5,7 +5,7 @@ import pytest
 from daq_fae.knowledge import update_impact as impact
 from daq_fae.knowledge.records import record_fingerprint, access_fingerprint
 from test_knowledge_releases import SNAPSHOT, REVIEW, _entity, _record
-from daq_fae.knowledge.releases import publish_release, activate_release, read_active_release
+from daq_fae.knowledge.releases import _publish_release as publish_release, _activate_release as activate_release, read_active_release
 
 
 def bundle():

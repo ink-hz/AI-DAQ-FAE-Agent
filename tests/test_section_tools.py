@@ -48,7 +48,7 @@ def make_view(tmp_path, *, product_text=None):
         {'value': '冲突机密乙', 'source_ref': deepcopy(conflict['source_refs'][0])},
     ]
     rows += [candidate, conflict]
-    rid = releases.publish_release(tmp_path, SNAPSHOT, rows, None, REVIEW,
+    rid = releases._publish_release(tmp_path, SNAPSHOT, rows, None, REVIEW,
                                    sections=sections, bodies=bodies)
     manifest = json.loads((tmp_path / 'releases' / rid / 'manifest.json').read_text())
     return ReviewedKnowledge.from_manifest(rid, manifest)
@@ -222,7 +222,7 @@ def test_exact_source_path_rejected_outside_common_roots(tmp_path, source_path):
     section, body = approved_section(rows)
     snapshot = json.loads(json.dumps(SNAPSHOT).replace('spec.md', source_path))
     with pytest.raises(ValueError, match='section local source path'):
-        releases.publish_release(tmp_path, snapshot, rows, None, REVIEW,
+        releases._publish_release(tmp_path, snapshot, rows, None, REVIEW,
                                  sections=[section], bodies={section['section_id']: body})
     valid = make_view(tmp_path / 'valid')
     manifest = deepcopy(valid.manifest)
@@ -245,7 +245,7 @@ def test_local_paths_in_metadata_rejected_at_publication_and_retrieval(tmp_path,
         'aliases', 'domain_terms'} else value
     sign(section, body, rows)
     with pytest.raises(ValueError, match='section local source path'):
-        releases.publish_release(tmp_path, SNAPSHOT, rows, None, REVIEW,
+        releases._publish_release(tmp_path, SNAPSHOT, rows, None, REVIEW,
                                  sections=[section], bodies={section['section_id']: body})
     valid = make_view(tmp_path / 'valid')
     manifest = deepcopy(valid.manifest)

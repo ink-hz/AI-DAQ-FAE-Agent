@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import json
 from pathlib import Path
 import time
 from typing import Literal
@@ -82,7 +83,7 @@ def _anthropic_dev_adapter() -> AnthropicAdapter:
 
 def create_app(*, provider_mode: str | None = None, adapter=None,
                knowledge_dir: Path | None = None, heartbeat_interval_seconds: float = 10,
-               knowledge_release_root: Path | None = None,
+               knowledge_release_root: Path | None = None, knowledge_approval_verifier=None,
                request_lease_renew_interval_seconds: float = 60,
                max_concurrent: int = 2, trace_recorder=None,
                attachment_dir: Path | None = None, attachment_limits=None,
@@ -122,7 +123,11 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
     release_root = knowledge_release_root or Path(os.getenv(
         "DAQ_KNOWLEDGE_RELEASE_ROOT", str(_ROOT / "data" / "knowledge" / "published"),
     ))
-    knowledge = ReviewedKnowledge.load_active(release_root)
+    knowledge = ReviewedKnowledge.load_active(
+        release_root, verify_approval=knowledge_approval_verifier,
+        runtime_release=RUNTIME_RELEASE,
+        upstream_sha=json.loads((_ROOT / 'upstream-source.json').read_text())['revision'],
+    )
     entitlements = None
     if auth_mode and knowledge is not None:
         entitlement_path = os.getenv("DAQ_KNOWLEDGE_ENTITLEMENTS_FILE")

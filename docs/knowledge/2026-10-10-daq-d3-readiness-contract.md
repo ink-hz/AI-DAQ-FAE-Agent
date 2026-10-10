@@ -43,10 +43,23 @@ question ID. Open impact obligations and unsigned decisions reject staging.
 publisher. The manifest embeds the entire signed readiness bundle under
 `review.readiness`, making scope, role/status/count summaries, archive identities,
 review digests, Dev batch and prior release immutable together. Staging never
-changes `active.json`. It is intentionally separate from legacy low-level APIs;
-those remain available for bootstrap/unit tests and do not enforce D3. A future
-real release entrypoint must use this gate with a trusted verifier and observer.
-No real deployment integration is claimed by this engineering task.
+changes `active.json`. Public `publish_release` and `activate_release` enforce D3 for every nonempty
+package; only truly empty sources, records and sections permit bootstrap without
+approval. Storage/pointer primitives are private and used only by the gate and
+explicit offline test fixtures. An arbitrary privately written or rehashed
+package still fails the mandatory runtime loader.
+
+`ReviewedKnowledge.load_active` requires an externally supplied trusted verifier
+for nonempty content, recomputes the signed manifest binding, and checks the
+expected runtime release and upstream SHA. `create_app` supplies its actual
+`RUNTIME_RELEASE` and tracked `upstream-source.json` revision and receives the
+verifier through an explicit server-side dependency. No environment variable,
+manifest field or test-mode flag can supply an accepting verifier. Deployments
+without a configured trusted adapter refuse nonempty knowledge at startup; the
+existing CLI has no such adapter and refuses nonempty publish/activate/rollback.
+Empty `empty-dev-v0` startup remains available. Synthetic app tests create actual
+signed D3 bundles and inject a test-owned cryptographic verifier; test-only helpers
+are never imported by the application or CLI.
 
 `activate_checked` revalidates the stored approval and all current gates, rebuilds
 the expected complete manifest and checks its content hash against the staged ID.
@@ -56,7 +69,8 @@ the exact knowledge release and the reviewed runtime release; trace also require
 a trace ID. The observer is a caller-owned trusted adapter; the repository only
 contains synthetic observers, not a live Dev connector.
 
-Observation failure restores the original pointer (or removes the newly created
+Pointer-write failure (including fsync after replacement) and observation failure
+restore the original pointer (or removes the newly created
 pointer if no prior release existed). A restore failure propagates as an error;
 it is never reported as successful rollback. `rollback_checked` uses only the
 active manifest's prior ID, revalidates that release, switches explicitly, and
@@ -65,8 +79,19 @@ Pointer restoration alone does not prove runtime restoration; operators must
 resolve unhealthy observations before claiming service recovery.
 
 All D3 transitions use a local exclusive lock. A trusted parent directory and
-exclusive operator ownership are required; the legacy pointer writer does not
-participate in that lock. Cross-process deployment/runtime coordination and an
+exclusive operator ownership are required; private offline fixture primitives do not
+participate in that lock and must not be used by operational entrypoints. Cross-process deployment/runtime coordination and an
 external transaction spanning pointer plus network observation are out of scope.
 Rollback may correctly refuse an expired or no-longer-approved release. No camera
 pointer, configuration, index, runtime pin or production state is touched.
+
+
+## Natural expiry during runtime reload
+
+Publication, activation and rollback still require current link page reviews.
+Runtime reload validates immutable approvals and link review integrity while
+allowing natural expiry; expired links remain hidden by role views and tools.
+The same static validation now applies to v2 section consistency checks, preserving
+unrelated facts after a link expires. This exception never accepts missing,
+forged, changed, wrongly scoped or invalidly dated link evidence and cannot waive
+current-link checks in a public transition.

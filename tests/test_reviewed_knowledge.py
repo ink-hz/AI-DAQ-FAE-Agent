@@ -5,7 +5,8 @@ from fastapi.testclient import TestClient
 
 from daq_fae.app import create_app
 from daq_fae.knowledge.records import access_fingerprint, record_fingerprint
-from daq_fae.knowledge.releases import activate_release, publish_release
+from daq_fae.knowledge.releases import _activate_release as activate_release, _publish_release as publish_release
+from synthetic_release_helpers import load_fixture_active, approve_fixture_for_app
 from daq_fae.knowledge.reviewed_view import ReviewedKnowledge
 from daq_fae.domain_tools import DaqToolBox
 from daq_fae.task_context import prepare_turn
@@ -61,7 +62,7 @@ def _records(*, claim_view=("internal_fae",), link_forward=()):
 def test_active_release_is_frozen_and_reviewed_records_are_role_filtered(tmp_path):
     first = publish_release(tmp_path, SNAPSHOT, _records(), None, RELEASE_REVIEW)
     activate_release(tmp_path, first)
-    view = ReviewedKnowledge.load_active(tmp_path)
+    view = load_fixture_active(tmp_path)
     assert view.release_id == first
     assert [row["id"] for row in view.records_for("internal_fae")] == [
         "claim:resolution", "entity:ego-1600",
@@ -72,7 +73,7 @@ def test_active_release_is_frozen_and_reviewed_records_are_role_filtered(tmp_pat
                              first, RELEASE_REVIEW)
     activate_release(tmp_path, second)
     assert view.release_id == first
-    assert ReviewedKnowledge.load_active(tmp_path).release_id == second
+    assert load_fixture_active(tmp_path).release_id == second
 
 
 def test_forward_authorization_is_separate_from_view_permission(tmp_path):
@@ -80,7 +81,7 @@ def test_forward_authorization_is_separate_from_view_permission(tmp_path):
                                  _records(link_forward=("internal_fae",)),
                                  None, RELEASE_REVIEW)
     activate_release(tmp_path, release_id)
-    view = ReviewedKnowledge.load_active(tmp_path)
+    view = load_fixture_active(tmp_path)
     assert [row["id"] for row in view.records_for("internal_fae", for_delivery=True)] == [
         "link:ego",
     ]
@@ -90,7 +91,7 @@ def test_forward_authorization_is_separate_from_view_permission(tmp_path):
 def test_manifest_that_lies_about_review_or_source_fails_closed(tmp_path):
     release_id = publish_release(tmp_path, SNAPSHOT, _records(), None, RELEASE_REVIEW)
     activate_release(tmp_path, release_id)
-    manifest = ReviewedKnowledge.load_active(tmp_path).manifest
+    manifest = load_fixture_active(tmp_path).manifest
     stale = deepcopy(manifest)
     stale["records"][0]["data"]["value"] = "fabricated"
     with pytest.raises(ValueError, match="review|record"):
@@ -104,7 +105,7 @@ def test_manifest_that_lies_about_review_or_source_fails_closed(tmp_path):
 def test_toolbox_returns_only_visible_matching_claim_with_governed_source(tmp_path):
     release_id = publish_release(tmp_path, SNAPSHOT, _records(), None, RELEASE_REVIEW)
     activate_release(tmp_path, release_id)
-    view = ReviewedKnowledge.load_active(tmp_path)
+    view = load_fixture_active(tmp_path)
     requirements = [
         {"id": "resolution", "capability": "lookup_spec", "field": "resolution",
          "entities": ["EGO 1600"], "conditions": {}},
@@ -132,7 +133,7 @@ def test_toolbox_returns_only_visible_matching_claim_with_governed_source(tmp_pa
 def test_link_needs_forward_permission_in_all_tool_paths(tmp_path):
     release_id = publish_release(tmp_path, SNAPSHOT, _records(), None, RELEASE_REVIEW)
     activate_release(tmp_path, release_id)
-    box = DaqToolBox(knowledge=ReviewedKnowledge.load_active(tmp_path), role="internal_fae")
+    box = DaqToolBox(knowledge=load_fixture_active(tmp_path), role="internal_fae")
     for tool in ("official_links", "search_knowledge"):
         result = box.dispatch(tool, {"query": "example.com/ego"})
         assert result.status == "not_found"
@@ -145,7 +146,7 @@ def test_forwardable_link_is_delivered_only_by_link_tool(tmp_path):
                                  _records(link_forward=("internal_fae",)),
                                  None, RELEASE_REVIEW)
     activate_release(tmp_path, release_id)
-    box = DaqToolBox(knowledge=ReviewedKnowledge.load_active(tmp_path), role="internal_fae")
+    box = DaqToolBox(knowledge=load_fixture_active(tmp_path), role="internal_fae")
     assert box.dispatch("official_links", {"query": "example.com/ego"}).status == "ok"
     assert box.dispatch("search_knowledge", {"query": "example.com/ego"}).status == "not_found"
 
@@ -162,7 +163,7 @@ def test_lookup_spec_requires_scope_when_verified_values_differ(tmp_path):
     rows.append(other)
     release_id = publish_release(tmp_path, SNAPSHOT, rows, None, RELEASE_REVIEW)
     activate_release(tmp_path, release_id)
-    box = DaqToolBox(knowledge=ReviewedKnowledge.load_active(tmp_path), role="internal_fae")
+    box = DaqToolBox(knowledge=load_fixture_active(tmp_path), role="internal_fae")
     assert box.dispatch("lookup_spec", {"entity": "EGO 1600", "field": "resolution"}).status == "not_found"
     selected = box.dispatch("lookup_spec", {
         "entity": "EGO 1600", "field": "resolution", "conditions": {"variant": "1600"},
@@ -196,7 +197,7 @@ def test_shared_product_name_requires_explicit_resolution_variant(tmp_path):
         {"id": "selected", "capability": "lookup_spec", "field": "horizontal_fov",
          "entities": ["EGO"], "conditions": {"resolution_variant": "1600x1200"}},
     ]
-    box = DaqToolBox(knowledge=ReviewedKnowledge.load_active(tmp_path),
+    box = DaqToolBox(knowledge=load_fixture_active(tmp_path),
                      role="internal_fae", requirements=requirements)
     generic = box.dispatch("lookup_spec", {"entity": "EGO", "field": "horizontal_fov"})
     assert generic.status == "not_found"
@@ -211,13 +212,13 @@ def test_shared_product_name_requires_explicit_resolution_variant(tmp_path):
     single_root = tmp_path / "single"
     single_release = publish_release(single_root, SNAPSHOT, rows[:2], None, RELEASE_REVIEW)
     activate_release(single_root, single_release)
-    single = DaqToolBox(knowledge=ReviewedKnowledge.load_active(single_root),
+    single = DaqToolBox(knowledge=load_fixture_active(single_root),
                         role="internal_fae")
     assert single.dispatch("lookup_spec", {
         "entity": "EGO", "field": "horizontal_fov",
     }).status == "not_found"
     planned = prepare_turn("设备是 EGO；分辨率版本是 1600×1200；水平视场角是多少？")
-    planned_box = DaqToolBox(knowledge=ReviewedKnowledge.load_active(tmp_path),
+    planned_box = DaqToolBox(knowledge=load_fixture_active(tmp_path),
                              role="internal_fae", requirements=planned.requirements)
     planned_result = planned_box.dispatch("lookup_spec", {
         "entity": "EGO", "field": "horizontal_fov",
@@ -228,7 +229,7 @@ def test_shared_product_name_requires_explicit_resolution_variant(tmp_path):
              if item["capability"] == "lookup_spec")
     ]
     broad = prepare_turn("设备是 EGO；分辨率版本是 1600×1200；规格是什么？")
-    broad_box = DaqToolBox(knowledge=ReviewedKnowledge.load_active(tmp_path),
+    broad_box = DaqToolBox(knowledge=load_fixture_active(tmp_path),
                            role="internal_fae", requirements=broad.requirements)
     broad_result = broad_box.dispatch("lookup_spec", {
         "entity": "EGO", "field": "horizontal_fov",
@@ -251,7 +252,7 @@ def test_query_only_experience_cannot_expose_variant_scoped_claim(tmp_path):
         row["access_review"]["record_sha256"] = access_fingerprint(row)
     release_id = publish_release(tmp_path, SNAPSHOT, [entity, claim], None, RELEASE_REVIEW)
     activate_release(tmp_path, release_id)
-    box = DaqToolBox(knowledge=ReviewedKnowledge.load_active(tmp_path), role="internal_fae")
+    box = DaqToolBox(knowledge=load_fixture_active(tmp_path), role="internal_fae")
     assert box.dispatch("experience", {"query": "EGO"}).status == "not_found"
 
 
@@ -270,7 +271,7 @@ def test_software_support_accepts_explicit_variant_selector(tmp_path):
         row["access_review"]["record_sha256"] = access_fingerprint(row)
     release_id = publish_release(tmp_path, SNAPSHOT, [entity, software], None, RELEASE_REVIEW)
     activate_release(tmp_path, release_id)
-    box = DaqToolBox(knowledge=ReviewedKnowledge.load_active(tmp_path), role="internal_fae")
+    box = DaqToolBox(knowledge=load_fixture_active(tmp_path), role="internal_fae")
     args = {"entity": "EGO", "software": "EgoViewer", "platform": "Windows",
             "version": "2.0", "hardware_revision": "A", "connection_mode": "USB",
             "capability": "record"}
@@ -286,7 +287,8 @@ def test_software_support_accepts_explicit_variant_selector(tmp_path):
 def test_local_dev_app_reports_loaded_immutable_release(tmp_path):
     release_id = publish_release(tmp_path, SNAPSHOT, _records(), None, RELEASE_REVIEW)
     activate_release(tmp_path, release_id)
-    app = create_app(provider_mode="offline", knowledge_release_root=tmp_path,
+    release_id, verifier = approve_fixture_for_app(tmp_path)
+    app = create_app(provider_mode="offline", knowledge_release_root=tmp_path, knowledge_approval_verifier=verifier,
                      state_db_path=tmp_path / "state.sqlite3")
     assert TestClient(app).get("/health").json()["knowledge_release"] == release_id
     assert app.state.daq_knowledge.release_id == release_id
@@ -298,8 +300,9 @@ def test_authenticated_app_rejects_real_release_without_role_contract(tmp_path, 
     monkeypatch.setenv("DAQ_PLATFORM_IDENTITY_ENABLED", "true")
     monkeypatch.setenv("DAQ_DATABASE_URL", "postgresql://placeholder/daq")
     monkeypatch.setenv("DAQ_AUTHENTICATED_CONTENT_KEYRING_FILE", str(tmp_path / "keyring.json"))
+    _, verifier = approve_fixture_for_app(tmp_path)
     with pytest.raises(ValueError, match="role_contract"):
-        create_app(provider_mode="offline", knowledge_release_root=tmp_path)
+        create_app(provider_mode="offline", knowledge_release_root=tmp_path, knowledge_approval_verifier=verifier)
 
 
 def test_release_reader_rejects_linked_root_and_malformed_roles(tmp_path):
@@ -307,8 +310,8 @@ def test_release_reader_rejects_linked_root_and_malformed_roles(tmp_path):
     activate_release(tmp_path / "real", release_id)
     (tmp_path / "linked").symlink_to(tmp_path / "real", target_is_directory=True)
     with pytest.raises(ValueError, match="symlink"):
-        ReviewedKnowledge.load_active(tmp_path / "linked")
-    manifest = ReviewedKnowledge.load_active(tmp_path / "real").manifest
+        load_fixture_active(tmp_path / "linked")
+    manifest = load_fixture_active(tmp_path / "real").manifest
     manifest["records"][0]["access_review"]["view_roles"] = [["internal_fae"]]
     with pytest.raises(ValueError, match="review"):
         ReviewedKnowledge.from_manifest(release_id, manifest)
@@ -317,7 +320,7 @@ def test_release_reader_rejects_linked_root_and_malformed_roles(tmp_path):
 def test_release_reader_rejects_unknown_record_kind_and_unsafe_source_path(tmp_path):
     release_id = publish_release(tmp_path, SNAPSHOT, _records(), None, RELEASE_REVIEW)
     activate_release(tmp_path, release_id)
-    manifest = ReviewedKnowledge.load_active(tmp_path).manifest
+    manifest = load_fixture_active(tmp_path).manifest
     bad = deepcopy(manifest)
     bad["records"][0]["kind"] = "unreviewed_note"
     with pytest.raises(ValueError, match="record"):
@@ -331,7 +334,7 @@ def test_release_reader_rejects_unknown_record_kind_and_unsafe_source_path(tmp_p
 def test_unresolved_or_platform_hinted_scope_cannot_satisfy_evidence(tmp_path):
     release_id = publish_release(tmp_path, SNAPSHOT, _records(), None, RELEASE_REVIEW)
     activate_release(tmp_path, release_id)
-    view = ReviewedKnowledge.load_active(tmp_path)
+    view = load_fixture_active(tmp_path)
     requirements = [
         {"id": "unresolved", "capability": "lookup_spec", "field": "resolution",
          "entities": [], "conditions": {}, "reason": "intent_or_entity_not_grounded"},
@@ -360,7 +363,7 @@ def test_non_link_record_cannot_embed_unreviewed_url(tmp_path):
     release_id = publish_release(tmp_path, SNAPSHOT, rows, None, RELEASE_REVIEW)
     with pytest.raises(ValueError, match="URL"):
         activate_release(tmp_path, release_id)
-    assert ReviewedKnowledge.load_active(tmp_path) is None
+    assert load_fixture_active(tmp_path) is None
     import json
     manifest = json.loads((tmp_path / "releases" / release_id / "manifest.json").read_text())
     with pytest.raises(ValueError, match="URL"):
@@ -375,7 +378,7 @@ def test_non_link_record_cannot_embed_protocol_relative_delivery_link(tmp_path):
     release_id = publish_release(tmp_path, SNAPSHOT, rows, None, RELEASE_REVIEW)
     with pytest.raises(ValueError, match="URL"):
         activate_release(tmp_path, release_id)
-    assert ReviewedKnowledge.load_active(tmp_path) is None
+    assert load_fixture_active(tmp_path) is None
     import json
     manifest = json.loads((tmp_path / "releases" / release_id / "manifest.json").read_text())
     with pytest.raises(ValueError, match="URL"):
@@ -392,7 +395,7 @@ def test_non_link_record_cannot_embed_bare_delivery_link(tmp_path, value):
     release_id = publish_release(tmp_path, SNAPSHOT, rows, None, RELEASE_REVIEW)
     with pytest.raises(ValueError, match="URL"):
         activate_release(tmp_path, release_id)
-    assert ReviewedKnowledge.load_active(tmp_path) is None
+    assert load_fixture_active(tmp_path) is None
     import json
     manifest = json.loads((tmp_path / "releases" / release_id / "manifest.json").read_text())
     with pytest.raises(ValueError, match="URL"):
@@ -407,7 +410,7 @@ def test_non_link_record_cannot_hide_delivery_link_in_data_key(tmp_path):
     release_id = publish_release(tmp_path, SNAPSHOT, rows, None, RELEASE_REVIEW)
     with pytest.raises(ValueError, match="URL"):
         activate_release(tmp_path, release_id)
-    assert ReviewedKnowledge.load_active(tmp_path) is None
+    assert load_fixture_active(tmp_path) is None
     import json
     manifest = json.loads((tmp_path / "releases" / release_id / "manifest.json").read_text())
     with pytest.raises(ValueError, match="URL"):
@@ -439,7 +442,7 @@ def test_conflict_candidate_pdf_source_refs_are_provenance_not_links(tmp_path):
                     ]}}
     release_id = publish_release(tmp_path, snapshot, [row], None, RELEASE_REVIEW)
     activate_release(tmp_path, release_id)
-    view = ReviewedKnowledge.load_active(tmp_path)
+    view = load_fixture_active(tmp_path)
     assert view.records_for("internal_fae") == []
     assert view.manifest["records"][0]["data"]["candidates"][0]["source_ref"] == ref
     assert view.manifest["records"][0]["data"]["candidates"][1]["source_ref"] == second_ref
@@ -467,7 +470,7 @@ def test_conflict_candidate_value_cannot_hide_unreviewed_url(tmp_path):
     release_id = publish_release(tmp_path, snapshot, [row], None, RELEASE_REVIEW)
     with pytest.raises(ValueError, match="URL"):
         activate_release(tmp_path, release_id)
-    assert ReviewedKnowledge.load_active(tmp_path) is None
+    assert load_fixture_active(tmp_path) is None
     import json
     manifest = json.loads((tmp_path / "releases" / release_id / "manifest.json").read_text())
     with pytest.raises(ValueError, match="URL"):
@@ -492,7 +495,7 @@ def test_procedure_and_software_require_exact_product_topology_and_applicability
     }))
     release_id = publish_release(tmp_path, SNAPSHOT, rows, None, RELEASE_REVIEW)
     activate_release(tmp_path, release_id)
-    box = DaqToolBox(knowledge=ReviewedKnowledge.load_active(tmp_path), role="internal_fae",
+    box = DaqToolBox(knowledge=load_fixture_active(tmp_path), role="internal_fae",
                      requirements=[{"id": "record", "capability": "lookup_procedure",
                                     "entities": [], "conditions": {}}])
     assert box.dispatch("lookup_procedure", {"task": "record", "entity": "other-product"}).status == "not_found"
@@ -521,7 +524,7 @@ def test_exact_user_software_scope_can_cover_matching_requirement(tmp_path):
     requirement = next(row for row in plan.requirements
                        if row["capability"] == "check_software_support")
     assert requirement["conditions"]["connection"] == "USB"
-    box = DaqToolBox(knowledge=ReviewedKnowledge.load_active(tmp_path), role="internal_fae",
+    box = DaqToolBox(knowledge=load_fixture_active(tmp_path), role="internal_fae",
                      requirements=plan.requirements)
     result = box.dispatch("check_software_support", {
         "entity": "EGO 1600", "software": "EgoViewer", "platform": "Windows",
@@ -544,7 +547,7 @@ def test_broad_software_question_is_not_covered_by_recording_only_evidence(tmp_p
     plan = prepare_turn("设备是 EGO 1600，硬件修订是 A，连接方式是 USB，平台是 Windows，Viewer 2.0 兼容吗？")
     requirement = next(row for row in plan.requirements
                        if row["capability"] == "check_software_support")
-    box = DaqToolBox(knowledge=ReviewedKnowledge.load_active(tmp_path), role="internal_fae",
+    box = DaqToolBox(knowledge=load_fixture_active(tmp_path), role="internal_fae",
                      requirements=plan.requirements)
     result = box.dispatch("check_software_support", {
         "entity": "EGO 1600", "software": "EgoViewer", "platform": "Windows",
@@ -565,7 +568,7 @@ def test_viewer_record_cannot_certify_separate_sdk_version(tmp_path):
     }))
     release_id = publish_release(tmp_path, SNAPSHOT, rows, None, RELEASE_REVIEW)
     activate_release(tmp_path, release_id)
-    box = DaqToolBox(knowledge=ReviewedKnowledge.load_active(tmp_path), role="internal_fae",
+    box = DaqToolBox(knowledge=load_fixture_active(tmp_path), role="internal_fae",
                      requirements=[{"id": "combo", "capability": "check_software_support",
                                     "entities": ["EGO 1600"], "software": "viewer",
                                     "conditions": {"platform": "Windows", "variant": "A",
@@ -584,7 +587,7 @@ def test_viewer_record_cannot_certify_separate_sdk_version(tmp_path):
 def test_generic_search_does_not_certify_unresolved_product_evidence(tmp_path):
     release_id = publish_release(tmp_path, SNAPSHOT, _records(), None, RELEASE_REVIEW)
     activate_release(tmp_path, release_id)
-    box = DaqToolBox(knowledge=ReviewedKnowledge.load_active(tmp_path), role="internal_fae",
+    box = DaqToolBox(knowledge=load_fixture_active(tmp_path), role="internal_fae",
                      requirements=[{"id": "search", "capability": "search_knowledge",
                                     "entities": [], "conditions": {}}])
     result = box.dispatch("search_knowledge", {"query": "resolution"})
@@ -596,7 +599,7 @@ def test_entity_identity_does_not_certify_platform_filtered_catalog(tmp_path):
     release_id = publish_release(tmp_path, SNAPSHOT, [_records()[0]], None, RELEASE_REVIEW)
     activate_release(tmp_path, release_id)
     plan = prepare_turn("平台是 Linux，有哪些型号可用？")
-    box = DaqToolBox(knowledge=ReviewedKnowledge.load_active(tmp_path), role="internal_fae",
+    box = DaqToolBox(knowledge=load_fixture_active(tmp_path), role="internal_fae",
                      requirements=plan.requirements)
     result = box.dispatch("catalog", {"query": ""})
     assert result.status == "ok"

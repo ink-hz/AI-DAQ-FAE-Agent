@@ -61,12 +61,19 @@ class ReviewedKnowledge:
         self._sections = tuple(deepcopy(manifest.get("sections", [])))
 
     @classmethod
-    def load_active(cls, root: Path) -> "ReviewedKnowledge | None":
+    def load_active(cls, root: Path, *, verify_approval=None, runtime_release=None, upstream_sha=None) -> "ReviewedKnowledge | None":
         if root.is_symlink():
             raise ValueError("knowledge release root must not be a symlink")
         active = read_active_release(root)
         if active is None:
             return None
+        if any(active['manifest'].get(key) for key in ('sources', 'records', 'sections')):
+            from .release_readiness import _checked
+            manifest = _checked(root, active['release_id'], verify_approval, require_current_links=False)
+            runtime = manifest['review']['readiness']['runtime']
+            if runtime_release is None or upstream_sha is None or runtime['release'] != runtime_release \
+                    or runtime['upstream_sha'] != upstream_sha:
+                raise ValueError('release readiness runtime identity mismatch')
         return cls.from_manifest(active["release_id"], active["manifest"])
 
     @classmethod

@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from daq_fae.app import create_app
-from daq_fae.knowledge.releases import activate_release
+from daq_fae.knowledge.releases import _activate_release as activate_release
 from src.platform_identity.models import PlatformIdentityError
 from src.platform_identity.service import InMemoryAuthenticatedSessionRepository
 from tests.test_platform_identity import CODE, FakePlatform, environment as identity_environment
@@ -14,6 +14,7 @@ from tests.test_authenticated_persistence import Conversations, Feedback, enviro
 from tests.test_durable_state import store
 from tests.test_api_transport import terminal
 from test_section_tools import make_view
+from synthetic_release_helpers import approve_fixture_for_app
 
 pytest_plugins = ('tests.test_durable_state',)
 
@@ -48,7 +49,7 @@ def test_authenticated_release_roles_history_and_replay(tmp_path, monkeypatch, p
     root = tmp_path / 'release'
     view = make_view(root)
     from tests.test_reviewed_knowledge import _records, SNAPSHOT, RELEASE_REVIEW
-    from daq_fae.knowledge.releases import publish_release
+    from daq_fae.knowledge.releases import _publish_release as publish_release
     manifest = view.manifest
     release_id = publish_release(root, SNAPSHOT,
         manifest['records'] + [_records(link_forward=('internal_fae',))[-1]], None, RELEASE_REVIEW,
@@ -76,7 +77,8 @@ def test_authenticated_release_roles_history_and_replay(tmp_path, monkeypatch, p
                'outcome': 'safe_abstained', 'sources': results[0].sources, 'tool_calls': [],
                'capability_coverage': {}}
     monkeypatch.setattr('daq_fae.authenticated_chat.LoopRuntime.run', run)
-    app = create_app(provider_mode='offline', knowledge_release_root=root,
+    _, verifier = approve_fixture_for_app(root)
+    app = create_app(provider_mode='offline', knowledge_release_root=root, knowledge_approval_verifier=verifier,
                      platform_client=FakePlatform(),
                      identity_repository=InMemoryAuthenticatedSessionRepository(),
                      conversation_repository=Conversations(), feedback_store=Feedback(),
@@ -164,8 +166,9 @@ def test_nonempty_task_mode_rejects_missing_role_bound_result_contract(tmp_path,
     monkeypatch.setenv('DAQ_DATABASE_URL', 'postgresql://synthetic/daq')
     monkeypatch.setenv('DAQ_AUTHENTICATED_CONTENT_KEYRING_FILE', str(tmp_path / 'unused'))
     monkeypatch.setenv('DAQ_KNOWLEDGE_ENTITLEMENTS_FILE', str(path))
+    _, verifier = approve_fixture_for_app(tmp_path / 'release')
     with pytest.raises(ValueError, match='daq_knowledge_task_role_replay_contract_missing'):
-        create_app(provider_mode='offline', knowledge_release_root=tmp_path / 'release')
+        create_app(provider_mode='offline', knowledge_release_root=tmp_path / 'release', knowledge_approval_verifier=verifier)
 
 
 @pytest.mark.parametrize('window', ['before_write', 'after_write', 'after_commit',
@@ -188,7 +191,8 @@ def test_revocation_at_commit_or_frame_boundary_never_sends_private_terminal(
     monkeypatch.setattr('daq_fae.authenticated_chat.LoopRuntime.run', run)
     durable = store(pg_database)
     conversations = Conversations()
-    app = create_app(provider_mode='offline', knowledge_release_root=tmp_path / 'release',
+    _, verifier = approve_fixture_for_app(tmp_path / 'release')
+    app = create_app(provider_mode='offline', knowledge_release_root=tmp_path / 'release', knowledge_approval_verifier=verifier,
                      platform_client=FakePlatform(), identity_repository=InMemoryAuthenticatedSessionRepository(),
                      conversation_repository=conversations, feedback_store=Feedback(),
                      review_store=object(), durable_state=durable)

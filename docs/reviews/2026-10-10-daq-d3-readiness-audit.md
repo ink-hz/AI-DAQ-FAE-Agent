@@ -24,3 +24,24 @@ content remain in the Git-ignored main-checkout private audit directory (0700;
 files 0600). This tracked audit contains no real source payload, URL or grant.
 Independent implementation review remains required. Static signed readiness is
 not a substitute for independently authenticated original evidence or D4 answers.
+
+
+## Independent review correction
+
+The initial standalone wrapper left legacy public APIs, CLI and application
+loading able to use an unsigned package. Seven failing tests reproduced those
+entrypoint bypasses and a pointer fsync failure after replacement. Public nonempty
+publication/activation now require trusted D3 adapters; CLI without adapters
+refuses them. Runtime loading independently checks whole-package approval and
+actual runtime/upstream identity. No production test bypass switch exists.
+
+Existing offline contract tests explicitly use private storage primitives; actual
+application tests sign synthetic D3 bundles and inject a test-owned verifier.
+Pointer writes are inside the compensation boundary. A failure after replacement
+restores the original pointer, while failure to restore remains an explicit error.
+
+An additional v2 integration regression showed natural link expiry caused section
+consistency validation to reject unrelated facts during reload. Runtime integrity
+validation now preserves those facts while continuing to hide expired links.
+Publication/activation/rollback still require current reviews. This does not grant
+any real candidate approval or activate a real release.

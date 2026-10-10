@@ -70,10 +70,10 @@ def _read_release(root: Path, release_id: str) -> tuple[dict, str]:
     return manifest, release_id
 
 
-def publish_release(root: Path, snapshot: dict, records: list[dict],
+def _publish_release(root: Path, snapshot: dict, records: list[dict],
                     previous_release: str | None, review: dict, *,
                     sections: list[dict] | None = None, bodies: dict[str, str] | None = None) -> str:
-    """Stage a reviewed, content-addressed release; never activate implicitly."""
+    """Private storage primitive for D3 and isolated offline contract fixtures."""
     if not _review_ok(review):
         raise ValueError("release review missing")
     if not isinstance(snapshot.get("archive_manifest_sha256"), str) or not \
@@ -142,8 +142,8 @@ def publish_release(root: Path, snapshot: dict, records: list[dict],
     return release_id
 
 
-def activate_release(root: Path, release_id: str) -> None:
-    """Atomically switch the local active pointer, including for rollback."""
+def _activate_release(root: Path, release_id: str) -> None:
+    """Private pointer primitive; callers must enforce D3 and hold its lock."""
     manifest, checked_id = _read_release(root, release_id)
     if any(row["kind"] == "link" and row["answerable"] and not link_review_valid(row)
            for row in manifest["records"]):
@@ -183,3 +183,32 @@ def read_active_release(root: Path) -> dict | None:
         raise ValueError("active pointer invalid")
     manifest, _ = _read_release(root, release_id)
     return {"release_id": release_id, "manifest": manifest}
+
+
+def publish_release(root, snapshot, records, previous_release, review, *,
+                    sections=None, bodies=None, verify_approval=None):
+    """Governed public publisher. Only a genuinely empty bootstrap needs no D3."""
+    if not records and not sections and not bodies and not snapshot.get('sources') and not snapshot.get('chunks'):
+        return _publish_release(root, snapshot, records, previous_release, review,
+                                sections=sections, bodies=bodies)
+    from .release_readiness import stage_release
+    bundle = review.get('readiness') if isinstance(review, dict) else None
+    if not isinstance(bundle, dict) or not callable(verify_approval):
+        raise ValueError('release readiness approval adapter required')
+    expected = {key: value for key, value in review.items() if key != 'readiness'}
+    if any(bundle.get(key) != value for key, value in {
+            'snapshot': snapshot, 'records': records, 'previous_release': previous_release,
+            'review': expected, 'sections': sections, 'bodies': bodies}.items()):
+        raise ValueError('release readiness input binding mismatch')
+    return stage_release(root, bundle, verify_approval=verify_approval)
+
+
+def activate_release(root, release_id, *, verify_approval=None, observe=None):
+    """Governed public activation; callbacks are trusted server-owned dependencies."""
+    manifest, _ = _read_release(root, release_id)
+    if not any(manifest.get(key) for key in ('sources', 'records', 'sections')):
+        return _activate_release(root, release_id)
+    if not callable(verify_approval) or not callable(observe):
+        raise ValueError('release readiness approval and Dev observation adapters required')
+    from .release_readiness import activate_checked
+    return activate_checked(root, release_id, verify_approval=verify_approval, observe=observe)

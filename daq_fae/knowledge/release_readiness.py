@@ -2,7 +2,7 @@
 
 Trusted operators supply approval verification and Dev health/trace observation.
 This is not an identity provider, deployment client, or a replacement for D4.
-Legacy low-level release APIs remain available for empty/bootstrap test workflows.
+Public release APIs and application loads require this gate for nonempty knowledge.
 """
 from collections import Counter
 from copy import deepcopy
@@ -28,12 +28,13 @@ def _text(value):
     return isinstance(value, str) and bool(value.strip())
 
 
-def _manifest(bundle):
+def _manifest(bundle, *, require_current_links=True):
     snapshot = bundle['snapshot']
-    records, findings = validate_records(bundle['records'], snapshot)
+    records, findings = validate_records(bundle['records'], snapshot, require_current_links=require_current_links)
     if findings:
         raise ValueError('record validation failed')
-    sections = compile_sections(bundle['sections'], bundle['bodies'], records, snapshot)
+    sections = compile_sections(bundle['sections'], bundle['bodies'], records, snapshot,
+                                require_current_links=require_current_links)
     manifest = {
         'format_version': 2, 'archive_manifest_sha256': snapshot['archive_manifest_sha256'],
         'source_date': snapshot.get('source_date'),
@@ -54,7 +55,7 @@ def _manifest(bundle):
     return manifest
 
 
-def audit_readiness(bundle, *, verify_approval=None):
+def audit_readiness(bundle, *, verify_approval=None, _require_current_links=True):
     """Read-only enumerated rejection; signatures bind every input and exclusion.
 
     verify_approval(reviewer, canonical_payload_sha256, signature) must be supplied
@@ -121,7 +122,7 @@ def audit_readiness(bundle, *, verify_approval=None):
                 approved = False
         check(approved, 'independent_approval')
         try:
-            manifest = _manifest(b)
+            manifest = _manifest(b, require_current_links=_require_current_links)
             expected = sorted(row['id'] for row in manifest['records'] if row['answerable'])
             check(isinstance(s.get('answerable_ids'), list) and sorted(s['answerable_ids']) == expected
                   and bool(expected), 'answerable_scope')
@@ -133,8 +134,8 @@ def audit_readiness(bundle, *, verify_approval=None):
             'gate': 'daq-dev-readiness/v1', 'answer_quality': 'pending_D4'}
 
 
-def _require(bundle, verify):
-    report = audit_readiness(bundle, verify_approval=verify)
+def _require(bundle, verify, *, require_current_links=True):
+    report = audit_readiness(bundle, verify_approval=verify, _require_current_links=require_current_links)
     if not report['ready']:
         raise ValueError('release readiness rejected: ' + ', '.join(report['reasons']))
 
@@ -142,7 +143,7 @@ def _require(bundle, verify):
 def stage_release(root, bundle, *, verify_approval):
     b = deepcopy(bundle)
     _require(b, verify_approval)
-    return releases.publish_release(root, b['snapshot'], b['records'], b['previous_release'],
+    return releases._publish_release(root, b['snapshot'], b['records'], b['previous_release'],
                                     {**b['review'], 'readiness': b},
                                     sections=b['sections'], bodies=b['bodies'])
 
@@ -159,11 +160,11 @@ def _lock(root):
         os.close(fd)
 
 
-def _checked(root, rid, verify):
+def _checked(root, rid, verify, *, require_current_links=True):
     manifest, _ = releases._read_release(root, rid)
     bundle = manifest['review'].get('readiness')
-    _require(bundle, verify)
-    if releases._digest(releases._json_bytes(_manifest(bundle))) != rid:
+    _require(bundle, verify, require_current_links=require_current_links)
+    if releases._digest(releases._json_bytes(_manifest(bundle, require_current_links=require_current_links))) != rid:
         raise ValueError('release readiness content binding mismatch')
     return manifest
 
@@ -182,14 +183,19 @@ def _observation(observe, rid, manifest):
 
 
 def _switch(root, rid, manifest, previous, observe):
-    releases.activate_release(root, rid)
+    phase = 'pointer transition'
     try:
+        releases._activate_release(root, rid)
+        phase = 'observation'
         return _observation(observe, rid, manifest)
     except Exception as failure:
         # Restore pointer before reporting observation failure. Restore errors are
         # deliberately not hidden; a caller must not claim successful rollback.
+        current = releases.read_active_release(root)
+        if current == previous:
+            raise
         if previous:
-            releases.activate_release(root, previous['release_id'])
+            releases._activate_release(root, previous['release_id'])
         else:
             (root/'active.json').unlink()
             fd = os.open(root, os.O_RDONLY)
@@ -197,7 +203,7 @@ def _switch(root, rid, manifest, previous, observe):
                 os.fsync(fd)
             finally:
                 os.close(fd)
-        raise ValueError('Dev observation failed; previous pointer restored') from failure
+        raise ValueError(f'Dev {phase} failed; previous pointer restored') from failure
 
 
 def activate_checked(root, release_id, *, verify_approval, observe):

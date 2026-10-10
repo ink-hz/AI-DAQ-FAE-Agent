@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from daq_fae.knowledge.releases import (
-    activate_release, publish_release, read_active_release,
+    _activate_release as activate_release, _publish_release as publish_release, read_active_release,
 )
 
 

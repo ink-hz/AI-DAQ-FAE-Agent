@@ -136,13 +136,13 @@ def _metadata_findings(section, rows, by_id):
     return findings
 
 
-def audit_sections(sections, bodies, records, snapshot, *, historical_records=None):
+def audit_sections(sections, bodies, records, snapshot, *, historical_records=None, require_current_links=True):
     """Audit supplied immutable inputs. Findings are fatal to consistency.
 
     This result is NOT a release or answerability decision. Context dependencies
     establish impact edges only; record_assertions establish exact equality.
     """
-    normalized, record_findings = validate_records(records, snapshot)
+    normalized, record_findings = validate_records(records, snapshot, require_current_links=require_current_links)
     sources = {row['path']: row for row in snapshot.get('sources', [])}
     chunks = {(row['source_path'], row['source_sha256'], json.dumps(row['locator'], sort_keys=True))
               for row in snapshot.get('chunks', [])}
