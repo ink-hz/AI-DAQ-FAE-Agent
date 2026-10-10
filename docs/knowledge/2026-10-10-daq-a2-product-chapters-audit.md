@@ -20,9 +20,9 @@
 
 产物指纹：
 
-- 章节索引：`b6bd000373af6bebaee8bc7410c523e97c75fdbe1fa1c4f16b3bc3de975971a7`
+- 章节索引：`d86b13baee11d735392dfd4f69398df30dde9a745664031602e2cccedc513cc1`
 - 重抽取审计：`d021290849ee6303d0d26e05ae9134ab7a3ece7d14554a3ce8fd459114744637`
-- 静态验证报告：`a36994bc4bb3dec13880e9fd2608c279d46e8f7e373ad3aeb717baa21b38ba2f`
+- 静态验证报告：`4135b43a0e4b7516b8e20548d2cd265ed6151b1ae4c5ec2b6ba242d41523bd73`
 
 后端完整测试使用已有 Python 3.11 环境执行 `python -m pytest -q tests`：**267 passed，6 warnings**。最初系统 Python 3.9 因语言版本及缺包无法收集测试，随后使用项目兼容环境通过；未通过改动运行时代码掩盖环境问题。本批仅提交本脱敏审计，没有新增运行时代码。
 
@@ -82,3 +82,31 @@ PY
 ```json
 {"distinct_sources": 15, "fresh_extraction_sha256_checks": "passed", "locator_reread_text_checks": "passed", "original_sha256_checks": "passed", "source_locations": 35}
 ```
+
+## 二次复核：跨来源摘要依赖闭合
+
+独立复核发现两个产品的入口/边界摘要缺少其跨语言冲突的英文来源。已补齐四节引用，并检查同类摘要：HUB 入口/边界的跨来源冲突以及另四个提及冲突的规格/软件段落均显式关联对应冲突章节并继承完整来源。各依赖保持相同实体；没有凭间接 K7 字段依赖替代原件引用。私有正文、候选状态、事实/权限签认及角色限制未改变。
+
+私有生成器现建立摘要到冲突章节的依赖及来源闭包。validator 的指南断言绑定完整 path/hash/locator，措辞断言绑定目标章节正文；另固定检查本次两个英文原件位置，防止错误文件同一行号或其他章节的正确措辞导致误通过。
+
+确切重新制备和验证命令：
+
+```sh
+python3 /Users/neo/Developer/work/AI-DAQ-FAE-Agent/data/knowledge/curated/a2-20261010/build_private.py
+python3 /Users/neo/Developer/work/AI-DAQ-FAE-Agent/data/knowledge/curated/a2-20261010/validate_private.py
+```
+
+两条命令退出码均为 `0`，实际输出依次为：
+
+```json
+{"products": 8, "files": 31, "sections": 66, "conflict_sections": 7, "fresh_source_locations": 35, "index_sha256": "d86b13baee11d735392dfd4f69398df30dde9a745664031602e2cccedc513cc1"}
+{"checks": "section identity/body hashes/source locations/dependencies/permissions/relative links/no URL or local-path or Agent prose", "products": 8, "markdown_files": 31, "sections": 66, "numeric_presence_flags": [], "review_regression_checks": "exact guide and English source refs, target-section wording, and conflict-summary dependency closure passed", "fact_review": "pending; mechanical verification is not approval", "online_eligible": false}
+```
+
+随后再次逐字执行上一节完整的 `python3 - <<'PY'` 原件定位重读命令（脚本未变），退出码 `0`，实际输出：
+
+```json
+{"distinct_sources": 15, "fresh_extraction_sha256_checks": "passed", "locator_reread_text_checks": "passed", "original_sha256_checks": "passed", "source_locations": 35}
+```
+
+本次未重跑 pytest；后端代码未修改。原件抽取审计哈希未变；章节索引与验证报告的最新哈希已在上文产物指纹更新。
