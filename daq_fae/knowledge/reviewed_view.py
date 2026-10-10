@@ -58,6 +58,7 @@ class ReviewedKnowledge:
         self.release_id = release_id
         self.manifest = deepcopy(manifest)
         self._records = tuple(deepcopy(manifest["records"]))
+        self._sections = tuple(deepcopy(manifest.get("sections", [])))
 
     @classmethod
     def load_active(cls, root: Path) -> "ReviewedKnowledge | None":
@@ -72,8 +73,14 @@ class ReviewedKnowledge:
     def from_manifest(cls, release_id: str, manifest: dict) -> "ReviewedKnowledge":
         if not isinstance(release_id, str) or not _SHA.fullmatch(release_id):
             raise ValueError("knowledge release identity invalid")
-        if not isinstance(manifest, dict) or manifest.get("format_version") != 1:
+        if not isinstance(manifest, dict) or type(manifest.get("format_version")) is not int \
+                or manifest["format_version"] not in {1, 2}:
             raise ValueError("knowledge release format invalid")
+        if manifest["format_version"] == 1 and any(key in manifest for key in
+                ("sections", "section_count", "source_locations", "runtime_contract")):
+            raise ValueError("knowledge release format v1 is records only")
+        if manifest["format_version"] == 2 and manifest.get("runtime_contract") != "daq-reviewed-sections-v2":
+            raise ValueError("knowledge release format runtime contract invalid")
         if not isinstance(manifest.get("sources"), list) or not isinstance(manifest.get("records"), list):
             raise ValueError("knowledge release inventory invalid")
         if manifest.get("source_count") != len(manifest["sources"]) or \
@@ -138,6 +145,9 @@ class ReviewedKnowledge:
                     raise ValueError("knowledge link review invalid")
         if manifest.get("answerable_count") != answerable:
             raise ValueError("knowledge release answerable count invalid")
+        if manifest["format_version"] == 2:
+            from .section_release import validate_section_manifest
+            validate_section_manifest(manifest)
         return cls(release_id, manifest)
 
     def records_for(self, role: str, *, for_delivery: bool = False) -> list[dict]:
@@ -154,3 +164,11 @@ class ReviewedKnowledge:
                 continue
             visible.append(deepcopy(row))
         return visible
+
+    def sections_for(self, role: str, *, for_delivery: bool = False) -> list[dict]:
+        """Filter whole sections before retrieval; never expose a mixed paragraph."""
+        if role not in ROLES:
+            raise ValueError("knowledge role invalid")
+        return [deepcopy(section) for section in self._sections
+                if role in section["view_roles"]
+                and (not for_delivery or role in section["forward_roles"])]

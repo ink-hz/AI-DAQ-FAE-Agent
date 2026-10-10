@@ -13,6 +13,8 @@ import stat
 import tempfile
 
 from daq_fae.knowledge.records import validate_records
+from daq_fae.knowledge.section_release import (compile_sections, section_fingerprint,
+                                               section_indices)
 
 
 _RELEASE_ID = re.compile(r"^[0-9a-f]{64}$")
@@ -62,11 +64,21 @@ def _read_release(root: Path, release_id: str) -> tuple[dict, str]:
     data = manifest_path.read_bytes()
     if _digest(data) != release_id:
         raise ValueError("release manifest digest mismatch")
-    return json.loads(data), release_id
+    manifest = json.loads(data)
+    from daq_fae.knowledge.reviewed_view import ReviewedKnowledge
+    if not isinstance(manifest, dict) or type(manifest.get("format_version")) is not int \
+            or manifest["format_version"] not in {1, 2}:
+        raise ValueError("knowledge release format invalid")
+    if manifest["format_version"] == 1 and "sections" in manifest:
+        raise ValueError("knowledge release format v1 is records only")
+    if manifest["format_version"] == 2:
+        ReviewedKnowledge.from_manifest(release_id, manifest)
+    return manifest, release_id
 
 
 def publish_release(root: Path, snapshot: dict, records: list[dict],
-                    previous_release: str | None, review: dict) -> str:
+                    previous_release: str | None, review: dict, *,
+                    sections: list[dict] | None = None, bodies: dict[str, str] | None = None) -> str:
     """Stage a reviewed, content-addressed release; never activate implicitly."""
     if not _review_ok(review):
         raise ValueError("release review missing")
@@ -93,6 +105,20 @@ def publish_release(root: Path, snapshot: dict, records: list[dict],
         "previous_release": previous_release,
         "review": review,
     }
+    if sections is not None:
+        compiled = compile_sections(sections, bodies, normalized, snapshot)
+        manifest.update(format_version=2, sections=compiled,
+                        runtime_contract="daq-reviewed-sections-v2",
+                        source_locations=sorted([
+                            {k: chunk[k] for k in ("source_path", "source_sha256", "locator")}
+                            for chunk in snapshot.get("chunks", [])], key=lambda c: _json_bytes(c)))
+        manifest.update(section_indices(compiled, normalized))
+    elif bodies is not None:
+        raise ValueError("section bodies require sections")
+    # Apply runtime URL/role/schema gates before creating a staged artifact.
+    from daq_fae.knowledge.reviewed_view import ReviewedKnowledge
+    if sections is not None:
+        ReviewedKnowledge.from_manifest("0" * 64, manifest)
     data = _json_bytes(manifest)
     release_id = _digest(data)
     releases = _prepare_root(root)
