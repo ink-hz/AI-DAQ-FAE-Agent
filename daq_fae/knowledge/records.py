@@ -103,7 +103,7 @@ def _review_valid(review: object) -> bool:
     return True
 
 
-def link_review_valid(row: dict) -> bool:
+def link_review_valid(row: dict, *, require_current: bool = True) -> bool:
     """Validate a separately reviewed page bound to exact delivery applicability."""
     review = row.get("link_review")
     data = row.get("data", {})
@@ -126,7 +126,8 @@ def link_review_valid(row: dict) -> bool:
     except (KeyError, TypeError, ValueError):
         return False
     return (review.get("final_url") == url and
-            captured <= reviewed <= date.today() <= expires and
+            captured <= reviewed <= expires and reviewed <= date.today() and
+            (not require_current or date.today() <= expires) and
             all(_nonempty(page.get(key)) for key in ("title", "version")) and
             isinstance(page.get("snapshot_sha256"), str) and
             re.fullmatch(r"[0-9a-f]{64}", page["snapshot_sha256"]) is not None and

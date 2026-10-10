@@ -20,8 +20,14 @@ restricted C4 workspace. No raw pages, source URLs, credentials or owner
 signatures are committed. No knowledge pointer, deployment or camera code changed.
 
 Validation: TDD reproduced eleven gate failures before implementation. The final
-DAQ suite passes 571 tests (six existing dependency warnings). Synthetic cases
+DAQ suite passes 577 tests (six existing dependency warnings). Synthetic cases
 cover positive current-role delivery, unreviewed candidates, view-only access,
 redirect mismatch, malformed/local URLs, missing browser metadata, stale page
 fingerprints and expiry in an already loaded view. Dev model replay and human
 fact/access/link approval remain later release gates.
+
+Independent review found a release availability defect: reloading after one link
+expired rejected unrelated knowledge. Loading now validates static integrity and
+omits only expired links at the role view. Staging/activation still reject expired
+links before changing any pointer. Time-advance/reload, tampered expired reviews,
+and failed staging/activation pointer safety are covered by six new tests.

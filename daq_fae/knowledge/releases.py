@@ -12,7 +12,7 @@ import re
 import stat
 import tempfile
 
-from daq_fae.knowledge.records import validate_records
+from daq_fae.knowledge.records import link_review_valid, validate_records
 from daq_fae.knowledge.section_release import (compile_sections, section_fingerprint,
                                                section_indices)
 
@@ -144,7 +144,10 @@ def publish_release(root: Path, snapshot: dict, records: list[dict],
 
 def activate_release(root: Path, release_id: str) -> None:
     """Atomically switch the local active pointer, including for rollback."""
-    _manifest, checked_id = _read_release(root, release_id)
+    manifest, checked_id = _read_release(root, release_id)
+    if any(row["kind"] == "link" and row["answerable"] and not link_review_valid(row)
+           for row in manifest["records"]):
+        raise ValueError("cannot activate release with expired link review")
     releases = _prepare_root(root)
     pointer = root / "active.json"
     if pointer.is_symlink():

@@ -142,7 +142,8 @@ class ReviewedKnowledge:
                 raise ValueError("knowledge review invalid")
             if row.get("kind") == "link":
                 review = row.get("link_review")
-                if not link_review_valid(row) or review.get("record_sha256") != record_fingerprint(row):
+                if not link_review_valid(row, require_current=False) or \
+                        review.get("record_sha256") != record_fingerprint(row):
                     raise ValueError("knowledge link review invalid")
         if manifest.get("answerable_count") != answerable:
             raise ValueError("knowledge release answerable count invalid")

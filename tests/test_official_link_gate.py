@@ -111,3 +111,58 @@ def test_view_without_forward_permission_is_not_link_delivery():
     result = DaqToolBox(knowledge=view, role='internal_fae').dispatch('official_links', {'query': 'EGO'})
     assert result.status == 'not_found'
     assert result.sources == []
+
+
+def advance_past_link_expiry(monkeypatch):
+    from datetime import date
+    from daq_fae.knowledge import records
+    class Later(date):
+        @classmethod
+        def today(cls):
+            return cls(2100, 1, 1)
+    monkeypatch.setattr(records, 'date', Later)
+
+
+def test_reload_after_link_expiry_preserves_unrelated_knowledge(tmp_path, monkeypatch):
+    rid = publish_release(tmp_path, SNAPSHOT, reviewed_rows(), None, RELEASE_REVIEW)
+    activate_release(tmp_path, rid)
+    pointer = (tmp_path / 'active.json').read_bytes()
+    advance_past_link_expiry(monkeypatch)
+    view = ReviewedKnowledge.load_active(tmp_path)
+    assert view.release_id == rid
+    box = DaqToolBox(knowledge=view, role='internal_fae')
+    assert box.dispatch('official_links', {'query': 'EGO'}).status == 'not_found'
+    assert box.dispatch('lookup_spec', {'entity': 'EGO 1600', 'field': 'resolution'}).status == 'ok'
+    assert {r['kind'] for r in view.records_for('internal_fae')} == {'entity', 'claim'}
+    assert (tmp_path / 'active.json').read_bytes() == pointer
+
+
+@pytest.mark.parametrize('damage', ['fingerprint', 'reviewer', 'redirect', 'expiry_before_review'])
+def test_expired_link_still_requires_intact_review_on_reload(damage, monkeypatch):
+    rows = reviewed_rows()
+    advance_past_link_expiry(monkeypatch)
+    row = rows[-1]
+    if damage == 'fingerprint': row['link_review']['record_sha256'] = 'd' * 64
+    elif damage == 'reviewer': row['link_review']['reviewer'] = ''
+    elif damage == 'redirect': row['link_review']['final_url'] = 'https://example.com/other'
+    else:
+        row['data']['page_evidence']['valid_until'] = '2020-01-01'
+        bind(row)
+    with pytest.raises(ValueError, match='link review'):
+        ReviewedKnowledge.from_manifest('a' * 64, manifest(rows))
+
+
+def test_staging_and_activation_reject_expired_links_without_pointer_change(tmp_path, monkeypatch):
+    baseline = publish_release(tmp_path, SNAPSHOT, reviewed_rows()[:-1], None, RELEASE_REVIEW)
+    activate_release(tmp_path, baseline)
+    staged = publish_release(tmp_path, SNAPSHOT, reviewed_rows(), baseline, RELEASE_REVIEW)
+    pointer = (tmp_path / 'active.json').read_bytes()
+    release_dirs = set((tmp_path / 'releases').iterdir())
+    advance_past_link_expiry(monkeypatch)
+    with pytest.raises(ValueError, match='link'):
+        publish_release(tmp_path, SNAPSHOT, reviewed_rows(), baseline, RELEASE_REVIEW)
+    with pytest.raises(ValueError, match='link'):
+        activate_release(tmp_path, staged)
+    assert (tmp_path / 'active.json').read_bytes() == pointer
+    assert set((tmp_path / 'releases').iterdir()) == release_dirs
+    assert ReviewedKnowledge.load_active(tmp_path).release_id == baseline

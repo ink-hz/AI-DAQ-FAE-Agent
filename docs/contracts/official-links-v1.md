@@ -25,9 +25,13 @@ The page title does not establish official ownership or exact SKU identity;
 those remain explicit human review responsibilities. Review fingerprints bind
 content but do not provide cryptographic identity authentication.
 
-Both offline publication and runtime manifest loading apply this page gate.
-The role view checks expiry again on each request, so an already loaded release
-cannot continue delivering expired links. The current role needs both view and
+Staging and activation require every answerable link to be current; failed
+activation leaves the active pointer unchanged. Runtime loading validates static
+page evidence, date ordering and all review fingerprints, while allowing a
+previously valid link to have since expired. The role view omits expired links
+on every request, both before and after reload, preserving unrelated reviewed
+knowledge in the same immutable release. Expiry never excuses invalid metadata,
+redirect mismatch or tampered reviews. The current role needs both view and
 forward permission. `official_links` returns matching verified records;
 `search_knowledge` excludes link records. The reused runtime still requires a URL
 to have been returned by an allowed tool in the current turn before final output.
