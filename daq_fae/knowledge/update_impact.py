@@ -229,3 +229,55 @@ def plan_update(previous: dict, current: dict) -> dict:
             'graph': {'nodes': [{'kind': k, 'id': i} for k, i in sorted(old.keys() | new.keys())],
                       'edges': [{'from': list(a), 'to': list(b)} for a, b in sorted(edges)]},
             'input_sha256': hashlib.sha256(_json([previous, current]).encode()).hexdigest()}
+
+
+def bind_coverage_questions(cells: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Bind draft questions to stable typed coverage dimensions, never row order.
+
+    Identity excludes status, evidence and dependency membership so changed
+    evidence updates the same logical cell. Callers put additional applicability
+    dimensions in scope. Equal duplicates collapse; conflicting duplicates fail.
+    """
+    rows, identities = {}, {}
+    for supplied in cells:
+        row = json.loads(_json(supplied))
+        kind = row.get('coverage_kind')
+        scope = row.get('scope', {})
+        if not isinstance(scope, dict):
+            raise ValueError('invalid coverage identity scope')
+        identity = {'version': 1, 'kind': kind, 'scope': scope}
+        if kind == 'entity_field':
+            for key in ('entity_id', 'field_id'):
+                if not isinstance(row.get(key), str) or not row[key].strip():
+                    raise ValueError('missing coverage identity dimension: ' + key)
+                identity[key] = row[key]
+        elif kind == 'section':
+            ids = row.get('section_ids')
+            if not isinstance(ids, list) or not ids or not all(isinstance(i, str) and i.strip() for i in ids):
+                raise ValueError('missing section coverage identity')
+            identity['section_ids'] = sorted(set(ids))
+            row['section_ids'] = identity['section_ids']
+        else:
+            raise ValueError('unsupported coverage identity kind')
+        digest = hashlib.sha256(_json(identity).encode()).hexdigest()
+        cid = 'coverage:' + kind + ':' + digest
+        if cid in identities and identities[cid] != identity:
+            raise ValueError('coverage identity hash collision')
+        if 'coverage_id' in row and row['coverage_id'] != cid:
+            raise ValueError('supplied coverage identity differs from dimensions')
+        row['coverage_id'] = cid
+        row['scope'] = scope
+        if cid in rows and rows[cid] != row:
+            raise ValueError('conflicting coverage identity')
+        identities[cid] = identity
+        rows[cid] = row
+    coverage = [rows[cid] for cid in sorted(rows)]
+    family = 'coverage_state_and_boundaries'
+    questions = [{
+        'question_id': 'dev:draft:' + hashlib.sha256(_json([family, cell['coverage_id']]).encode()).hexdigest(),
+        'coverage_ids': [cell['coverage_id']], 'status': 'draft',
+        'replay_status': 'not_replayed', 'approval_status': 'not_approved',
+        'question': 'Check evidence status, exact applicability and sources for this coverage cell; preserve gaps and conflicts.',
+        'question_family': family, 'frozen': False,
+    } for cell in coverage]
+    return coverage, questions

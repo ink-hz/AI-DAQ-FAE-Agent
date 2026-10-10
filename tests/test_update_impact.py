@@ -221,3 +221,67 @@ def test_changed_section_does_not_invalidate_context_only_record_or_other_sectio
     assert report['affected']['record_ids'] == ['claim:one']
     assert report['affected']['question_ids'] == ['dev:one']
     assert report['reusable_signature_record_ids'] == ['claim:two']
+
+
+def stable_cells():
+    return [{'coverage_kind': 'entity_field', 'entity_id': 'entity:' + key,
+             'field_id': 'rate', 'status': 'audited_no_source', 'record_ids': []}
+            for key in ('one', 'two')]
+
+
+def bound_bundle(cells):
+    coverage, questions = impact.bind_coverage_questions(cells)
+    return {'snapshot': {'sources': [], 'extractor_version': '1'},
+            'coverage': coverage, 'questions': questions}
+
+
+@pytest.mark.parametrize('operation', ['insert', 'delete', 'reorder'])
+def test_coverage_identity_survives_insert_delete_and_reorder(operation):
+    cells = stable_cells(); before = bound_bundle(cells)
+    changed = deepcopy(cells)
+    if operation == 'insert':
+        changed.insert(0, dict(cells[0], entity_id='entity:new'))
+    elif operation == 'delete':
+        changed.pop(0)
+    else:
+        changed.reverse()
+    after = bound_bundle(changed)
+    old_ids = {c['entity_id']: c['coverage_id'] for c in before['coverage']}
+    new_ids = {c['entity_id']: c['coverage_id'] for c in after['coverage']}
+    for entity in old_ids.keys() & new_ids.keys():
+        assert old_ids[entity] == new_ids[entity]
+    report = impact.plan_update(before, after)
+    assert len(report['affected']['coverage_ids']) == (0 if operation == 'reorder' else 1)
+    assert len(report['affected']['question_ids']) == (0 if operation == 'reorder' else 1)
+    assert not report['affected']['record_ids']
+    assert all(q['status'] == 'draft' and q['replay_status'] == 'not_replayed'
+               and q['approval_status'] == 'not_approved' and q['frozen'] is False
+               for q in after['questions'])
+
+
+def test_same_coverage_identity_deduplicates_equal_rows_but_rejects_conflicts():
+    cells = stable_cells()
+    rows, questions = impact.bind_coverage_questions(cells + [deepcopy(cells[0])])
+    assert len(rows) == len(questions) == 2
+    with pytest.raises(ValueError, match='conflicting coverage identity'):
+        impact.bind_coverage_questions(cells + [dict(cells[0], status='candidate')])
+
+
+def test_identity_includes_typed_scope_but_not_status_or_dependency_membership():
+    cell = stable_cells()[0]
+    original = impact.bind_coverage_questions([cell])[0][0]['coverage_id']
+    changed = impact.bind_coverage_questions([dict(cell, status='candidate', record_ids=['claim:new'])])[0][0]['coverage_id']
+    assert original == changed
+    scoped = impact.bind_coverage_questions([dict(cell, scope={'variant':'one'}),
+                                            dict(cell, scope={'variant':'two'})])[0]
+    assert len({c['coverage_id'] for c in scoped}) == 2
+
+
+def test_section_identity_uses_stable_section_id_and_rejects_missing_dimensions():
+    section = {'coverage_kind': 'section', 'section_ids': ['section:one'], 'status': 'candidate'}
+    rows, _ = impact.bind_coverage_questions([section])
+    assert rows == impact.bind_coverage_questions([section, deepcopy(section)])[0]
+    for bad in ({}, {'coverage_kind': 'entity_field', 'entity_id':'entity:one'},
+                {'coverage_kind':'section','section_ids':[]}):
+        with pytest.raises(ValueError, match='coverage identity'):
+            impact.bind_coverage_questions([bad])

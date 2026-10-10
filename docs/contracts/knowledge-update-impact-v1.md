@@ -77,3 +77,21 @@ after validation; `activate_release` explicitly selects a valid version. A faile
 plan or rejected publication leaves the active pointer unchanged. D3 must consume
 the review/withdrawal obligations alongside its other gates before any switch;
 this module alone is not the full D3 publishing workflow.
+
+## Stable coverage and draft question identities
+
+`bind_coverage_questions(cells)` builds canonical IDs from typed dimensions.
+`coverage_kind=entity_field` requires `entity_id` and `field_id`;
+`coverage_kind=section` requires a nonempty set of stable `section_ids`.
+Both include the explicit `scope` object (default empty); callers must put any
+additional applicability dimensions there. The identity includes a schema
+version and uses canonical JSON plus SHA-256. Status, sources, record membership,
+row order and display text do not define identity. Missing identity dimensions
+are rejected. Exact duplicate cells collapse; different payloads at one identity,
+inconsistent supplied IDs or a detected digest collision fail closed.
+
+Draft question IDs bind the fixed question family and coverage ID, so inserting,
+deleting or reordering unrelated cells does not rename surviving questions.
+Generated questions always remain draft, not frozen, not replayed and not
+approved. This helper is for draft manifests only; it is not a migration tool for
+an already approved or frozen Dev suite.

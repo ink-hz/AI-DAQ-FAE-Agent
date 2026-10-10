@@ -27,3 +27,19 @@ isolation, transitive question impact and active-pointer preservation on failure
 Only generic code, synthetic tests, this audit and the contract are versioned.
 Real dependency bundles, source mappings, draft questions and input manifests are
 Git-ignored private artifacts with 0700 directory and 0600 file permissions.
+
+## Review correction: stable coverage identity
+
+The private preparation script originally assigned field coverage IDs by list
+position. Review reproduced unrelated ID reassignment after inserting one cell.
+It now uses the tested typed-dimension binder for both field and section cells;
+question IDs derive from stable cell identity and question family. Duplicate
+cells collapse; conflicting data at one identity is rejected.
+
+The rebuilt private 375-cell inventory verifies insertion affects exactly one
+cell/question while all 375 old IDs survive, deletion affects exactly one pair
+with 374 surviving IDs unchanged, and reordering has zero impact. No record or
+section is affected by those inventory-only scenarios. Private bundles/maps and
+artifact hashes were rebuilt. All 375 questions remain unapproved draft templates.
+The corrected suite has 35 impact tests; related regression total: **165 passed**,
+with the same five dependency deprecation warnings.
