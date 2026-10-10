@@ -181,16 +181,54 @@ def _write_json(path: Path, value) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def test_alternate_pdf_extraction_is_recorded_without_replacing_snapshot_text():
+def _archive_with_two_line_sources(tmp_path: Path, *values):
+    archive = tmp_path / "archive"
+    restricted = archive / "restricted"
+    restricted.mkdir(parents=True)
+    for name in ("spec.md", "context.md"):
+        (restricted / name).write_text("2 cameras\nsecond\n")
+    sha = hashlib.sha256((restricted / "spec.md").read_bytes()).hexdigest()
+
+    def replace(value):
+        if isinstance(value, dict):
+            for key, entry in value.items():
+                if key in {"sha256", "source_sha256"} and entry == "a" * 64:
+                    value[key] = sha
+                else:
+                    replace(entry)
+        elif isinstance(value, list):
+            for entry in value:
+                replace(entry)
+
+    for value in values:
+        replace(value)
+    return archive, sha
+
+
+def test_alternate_extraction_is_recorded_without_replacing_snapshot_text(tmp_path):
     baseline, _, _, _ = inputs()
-    source_audit = [{"source_ref": deepcopy(REF), "raw_text": "layout text",
-                     "text_sha256": hashlib.sha256(b"layout text").hexdigest()}]
+    archive = tmp_path / "archive"
+    source = archive / "restricted" / "spec.md"
+    source.parent.mkdir(parents=True)
+    source.write_text("layout text\nmore\n")
+    sha = hashlib.sha256(source.read_bytes()).hexdigest()
+    baseline["snapshot"]["sources"][0]["sha256"] = sha
+    baseline["snapshot"]["chunks"][0]["source_sha256"] = sha
+    ref = deepcopy(REF)
+    ref["sha256"] = sha
+    source_audit = [{"source_ref": ref, "raw_text": "layout text\nmore",
+                     "text_sha256": hashlib.sha256(b"layout text\nmore").hexdigest()}]
     baseline["snapshot"]["chunks"][0]["text"] = "extractor text"
-    expanded, alternatives = _review_snapshot(baseline, source_audit, {"chunks": []})
+    expanded, alternatives = _review_snapshot(baseline, source_audit, {"chunks": []}, archive)
     assert expanded["snapshot"]["chunks"][0]["text"] == "extractor text"
-    assert alternatives == [{"source_ref": REF,
+    assert alternatives == [{"source_ref": ref,
                              "snapshot_text_sha256": hashlib.sha256(b"extractor text").hexdigest(),
-                             "review_text_sha256": hashlib.sha256(b"layout text").hexdigest()}]
+                             "review_text_sha256": hashlib.sha256(b"layout text\nmore").hexdigest()}]
+    forged = deepcopy(source_audit)
+    forged[0]["raw_text"] = "invented text"
+    forged[0]["text_sha256"] = hashlib.sha256(b"invented text").hexdigest()
+    with pytest.raises(ValueError, match="original source excerpt"):
+        _review_snapshot(baseline, forged, {"chunks": []}, archive)
 
 
 def test_private_cli_verifies_input_hashes_and_refuses_reused_output(tmp_path):
@@ -201,6 +239,8 @@ def test_private_cli_verifies_input_hashes_and_refuses_reused_output(tmp_path):
     baseline["snapshot"]["sources"].append({"path": context_ref["path"],
                                                "sha256": context_ref["sha256"], "kind": "markdown"})
     baseline["sections"][0]["source_refs"].append(context_ref)
+    archive, sha = _archive_with_two_line_sources(tmp_path, baseline, candidates, bindings)
+    context_ref["sha256"] = sha
     review = tmp_path / "review"
     review.mkdir()
     hashes = {}
@@ -210,9 +250,9 @@ def test_private_cli_verifies_input_hashes_and_refuses_reused_output(tmp_path):
                         ("subline-locator-overlay.json", {
                             "review_only": True, "source_snapshot_sha256": "a" * 64,
                             "chunks": [{"source_path": REF["path"],
-                                        "source_sha256": REF["sha256"],
-                                        "locator": REF["locator"], "text": "2 cameras",
-                                        "text_sha256": hashlib.sha256(b"2 cameras").hexdigest()}]})):
+                                        "source_sha256": sha,
+                                        "locator": REF["locator"], "text": "2 cameras\nsecond",
+                                        "text_sha256": hashlib.sha256(b"2 cameras\nsecond").hexdigest()}]})):
         hashes[name] = _write_json(review / name, value)
     _write_json(review / "summary.json", {"output_sha256": hashes,
                                            "source_snapshot_sha256": "a" * 64})
@@ -221,15 +261,15 @@ def test_private_cli_verifies_input_hashes_and_refuses_reused_output(tmp_path):
     manifest = tmp_path / "baseline-manifest.json"
     _write_json(manifest, {baseline_path.name: baseline_sha})
     source_audit = tmp_path / "source-extraction-audit.json"
-    _write_json(source_audit, [{"source_ref": context_ref, "raw_text": "context",
-                                "text_sha256": hashlib.sha256(b"context").hexdigest()}])
+    _write_json(source_audit, [{"source_ref": context_ref, "raw_text": "2 cameras\nsecond",
+                                "text_sha256": hashlib.sha256(b"2 cameras\nsecond").hexdigest()}])
     section_index = tmp_path / "bound-section-index.json"
     _write_json(section_index, {"sections": baseline["sections"],
                                 "bodies": {"section:imaging": render_record(baseline["records"][0])}})
     output = tmp_path / "output"
     args = SimpleNamespace(baseline_bundle=baseline_path, baseline_manifest=manifest,
                            review_dir=review, source_extraction_audit=source_audit,
-                           bound_section_index=section_index, outdir=output)
+                           bound_section_index=section_index, archive_root=archive, outdir=output)
     summary = build(args)
     assert summary["candidate_records"] == 1
     assert summary["new_coverage_cells"] == 1
@@ -251,6 +291,7 @@ def test_private_cli_verifies_input_hashes_and_refuses_reused_output(tmp_path):
 def test_private_cli_rejects_missing_candidate_locator_even_when_source_hash_matches(tmp_path):
     baseline, candidates, bindings, vocabulary = inputs()
     baseline["snapshot"]["chunks"] = []
+    archive, _ = _archive_with_two_line_sources(tmp_path, baseline, candidates, bindings)
     review = tmp_path / "review"
     review.mkdir()
     hashes = {}
@@ -274,6 +315,7 @@ def test_private_cli_rejects_missing_candidate_locator_even_when_source_hash_mat
                                 "bodies": {"section:imaging": render_record(baseline["records"][0])}})
     args = SimpleNamespace(baseline_bundle=baseline_path, baseline_manifest=manifest,
                            review_dir=review, source_extraction_audit=source_audit,
-                           bound_section_index=section_index, outdir=tmp_path / "output")
+                           bound_section_index=section_index, archive_root=archive,
+                           outdir=tmp_path / "output")
     with pytest.raises(ValueError, match="source_locator_missing"):
         build(args)

@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import subprocess
 
 from daq_fae.knowledge.normalized_impact import extend_review_graph
 from daq_fae.knowledge.records import validate_records
@@ -37,10 +38,45 @@ def _locator_key(chunk: dict) -> tuple[str, str, str]:
             json.dumps(chunk["locator"], sort_keys=True))
 
 
-def _review_snapshot(baseline: dict, source_audit: list[dict], overlay: dict) -> tuple[dict, list[dict]]:
+def _review_snapshot(baseline: dict, source_audit: list[dict], overlay: dict,
+                     archive_root: Path) -> tuple[dict, list[dict]]:
     result = deepcopy(baseline)
     snapshot = result["snapshot"]
     sources = {row["path"]: row for row in snapshot["sources"]}
+    root = archive_root.resolve()
+    raw_cache = {}
+
+    def original_excerpt(chunk: dict) -> str:
+        path, sha, locator = (chunk["source_path"], chunk["source_sha256"],
+                              chunk["locator"])
+        source = sources.get(path)
+        if source is None or source["sha256"] != sha:
+            raise ValueError("review locator differs from source snapshot")
+        original = (root / path).resolve()
+        if not original.is_relative_to(root):
+            raise ValueError("review source outside controlled archive")
+        if path not in raw_cache:
+            raw = original.read_bytes()
+            if hashlib.sha256(raw).hexdigest() != sha:
+                raise ValueError("original source hash mismatch")
+            raw_cache[path] = raw
+        if locator.get("kind") == "lines":
+            lines = raw_cache[path].decode(source.get("encoding") or "utf-8-sig").splitlines()
+            start, end = locator.get("start"), locator.get("end")
+            if (not isinstance(start, int) or not isinstance(end, int) or
+                    not 1 <= start <= end <= len(lines)):
+                raise ValueError("original source line locator invalid")
+            return "\n".join(lines[start - 1:end])
+        if locator.get("kind") == "page":
+            page = locator.get("page")
+            if not isinstance(page, int) or page < 1:
+                raise ValueError("original source page locator invalid")
+            return subprocess.check_output([
+                "pdftotext", "-layout", "-f", str(page), "-l", str(page),
+                str(original), "-",
+            ]).decode()
+        raise ValueError("unsupported original source locator")
+
     chunks = {_locator_key(row): row for row in snapshot["chunks"]}
     if len(chunks) != len(snapshot["chunks"]):
         raise ValueError("duplicate baseline extraction locator")
@@ -60,6 +96,8 @@ def _review_snapshot(baseline: dict, source_audit: list[dict], overlay: dict) ->
                 not isinstance(chunk.get("text"), str) or
                 hashlib.sha256(chunk["text"].encode()).hexdigest() != chunk["text_sha256"]):
             raise ValueError("review locator differs from source or text hash")
+        if original_excerpt(chunk) != chunk["text"]:
+            raise ValueError("review locator differs from original source excerpt")
         key = _locator_key(chunk)
         if key in chunks:
             if chunks[key].get("text") != chunk["text"]:
@@ -105,7 +143,8 @@ def build(args) -> dict:
     section_index, section_index_sha = _load(args.bound_section_index)
     if section_index["sections"] != baseline["sections"]:
         raise ValueError("section bodies do not match baseline section index")
-    review_baseline, extractor_alternatives = _review_snapshot(baseline, source_audit, overlay)
+    review_baseline, extractor_alternatives = _review_snapshot(
+        baseline, source_audit, overlay, args.archive_root)
     enriched = extend_review_graph(
         review_baseline, inputs["candidate-records.json"], inputs["proposal-bindings.json"],
         inputs["field-vocabulary-review.json"])
@@ -168,6 +207,7 @@ def build(args) -> dict:
         "inherited_section_findings": len(before_audit["findings"]),
         "new_section_findings": len(after_audit["findings"]) - len(before_audit["findings"]),
         "alternate_extractions_same_locator": len(extractor_alternatives),
+        "archive_locators_reread": len(source_audit) + len(overlay["chunks"]),
         "graph_nodes": len(identity["graph"]["nodes"]),
         "graph_edges": len(identity["graph"]["edges"]),
         "input_sha256": {"baseline_bundle": baseline_sha,
@@ -186,6 +226,7 @@ def main():
     parser.add_argument("--baseline-bundle", type=Path, required=True)
     parser.add_argument("--baseline-manifest", type=Path, required=True)
     parser.add_argument("--review-dir", type=Path, required=True)
+    parser.add_argument("--archive-root", type=Path, required=True)
     parser.add_argument("--source-extraction-audit", type=Path, required=True)
     parser.add_argument("--bound-section-index", type=Path, required=True)
     parser.add_argument("--outdir", type=Path, required=True)
