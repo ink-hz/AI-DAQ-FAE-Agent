@@ -131,6 +131,7 @@ def section_indices(sections, records):
         'records': sum(r['answerable'] and role in r['access_review']['view_roles'] for r in records),
     } for role in sorted(ROLES)}
     return {'section_count': len(sections),
+            'status_counts': dict(sorted(Counter(r['status'] for r in records).items())),
             'section_status_counts': dict(Counter(s['review_status'] for s in sections)),
             'record_kind_counts': dict(sorted(Counter(r['kind'] for r in records).items())),
             'dependency_index': dependencies, 'source_index': sources, 'role_summary': roles}

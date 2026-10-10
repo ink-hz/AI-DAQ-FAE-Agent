@@ -225,3 +225,67 @@ def test_b2_candidate_projection_is_still_ineligible(tmp_path):
                    view_roles=[], forward_roles=[])
     with pytest.raises(ValueError, match='not reviewed'):
         publish(tmp_path, rows, section, body)
+
+
+def stage_manifest(root, manifest):
+    """A valid content hash does not replace contract validation."""
+    data = releases._json_bytes(manifest)
+    rid = hashlib.sha256(data).hexdigest()
+    directory = root / 'releases' / rid
+    directory.mkdir()
+    (directory / 'manifest.json').write_bytes(data)
+    return rid
+
+
+@pytest.mark.parametrize('key,value', [
+    ('sections', []), ('section_count', 0), ('source_locations', []),
+    ('runtime_contract', 'daq-reviewed-sections-v2'), ('section_status_counts', {}),
+    ('record_kind_counts', {}), ('role_summary', {}), ('source_index', {}),
+    ('dependency_index', {}),
+])
+def test_v1_reserved_v2_fields_fail_before_pointer_change(tmp_path, key, value):
+    first = releases.publish_release(tmp_path, SNAPSHOT, [_entity(), _record()], None, REVIEW)
+    releases.activate_release(tmp_path, first)
+    changed = deepcopy(releases.read_active_release(tmp_path)['manifest'])
+    changed[key] = value
+    forged = stage_manifest(tmp_path, changed)
+    with pytest.raises(ValueError, match='format'):
+        releases.activate_release(tmp_path, forged)
+    assert ReviewedKnowledge.load_active(tmp_path).release_id == first
+    with pytest.raises(ValueError, match='format'):
+        ReviewedKnowledge.from_manifest(forged, changed)
+
+
+@pytest.mark.parametrize('key,value', [
+    ('status_counts', {'candidate': 999}), ('section_status_counts', {'candidate': 1}),
+    ('record_kind_counts', {'entity': 99}), ('role_summary', {}),
+    ('source_index', {}), ('dependency_index', {}), ('section_count', 9),
+    ('record_count', 9), ('answerable_count', 0), ('source_count', 0),
+])
+def test_v2_summary_tampering_fails_activation_and_loading(tmp_path, key, value):
+    rows = [_entity(), _record()]
+    section, body = approved_section(rows)
+    first = publish(tmp_path, rows, section, body)
+    releases.activate_release(tmp_path, first)
+    changed = deepcopy(releases.read_active_release(tmp_path)['manifest'])
+    changed[key] = value
+    forged = stage_manifest(tmp_path, changed)
+    with pytest.raises(ValueError):
+        releases.activate_release(tmp_path, forged)
+    assert ReviewedKnowledge.load_active(tmp_path).release_id == first
+    with pytest.raises(ValueError):
+        ReviewedKnowledge.from_manifest(forged, changed)
+
+
+def test_v1_unreadable_record_cannot_replace_previous_pointer(tmp_path):
+    from daq_fae.knowledge.records import record_fingerprint, access_fingerprint
+    rows = [_entity(), _record()]
+    first = releases.publish_release(tmp_path, SNAPSHOT, rows, None, REVIEW)
+    releases.activate_release(tmp_path, first)
+    rows[1]['data']['value'] = 'https://example.com/unreviewed'
+    rows[1]['fact_review']['record_sha256'] = record_fingerprint(rows[1])
+    rows[1]['access_review']['record_sha256'] = access_fingerprint(rows[1])
+    staged = releases.publish_release(tmp_path, SNAPSHOT, rows, None, REVIEW)
+    with pytest.raises(ValueError, match='URL'):
+        releases.activate_release(tmp_path, staged)
+    assert ReviewedKnowledge.load_active(tmp_path).release_id == first

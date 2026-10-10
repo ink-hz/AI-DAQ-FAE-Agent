@@ -5,8 +5,8 @@ binding, source/dependency and role/state summaries, prepublication URL/link and
 uniform section permission gates. V1 compatibility is explicit. No source text,
 real candidate payloads or archive filenames are committed.
 
-Synthetic verification: 24 new section release tests and the complete repository
-suite pass (424 tests). Six existing dependency deprecation warnings were emitted.
+Synthetic verification: 44 new section release tests and the complete repository
+suite pass (444 tests). Six existing dependency deprecation warnings were emitted.
 Tests include changed body/source/roles, stale reviews, candidate and mixed-role
 rejection, unresolved dependencies, reviewed link roundtrip and permission failure,
 inline URL rejection, reader index checks, immutable role view, storage failure
@@ -20,3 +20,12 @@ camera source, deployment or model evaluation was changed.
 The v2 body schema supports free text. Current B2 consistency can only reconcile
 exact typed assertion blocks; signing unnormalized prose still fails. The real
 narrative audit remains inconsistent, and no factual or access approval is implied.
+
+
+Independent review correction: v1 activation now uses the same complete runtime
+validator as reads. All nine reserved v2 metadata fields are rejected under v1;
+correct content hashes do not waive this rule. Staged v1 unreviewed URL records
+are also refused before pointer replacement. V2 record status counts are
+recomputed alongside its existing summaries. Disk-level regression tests forge
+correctly hashed but contract-invalid manifests and prove that activation fails,
+the previous release remains loadable, and direct reader validation also fails.

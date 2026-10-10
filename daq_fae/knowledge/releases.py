@@ -66,13 +66,7 @@ def _read_release(root: Path, release_id: str) -> tuple[dict, str]:
         raise ValueError("release manifest digest mismatch")
     manifest = json.loads(data)
     from daq_fae.knowledge.reviewed_view import ReviewedKnowledge
-    if not isinstance(manifest, dict) or type(manifest.get("format_version")) is not int \
-            or manifest["format_version"] not in {1, 2}:
-        raise ValueError("knowledge release format invalid")
-    if manifest["format_version"] == 1 and "sections" in manifest:
-        raise ValueError("knowledge release format v1 is records only")
-    if manifest["format_version"] == 2:
-        ReviewedKnowledge.from_manifest(release_id, manifest)
+    ReviewedKnowledge.from_manifest(release_id, manifest)
     return manifest, release_id
 
 

@@ -22,10 +22,14 @@ release review (`reviewer`, ISO date, `dev_batch`) and previous release ID. It a
 
 The reader accepts integer versions 1 and 2 only. V1 means records only: embedding
 sections or v2 section metadata is an error, never an implicit upgrade. Its
-runtime record filters remain in force and its section view is empty. V2 requires
-the exact runtime contract and recomputes the section gate and derived indices on
-load and before activation. Legacy staging still permits records that its runtime
-reader will refuse; v2 applies all runtime gates before staging.
+runtime record filters remain in force and its section view is empty. Both versions use the same runtime read validator before activation, so an
+unreadable manifest never replaces the current pointer. V1 rejects all reserved
+v2 fields, including section metadata, counts, indices, role summary and runtime
+contract. V2 requires the exact runtime contract and recomputes the section gate
+and derived indices on load and before activation, including record status_counts.
+Legacy staging still permits records that its runtime reader will refuse; such
+records are now rejected before activation. V2 applies all runtime gates before
+staging.
 
 ## Review binding and eligibility
 

@@ -352,9 +352,13 @@ def test_non_link_record_cannot_embed_unreviewed_url(tmp_path):
     })
     rows.append(software)
     release_id = publish_release(tmp_path, SNAPSHOT, rows, None, RELEASE_REVIEW)
-    activate_release(tmp_path, release_id)
     with pytest.raises(ValueError, match="URL"):
-        ReviewedKnowledge.load_active(tmp_path)
+        activate_release(tmp_path, release_id)
+    assert ReviewedKnowledge.load_active(tmp_path) is None
+    import json
+    manifest = json.loads((tmp_path / "releases" / release_id / "manifest.json").read_text())
+    with pytest.raises(ValueError, match="URL"):
+        ReviewedKnowledge.from_manifest(release_id, manifest)
 
 
 def test_non_link_record_cannot_embed_protocol_relative_delivery_link(tmp_path):
@@ -363,9 +367,13 @@ def test_non_link_record_cannot_embed_protocol_relative_delivery_link(tmp_path):
     rows[1]["fact_review"]["record_sha256"] = record_fingerprint(rows[1])
     rows[1]["access_review"]["record_sha256"] = access_fingerprint(rows[1])
     release_id = publish_release(tmp_path, SNAPSHOT, rows, None, RELEASE_REVIEW)
-    activate_release(tmp_path, release_id)
     with pytest.raises(ValueError, match="URL"):
-        ReviewedKnowledge.load_active(tmp_path)
+        activate_release(tmp_path, release_id)
+    assert ReviewedKnowledge.load_active(tmp_path) is None
+    import json
+    manifest = json.loads((tmp_path / "releases" / release_id / "manifest.json").read_text())
+    with pytest.raises(ValueError, match="URL"):
+        ReviewedKnowledge.from_manifest(release_id, manifest)
 
 
 @pytest.mark.parametrize("value", ["www.example.com/private", "example.com/private?token=abc",
@@ -376,9 +384,13 @@ def test_non_link_record_cannot_embed_bare_delivery_link(tmp_path, value):
     rows[1]["fact_review"]["record_sha256"] = record_fingerprint(rows[1])
     rows[1]["access_review"]["record_sha256"] = access_fingerprint(rows[1])
     release_id = publish_release(tmp_path, SNAPSHOT, rows, None, RELEASE_REVIEW)
-    activate_release(tmp_path, release_id)
     with pytest.raises(ValueError, match="URL"):
-        ReviewedKnowledge.load_active(tmp_path)
+        activate_release(tmp_path, release_id)
+    assert ReviewedKnowledge.load_active(tmp_path) is None
+    import json
+    manifest = json.loads((tmp_path / "releases" / release_id / "manifest.json").read_text())
+    with pytest.raises(ValueError, match="URL"):
+        ReviewedKnowledge.from_manifest(release_id, manifest)
 
 
 def test_non_link_record_cannot_hide_delivery_link_in_data_key(tmp_path):
@@ -387,9 +399,13 @@ def test_non_link_record_cannot_hide_delivery_link_in_data_key(tmp_path):
     rows[1]["fact_review"]["record_sha256"] = record_fingerprint(rows[1])
     rows[1]["access_review"]["record_sha256"] = access_fingerprint(rows[1])
     release_id = publish_release(tmp_path, SNAPSHOT, rows, None, RELEASE_REVIEW)
-    activate_release(tmp_path, release_id)
     with pytest.raises(ValueError, match="URL"):
-        ReviewedKnowledge.load_active(tmp_path)
+        activate_release(tmp_path, release_id)
+    assert ReviewedKnowledge.load_active(tmp_path) is None
+    import json
+    manifest = json.loads((tmp_path / "releases" / release_id / "manifest.json").read_text())
+    with pytest.raises(ValueError, match="URL"):
+        ReviewedKnowledge.from_manifest(release_id, manifest)
 
 
 def test_conflict_candidate_pdf_source_refs_are_provenance_not_links(tmp_path):
@@ -443,9 +459,13 @@ def test_conflict_candidate_value_cannot_hide_unreviewed_url(tmp_path):
                         {"value": 3, "source_ref": deepcopy(ref)},
                     ]}}
     release_id = publish_release(tmp_path, snapshot, [row], None, RELEASE_REVIEW)
-    activate_release(tmp_path, release_id)
     with pytest.raises(ValueError, match="URL"):
-        ReviewedKnowledge.load_active(tmp_path)
+        activate_release(tmp_path, release_id)
+    assert ReviewedKnowledge.load_active(tmp_path) is None
+    import json
+    manifest = json.loads((tmp_path / "releases" / release_id / "manifest.json").read_text())
+    with pytest.raises(ValueError, match="URL"):
+        ReviewedKnowledge.from_manifest(release_id, manifest)
 
 
 def test_procedure_and_software_require_exact_product_topology_and_applicability(tmp_path):

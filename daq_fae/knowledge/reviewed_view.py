@@ -77,7 +77,9 @@ class ReviewedKnowledge:
                 or manifest["format_version"] not in {1, 2}:
             raise ValueError("knowledge release format invalid")
         if manifest["format_version"] == 1 and any(key in manifest for key in
-                ("sections", "section_count", "source_locations", "runtime_contract")):
+                ("sections", "section_count", "source_locations", "runtime_contract",
+                 "section_status_counts", "record_kind_counts", "role_summary",
+                 "source_index", "dependency_index")):
             raise ValueError("knowledge release format v1 is records only")
         if manifest["format_version"] == 2 and manifest.get("runtime_contract") != "daq-reviewed-sections-v2":
             raise ValueError("knowledge release format runtime contract invalid")
