@@ -64,3 +64,14 @@ are review targets, not inferred device/package mappings.
 Real matrices, source references and reproduction inputs remain in a restricted,
 Git-ignored workspace. Source paths never belong in answer prose. Publication,
 actual device tests, fact approval and permission approval are separate gates.
+
+Topology `scope.required_selectors` are independent obligations. Each selector
+must be present with the same value in request conditions and the software
+record's known conditions; any contradictory value in software scope, data or
+conditions rejects support. Missing or conflicting topology selectors return
+`software_topology_conditions_required`.
+
+Reviewed `software_versions` keys `viewer`, `sdk`, and `firmware` project to
+`viewer_version`, `sdk_version`, and `firmware_version` for requirement coverage.
+Projection cannot overwrite a contradictory primary software version or known
+condition; matching a dependency version never certifies a different version.

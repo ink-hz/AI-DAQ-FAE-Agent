@@ -18,3 +18,10 @@ combination boundaries, unsupported conflicts and filename inference prevention.
 Full deterministic test results are recorded in the implementation handoff.
 Real-model evaluation and independent answer-quality acceptance remain Dev gates;
 this work used no model calls or production evaluation.
+
+Independent review follow-up found and reproduced two defects: topology-specific
+required selectors were not enforced, and matching dependency versions were not
+projected into requirement coverage. Synthetic regressions first failed for both
+tools. The correction validates topology selectors against request and record
+conditions, and maps explicit dependency versions into coverage without allowing
+primary-version conflicts. The private matrix is unchanged.

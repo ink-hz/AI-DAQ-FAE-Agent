@@ -157,3 +157,68 @@ def test_end_to_end_exact_combination_passes_pure_matcher():
                                               'platform': 'Linux x64'}}
     assert support_gap(row, dict(ARGS, topology_id='topology:combo'), {'ego 1600'},
                        {'topology:combo': topology}) is None
+
+
+@pytest.mark.parametrize('tool', ['check_software_support', 'sdk_evidence'])
+def test_topology_required_selectors_are_exact_and_consistent(tmp_path, tool):
+    topology = _row('topology:combo', 'topology', {
+        'members': ['entity:ego-1600'], 'roles': {}, 'connections': [],
+        'power': {}, 'platform': 'Linux x64', 'sync_target': 'clock', 'storage': 'disk',
+    })
+    topology['scope'] = {'cable_revision': 'C1', 'required_selectors': ['cable_revision']}
+    from daq_fae.knowledge.records import record_fingerprint, access_fingerprint
+    topology['fact_review']['record_sha256'] = record_fingerprint(topology)
+    topology['access_review']['record_sha256'] = access_fingerprint(topology)
+    data = {k: v for k, v in ARGS.items() if k != 'entity'}
+    data.update(entity_id='entity:ego-1600', evidence_level='end_to_end_verified',
+                topology_id='topology:combo', conditions={'cable_revision': 'C1'})
+    software = _row('software:combo', 'software', data)
+    rid = publish_release(tmp_path, SNAPSHOT, _records()+[topology, software], None, RELEASE_REVIEW)
+    activate_release(tmp_path, rid)
+    b = DaqToolBox(knowledge=ReviewedKnowledge.load_active(tmp_path), role='internal_fae')
+    args = dict(ARGS, query='Capture SDK', topology_id='topology:combo')
+    assert b.dispatch(tool, args).status == 'not_found'
+    assert b.dispatch(tool, dict(args, conditions={'cable_revision': 'C1'})).status == 'ok'
+    assert b.dispatch(tool, dict(args, conditions={'cable_revision': 'C2'})).status == 'not_found'
+
+    # A legacy software record does not erase a topology's own required selector.
+    bare = _row('software:bare', 'software', {k:v for k,v in data.items() if k != 'conditions'})
+    rid = publish_release(tmp_path, SNAPSHOT, _records()+[topology, bare], None, RELEASE_REVIEW)
+    activate_release(tmp_path, rid)
+    b = DaqToolBox(knowledge=ReviewedKnowledge.load_active(tmp_path), role='internal_fae')
+    missing = b.dispatch(tool, args)
+    assert missing.status == 'not_found'
+    assert missing.content['reason'] == 'software_topology_conditions_required'
+
+    # Even a reviewed software condition cannot override a contradictory topology.
+    contradictory = _row('software:conflicting', 'software', dict(data, conditions={'cable_revision':'C2'}))
+    rid = publish_release(tmp_path, SNAPSHOT, _records()+[topology, contradictory], None, RELEASE_REVIEW)
+    activate_release(tmp_path, rid)
+    b = DaqToolBox(knowledge=ReviewedKnowledge.load_active(tmp_path), role='internal_fae')
+    conflict = b.dispatch(tool, dict(args, conditions={'cable_revision':'C2'}))
+    assert conflict.status == 'not_found'
+    assert conflict.content['reason'] == 'software_topology_conditions_required'
+
+
+@pytest.mark.parametrize('tool', ['check_software_support', 'sdk_evidence'])
+def test_exact_dependency_versions_satisfy_requirement_coverage(tmp_path, tool):
+    b = box(tmp_path, software_versions={'firmware': '3.0', 'viewer': '4.0'})
+    requirement = {'id': 'versions', 'capability': tool, 'software': 'Capture SDK',
+                   'entities': ['EGO 1600'], 'conditions': {
+                       'platform': 'Linux x64', 'variant': 'A', 'connection': 'USB',
+                       'task': ['recording'], 'sdk_version': '1.2',
+                       'firmware_version': '3.0', 'viewer_version': '4.0'}}
+    b.requirements = [requirement]
+    args = dict(ARGS, query='Capture SDK', software_versions={'firmware': '3.0', 'viewer': '4.0'})
+    r = b.dispatch(tool, args)
+    assert r.status == 'ok'
+    assert r.content['matched_requirement_ids'] == ['versions']
+    requirement['conditions']['firmware_version'] = '3.1'
+    assert b.dispatch(tool, args).content['matched_requirement_ids'] == []
+
+
+def test_dependency_version_cannot_override_primary_software_version(tmp_path):
+    b = box(tmp_path, software_versions={'sdk':'9.0'})
+    r = b.dispatch('sdk_evidence', dict(ARGS, query='Capture SDK', software_versions={'sdk':'9.0'}))
+    assert r.status == 'not_found'
+    assert r.content['reason'] == 'software_versions_unconfirmed'

@@ -8,7 +8,7 @@ from src.agent.loop.tools import ToolResult
 
 from daq_fae.knowledge.reviewed_view import ReviewedKnowledge
 from daq_fae.knowledge.source_paths import contains_source_path
-from daq_fae.knowledge.software_evidence import missing_conditions, support_gap
+from daq_fae.knowledge.software_evidence import missing_conditions, support_gap, software_version_conditions
 from daq_fae.knowledge.section_search import (
     EXCERPT_CHARS, MAX_BODY_CHARS, MAX_QUERY_CHARS, body_text, rank_sections,
 )
@@ -352,13 +352,12 @@ class DaqToolBox:
                 return False
             known.update({"platform": data["platform"], "variant": data["hardware_revision"],
                           "connection": data["connection_mode"]})
-            software_name = data["software"].casefold()
-            if "viewer" in software_name:
-                known["viewer_version"] = data["version"]
-            if "sdk" in software_name:
-                known["sdk_version"] = data["version"]
-            if "firmware" in software_name or "固件" in software_name:
-                known["firmware_version"] = data["version"]
+            versions = software_version_conditions(data)
+            if versions is None or any(
+                key in known and known[key] != value for key, value in versions.items()
+            ):
+                return False
+            known.update(versions)
             if not {"platform", "variant", "connection"} <= set(conditions):
                 return False
         elif row["kind"] == "procedure":

@@ -47,6 +47,8 @@ def support_gap(row: dict, arguments: dict, entity_names: set[str],
             versions != expected_versions or any(
                 not isinstance(v, str) or not v.strip() for v in expected_versions.values()):
         return 'software_versions_unconfirmed'
+    if software_version_conditions(data) is None:
+        return 'software_versions_unconfirmed'
     topology = data.get('topology_id')
     if arguments.get('topology_id') != topology:
         return 'software_topology_unconfirmed'
@@ -59,6 +61,17 @@ def support_gap(row: dict, arguments: dict, entity_names: set[str],
         topology_data = topology_row.get('data', {})
         if topology_row.get('status') != 'verified' or data['entity_id'] not in topology_data.get('members', []) or topology_data.get('platform') != data['platform']:
             return 'software_topology_unconfirmed'
+        topology_scope = topology_row.get('scope', {})
+        selectors = topology_scope.get('required_selectors', [])
+        if not isinstance(selectors, list) or any(
+            not isinstance(key, str) or key not in topology_scope or
+            key not in conditions or conditions[key] != topology_scope[key] or
+            known.get(key) != topology_scope[key] or any(
+                key in container and container[key] != topology_scope[key]
+                for container in (scope, data, declared)
+            ) for key in selectors
+        ):
+            return 'software_topology_conditions_required'
     if not row.get('source_refs') or all(
         ref.get('locator', {}).get('kind') == 'file' for ref in row['source_refs']
     ):
@@ -100,3 +113,24 @@ def candidate_matrix(packet: dict) -> list[dict]:
                          'device_test_missing', 'end_to_end_test_missing'],
             })
     return rows
+
+
+def software_version_conditions(data: dict) -> dict | None:
+    """Project reviewed dependency versions into coverage without overwriting conflicts."""
+    projected = {}
+    software = data['software'].casefold()
+    for kind in ('viewer', 'sdk', 'firmware'):
+        if kind in software or (kind == 'firmware' and '固件' in software):
+            projected[kind + '_version'] = data['version']
+    dependencies = data.get('software_versions', {})
+    if not isinstance(dependencies, dict):
+        return None
+    for kind, version in dependencies.items():
+        field = {'viewer': 'viewer_version', 'sdk': 'sdk_version',
+                 'firmware': 'firmware_version'}.get(kind)
+        if field is None:
+            continue
+        if field in projected and projected[field] != version:
+            return None
+        projected[field] = version
+    return projected
