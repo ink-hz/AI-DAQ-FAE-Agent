@@ -14,7 +14,13 @@ def validate_section(section, body):
         if not condition:
             raise ValueError(reason)
 
-    require(isinstance(section.get('section_id'), str) and section['section_id'], 'section_id')
+    require(isinstance(section.get('section_id'), str) and bool(re.fullmatch(r'[a-z][a-z0-9_.:-]*', section['section_id'])), 'section_id')
+    for field in ('entity_ids', 'dependency_claim_ids', 'dependency_section_ids', 'gap_ids'):
+        if field in section:
+            values = section[field]
+            require(isinstance(values, list) and all(isinstance(value, str) and
+                    bool(re.fullmatch(r'[a-z][a-z0-9_.:-]*', value)) for value in values)
+                    and len(values) == len(set(values)), field + ' identities')
     require(section.get('body_sha256') == hashlib.sha256(body.encode()).hexdigest(), 'body hash')
     require(section.get('review_status') == 'candidate', 'candidate status')
     for field in ('fact_review', 'permission_review'):
@@ -41,7 +47,7 @@ def validate_section(section, body):
     require(isinstance(steps, list), 'steps')
     seen = set()
     for step in steps:
-        require(bool(step.get('step_id')) and step['step_id'] not in seen, 'step identity')
+        require(isinstance(step.get('step_id'), str) and bool(re.fullmatch(r'[a-z][a-z0-9_.:-]*', step['step_id'])) and step['step_id'] not in seen, 'step identity')
         seen.add(step['step_id'])
         require(bool(section.get('topology_id')) and step.get('topology_id') == section['topology_id'], 'step topology')
         require(bool(step.get('source_refs')) and all(ref in refs for ref in step['source_refs']), 'step source refs')
