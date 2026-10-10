@@ -7,3 +7,5 @@
 泛称产品的 scope.variant_unconfirmed 为 true 时，禁止赋予 resolution_variant。软件版本、固件和硬件修订仍为未确认条件。来源声明、实际软件包、逐设备实测与端到端验证分别处理。
 
 `daq_fae.knowledge.candidate_sections.validate_section` 是仅检查结构的候选工具：拒绝错误正文指纹、缺失来源、无效定位、跨拓扑步骤及意外审核/角色赋值。它不验证原件真实性、事实语义、权限或发布资格。私有验证器另外逐文件重算原件哈希、重读定位、核对输入指纹及章节依赖。真实签认及受控持久归档仍为后续发布门。
+
+准备条件按 `preparation_requirements` 单独列出 axis、classification、text、source_refs 和可选 gap_id，正文必须包含同一条件。classification 区分 requirement、recommendation、reference、conditional、not_applicable、unverified；存储卡规格与容量推荐、PC 参考配置与软件启动条件分别保存。连接阶段的检查不能要求尚未完成配置的开流状态；指南顺序或自动行为不明确时登记缺口，不创造恢复步骤。
