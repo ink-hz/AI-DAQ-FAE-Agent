@@ -7,6 +7,9 @@ import json
 from src.agent.loop.tools import ToolResult
 
 from daq_fae.knowledge.reviewed_view import ReviewedKnowledge
+from daq_fae.knowledge.section_search import (
+    EXCERPT_CHARS, MAX_BODY_CHARS, MAX_QUERY_CHARS, body_text, contains_source_path, rank_sections,
+)
 
 
 _TOOLS: dict[str, tuple[str, dict[str, dict], tuple[str, ...]]] = {
@@ -17,7 +20,8 @@ _TOOLS: dict[str, tuple[str, dict[str, dict], tuple[str, ...]]] = {
     "inspect_topology": ("Inspect a verified acquisition system topology.", {"query": {"type": "string"}}, ("query",)),
     "lookup_procedure": ("Find an applicable, reviewed acquisition procedure.", {"task": {"type": "string"}, "entity": {"type": "string"}}, ("task",)),
     "check_software_support": ("Check exact product, revision, connection, platform, software version and capability; include variant selectors in conditions.", {"entity": {"type": "string"}, "software": {"type": "string"}, "platform": {"type": "string"}, "version": {"type": "string"}, "hardware_revision": {"type": "string"}, "connection_mode": {"type": "string"}, "capability": {"type": "string"}, "conditions": {"type": "object"}}, ("entity", "software", "platform", "version", "hardware_revision", "connection_mode", "capability")),
-    "search_knowledge": ("Search the governed DAQ knowledge release.", {"query": {"type": "string"}}, ("query",)),
+    "read_doc": ("Read one authorized reviewed section by section_id; preserve its scope and conditions.", {"section_id": {"type": "string"}}, ("section_id",)),
+    "search_knowledge": ("Find authorized reviewed sections by natural-language title, aliases, domain terms and body; use read_doc for the full section. Records-only releases retain legacy search.", {"query": {"type": "string"}}, ("query",)),
     "sdk_evidence": ("Find reviewed SDK evidence for DAQ products and combinations.", {"query": {"type": "string"}}, ("query",)),
     "official_links": ("Find authorized and verified official DAQ links.", {"query": {"type": "string"}}, ("query",)),
     "experience": ("Find reviewed field cases and diagnostic experience; not product specifications.", {"query": {"type": "string"}}, ("query",)),
@@ -73,6 +77,9 @@ class DaqToolBox:
                 "reason": "empty_knowledge_release", "query": dict(arguments),
                 "claim_status": "unknown", "matches": [],
             })
+        if name == "read_doc" or (name == "search_knowledge" and
+                                  self.knowledge.manifest["format_version"] == 2):
+            return self._section_result(name, arguments)
         rows = self.knowledge.records_for(self.role)
         entities = {row["id"]: row["data"]["name"] for row in rows
                     if row["kind"] == "entity"}
@@ -110,6 +117,57 @@ class DaqToolBox:
             "release_id": self.knowledge.release_id, "source_id": row["id"],
             "source_refs": row["source_refs"],
         } for row in matches])
+
+    def _section_result(self, name: str, arguments: dict) -> ToolResult:
+        key = "section_id" if name == "read_doc" else "query"
+        value = arguments.get(key)
+        if not isinstance(value, str) or len(value) > MAX_QUERY_CHARS:
+            return ToolResult(status="tool_error", content={"error": "invalid_tool_arguments"})
+        sections = [s for s in self.knowledge.sections_for(self.role)
+                    if not contains_source_path(s)]
+        if name == "read_doc":
+            matches = [s for s in sections if s["section_id"] == value]
+        else:
+            matches = rank_sections(sections, self.knowledge.records_for(self.role), value)
+        if not matches:
+            return ToolResult(status="not_found", content={
+                "release_id": self.knowledge.release_id,
+                "reason": "reviewed_evidence_unavailable", "claim_status": "unknown",
+                "matches": [], "matched_requirement_ids": [],
+            })
+        if name == "read_doc" and len(matches[0]["body"]) > MAX_BODY_CHARS:
+            return ToolResult(status="tool_error", content={
+                "release_id": self.knowledge.release_id, "error": "section_too_large",
+                "matches": [], "matched_requirement_ids": [],
+            })
+        projected = []
+        for section in matches:
+            item = {key: section[key] for key in (
+                "section_id", "title", "knowledge_type", "scope")}
+            item.update(evidence_layer="reviewed_section", status="verified")
+            for key in ("entity_id", "entity_ids", "topology_id", "conditions",
+                        "hardware_revision", "software_versions", "link_ids"):
+                if key in section:
+                    item[key] = section[key]
+            if name == "read_doc":
+                item["body"] = section["body"]
+            else:
+                text = body_text(section["body"])
+                item.update(excerpt=text[:EXCERPT_CHARS],
+                            excerpt_truncated=len(text) > EXCERPT_CHARS)
+            projected.append(item)
+        return ToolResult(status="ok", content={
+            "release_id": self.knowledge.release_id, "matches": projected,
+            # Retrieval relevance cannot certify typed facts or exact conditions.
+            "matched_requirement_ids": [],
+        }, sources=[{
+            "type": "daq_governed_section", "verification_status": "verified",
+            "release_id": self.knowledge.release_id, "source_id": s["section_id"],
+            "scope": s["scope"], "source_refs": [{
+                "source_id": "source:" + ref["sha256"], "sha256": ref["sha256"],
+                "locator": ref["locator"],
+            } for ref in s["source_refs"]],
+        } for s in matches])
 
     @staticmethod
     def _record_text(row: dict) -> str:
