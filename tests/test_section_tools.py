@@ -149,10 +149,30 @@ def test_oversize_read_is_explicit_and_search_excerpt_is_bounded(tmp_path):
     assert search.content['matches'][0]['excerpt_truncated'] is True
 
 
-@pytest.mark.parametrize('text', ['原件在 /private/archive/secret',
-                                  r'原件在 C:\private\secret'])
+LOCAL_SOURCE_PATHS = [
+    '/private/archive/secret', r'C:\private\secret',
+    'tmp/private/secret', 'data/knowledge/private/secret',
+    'Downloads/private/secret', r'\\server\share\secret',
+    './tmp/private/secret', r'tmp\private\secret', '~/archive/original',
+    '原件位于tmp/private/secret', r'.\Downloads\private\secret',
+]
+
+
+@pytest.mark.parametrize('path', LOCAL_SOURCE_PATHS)
+def test_publication_rejects_local_source_paths(tmp_path, path):
+    with pytest.raises(ValueError, match='section local source path'):
+        make_view(tmp_path, product_text='原件在 ' + path)
+
+
+@pytest.mark.parametrize('text', ['原件在 ' + p for p in LOCAL_SOURCE_PATHS])
 def test_source_paths_in_body_never_enter_search_or_read_content(tmp_path, text):
-    box = DaqToolBox(knowledge=make_view(tmp_path, product_text=text), role='internal_fae')
+    # Exercise defense in depth for a previously hydrated legacy view. New
+    # publication and from_manifest must independently reject these sections.
+    valid = make_view(tmp_path)
+    manifest = deepcopy(valid.manifest)
+    manifest['sections'][0]['body'] = text
+    legacy = ReviewedKnowledge(valid.release_id, manifest)
+    box = DaqToolBox(knowledge=legacy, role='internal_fae')
     for name, args in [('read_doc', {'section_id': 'section:product'}),
                        ('search_knowledge', {'query': '演示设备'})]:
         result = box.dispatch(name, args)
@@ -170,3 +190,58 @@ def test_results_are_deterministic_and_do_not_certify_search_requirements(tmp_pa
     assert [s['section_id'] for s in first.content['matches']] == [
         'section:product', 'section:recording', 'section:sync']
     assert first.content['matched_requirement_ids'] == []
+
+
+@pytest.mark.parametrize('text', [
+    'USB/以太网接口', 'Viewer/SDK/固件版本', 'RGB-D/IMU 同步',
+    '输入/输出支持采集', 'data/format 数据格式', 'tmp 仅表示临时状态',
+])
+def test_product_terms_with_slashes_remain_publishable_and_readable(tmp_path, text):
+    box = DaqToolBox(knowledge=make_view(tmp_path, product_text=text), role='internal_fae')
+    result = box.dispatch('read_doc', {'section_id': 'section:product'})
+    assert result.status == 'ok'
+    assert text in result.content['matches'][0]['body']
+
+
+@pytest.mark.parametrize('source_path', ['fixtures/restricted/original', '手册/受限原件'])
+def test_exact_source_path_rejected_outside_common_roots(tmp_path, source_path):
+    row = _record(value='原件位于 ' + source_path)
+    row['source_refs'][0]['path'] = source_path
+    row = _reviewed(row)
+    entity = _entity()
+    entity['source_refs'][0]['path'] = source_path
+    entity = _reviewed(entity)
+    rows = [entity, row]
+    section, body = approved_section(rows)
+    snapshot = json.loads(json.dumps(SNAPSHOT).replace('spec.md', source_path))
+    with pytest.raises(ValueError, match='section local source path'):
+        releases.publish_release(tmp_path, snapshot, rows, None, REVIEW,
+                                 sections=[section], bodies={section['section_id']: body})
+    valid = make_view(tmp_path / 'valid')
+    manifest = deepcopy(valid.manifest)
+    manifest['sections'][0]['body'] = body
+    manifest['sections'][0]['source_refs'][0]['path'] = source_path
+    box = DaqToolBox(knowledge=ReviewedKnowledge(valid.release_id, manifest), role='internal_fae')
+    for name, args in [('read_doc', {'section_id': 'section:product'}),
+                       ('search_knowledge', {'query': '演示设备'})]:
+        result = box.dispatch(name, args)
+        assert result.status == 'not_found'
+        assert not result.sources
+
+
+@pytest.mark.parametrize('field', ['title', 'aliases', 'domain_terms', 'scope'])
+def test_local_paths_in_metadata_rejected_at_publication_and_retrieval(tmp_path, field):
+    rows = [_entity(), _record()]
+    section, body = approved_section(rows)
+    value = 'tmp/private/original'
+    section[field] = {'path_hint': value} if field == 'scope' else [value] if field in {
+        'aliases', 'domain_terms'} else value
+    sign(section, body, rows)
+    with pytest.raises(ValueError, match='section local source path'):
+        releases.publish_release(tmp_path, SNAPSHOT, rows, None, REVIEW,
+                                 sections=[section], bodies={section['section_id']: body})
+    valid = make_view(tmp_path / 'valid')
+    manifest = deepcopy(valid.manifest)
+    manifest['sections'][0][field] = section[field]
+    box = DaqToolBox(knowledge=ReviewedKnowledge(valid.release_id, manifest), role='internal_fae')
+    assert box.dispatch('read_doc', {'section_id': 'section:product'}).status == 'not_found'

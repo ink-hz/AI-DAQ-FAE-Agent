@@ -23,8 +23,11 @@ their references cannot contribute retrieval terms or results.
   absent from content. References remain in structured `sources` with release,
   section ID and scope; per-source references contain content-hash source ID, SHA-256
   and locator, never the local source path. Sections containing local source paths in content are
-  excluded before scoring or reading. This conservative retrieval safeguard does
-  not adjudicate or rewrite the publication.
+  rejected by C1 publication/manifest validation and excluded again before C2 scoring
+  or reading. The shared detector checks exact original-source paths, explicit
+  restricted roots (including relative/backslash forms), UNC, drive, absolute and
+  home paths, including decoded typed JSON. Product alternatives such as Viewer/SDK
+  and USB/以太网 remain valid. It does not rewrite source content or waive reviews.
 - Missing and unauthorized section IDs return identical `not_found` shapes with
   empty matches and sources. Query arguments are not echoed in these results.
   Unknown roles retain the reviewed view's explicit authorization failure.

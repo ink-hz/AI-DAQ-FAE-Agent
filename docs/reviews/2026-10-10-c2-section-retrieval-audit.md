@@ -33,3 +33,22 @@ proof. Real natural-language replay and independent answer review remain later
 Dev gates. C1 whole bodies remain reconciled typed blocks. Oversize sections
 return an explicit error; search excerpts have visible truncation. No publication
 or permission gate was relaxed.
+
+## Independent review correction: local source paths
+
+Independent C2 review found that relative archive roots and UNC paths could pass
+publication and enter full bodies/excerpts. RED verification: 13 failed, 33 passed
+(8 publication failures and 5 additional tool-delivery failures). A shared detector
+now runs at C1 compile/manifest-validation time and C2 retrieval time. It checks
+exact source_refs.path, explicit tmp/temp/Downloads/Documents/Desktop and
+ data/knowledge/knowledge/private roots, slash/backslash and relative-dot forms,
+UNC, drive, absolute and home paths. Typed JSON is decoded before scanning strings.
+Structured section sources continue to omit path entirely.
+
+Tests include publication and already-hydrated legacy-view defenses, metadata
+(title/aliases/domain_terms/scope), arbitrary exact original-source paths, and
+positive product alternatives (Viewer/SDK, USB/以太网, RGB-D/IMU, 输入/输出) to avoid
+a blanket slash ban. Dotted URL failures retain their existing publication error.
+Targeted verification: 102 passed in 0.93s.
+Final correction full suite: **502 passed, 6 existing dependency deprecation
+warnings in 11.60s**, exit 0. No real knowledge or release state changed.

@@ -11,7 +11,6 @@ MAX_MATCHES = 20
 EXCERPT_CHARS = 600
 _BLOCK = re.compile(r'```daq-record\n(.*?)\n```', re.DOTALL)
 _WORD = re.compile(r'[a-z0-9]+(?:[._+-][a-z0-9]+)*|[\u3400-\u9fff]+')
-_LOCAL_PATH = re.compile(r"(?:[A-Za-z]:\\|(?<![\w/])(?:/|~/)[^\s/]+/)")
 _CJK = re.compile(r'^[\u3400-\u9fff]+$')
 
 
@@ -84,13 +83,3 @@ def rank_sections(sections: list[dict], records: list[dict], query: str) -> list
             ranked.append((score, section))
     return [s for _, s in sorted(ranked, key=lambda item: (-item[0], item[1]['section_id']))
             ][:MAX_MATCHES]
-
-
-def contains_source_path(section: dict) -> bool:
-    """Do not deliver local provenance embedded in reviewed content as prose."""
-    text = ' '.join(strings({k: v for k, v in section.items()
-                            if k not in {'source_refs', 'record_assertions',
-                                         'fact_review', 'permission_review', 'body'}}))
-    text += ' ' + section['body'] + ' ' + body_text(section['body'])
-    return bool(_LOCAL_PATH.search(text)) or any(
-        ref['path'] in text for ref in section['source_refs'])

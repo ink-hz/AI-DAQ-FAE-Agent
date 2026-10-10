@@ -10,6 +10,7 @@ import json
 
 from .records import ROLES, _review_valid, record_fingerprint, access_fingerprint
 from .section_consistency import audit_sections
+from .source_paths import contains_source_path
 
 
 def section_fingerprint(section: dict, body: str, records: list[dict]) -> str:
@@ -59,6 +60,8 @@ def compile_sections(sections, bodies, records, snapshot):
                                               'fact_review', 'permission_review'}}) \
                 or _url_bearing_strings(body):
             raise ValueError('section URL must use reviewed link IDs')
+        if contains_source_path({**section, 'body': body}):
+            raise ValueError('section local source path in content')
         if section.get('review_status') != 'verified':
             raise ValueError('section not reviewed')
         if any(not isinstance(section.get(k), str) or not section[k].strip()

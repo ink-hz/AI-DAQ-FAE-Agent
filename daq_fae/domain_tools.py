@@ -7,8 +7,9 @@ import json
 from src.agent.loop.tools import ToolResult
 
 from daq_fae.knowledge.reviewed_view import ReviewedKnowledge
+from daq_fae.knowledge.source_paths import contains_source_path
 from daq_fae.knowledge.section_search import (
-    EXCERPT_CHARS, MAX_BODY_CHARS, MAX_QUERY_CHARS, body_text, contains_source_path, rank_sections,
+    EXCERPT_CHARS, MAX_BODY_CHARS, MAX_QUERY_CHARS, body_text, rank_sections,
 )
 
 
