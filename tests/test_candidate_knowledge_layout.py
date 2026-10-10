@@ -125,6 +125,14 @@ def test_layout_rejects_changed_chapter_prose_with_unchanged_evidence():
         compose_layout(*args)
 
 
+def test_layout_rejects_rehashed_chapter_without_new_bound_review():
+    args = list(fixture())
+    args[4]["a2"][1]["products/ego-1600/index.md"] = "# EGO\n\n## 型号身份\n\nnew assertion\n".encode()
+    args[4]["a2"][0]["sections"][0]["body_sha256"] = hashlib.sha256(b"new assertion").hexdigest()
+    with pytest.raises(ValueError, match="bound impact graph"):
+        compose_layout(*args)
+
+
 def test_layout_rejects_changed_system_topology_metadata():
     args = list(fixture())
     args[4]["a3"][0]["sections"][0]["topology_id"] = "topology:wrong"
