@@ -37,3 +37,48 @@ B2 需将新增章节主张逐字段与既有记录对齐，并建立跨章节�
 独立复核发现，部分指南边界断言误引规格书，外部型号映射措辞也超出了本批实际核验范围。已为 Pro 两个入口/边界章节补引快速指南场景表的精确行；双目变体对应章节补引快速指南和详细说明的适用产品声明行。全文适用矩阵与外部 SKU 映射改成“本次未核验”，没有宣称完成跨来源缺失审计。
 
 私有生成器、验证器及索引已同步更新。新增回归检查约束指南行引用和未核验映射措辞；重新制备后逐节哈希、来源、候选状态、空审核字段与角色限制均通过。没有新增审核签名。原有完整后端测试结果仅适用于上述代码基线，本轮仅改变私有内容及脱敏审计，未修改后端代码。
+
+## 修正批次的确切验证命令与实际输出
+
+以下两项在追溯修正后重新执行，退出码均为 `0`。没有重跑 pytest：本轮只改私有内容、生成器/检查脚本与审计，前述 `267 passed` 是初次制备批次的完整后端结果，不冒称本轮测试。
+
+章节、权限与追溯回归检查：
+
+```sh
+python3 /Users/neo/Developer/work/AI-DAQ-FAE-Agent/data/knowledge/curated/a2-20261010/validate_private.py
+```
+
+实际输出：
+
+```json
+{"checks": "section identity/body hashes/source locations/dependencies/permissions/relative links/no URL or local-path or Agent prose", "products": 8, "markdown_files": 31, "sections": 66, "numeric_presence_flags": [], "review_regression_checks": "guide line references and bounded unverified mappings passed", "fact_review": "pending; mechanical verification is not approval", "online_eligible": false}
+```
+
+逐个原件哈希、全部精确定位重读及抽取哈希检查（命令只输出数量和结果，不输出资料内容或原件路径）：
+
+```sh
+python3 - <<'PY'
+import hashlib,json,subprocess
+from pathlib import Path
+root=Path('/Users/neo/Developer/work/AI-DAQ-FAE-Agent/data/knowledge/curated/a2-20261010')
+archive=Path('/Users/neo/Developer/work/AI-FAE-Agent-local-archive/daq-candidate-20260920/original-files-v2/files')
+audit=json.loads((root/'source-extraction-audit.json').read_text())
+for item in audit:
+ ref=item['source_ref']; p=archive/ref['path']
+ assert hashlib.sha256(p.read_bytes()).hexdigest()==ref['sha256']
+ loc=ref['locator']
+ if loc['kind']=='page':
+  n=str(loc['page']); raw=subprocess.check_output(['pdftotext','-layout','-f',n,'-l',n,str(p),'-']).decode()
+ else:
+  raw='\n'.join(p.read_text().splitlines()[loc['start']-1:loc['end']])
+ assert raw==item['raw_text']
+ assert hashlib.sha256(raw.encode()).hexdigest()==item['fresh_extraction_sha256']
+print(json.dumps({'source_locations':len(audit),'distinct_sources':len({x['source_ref']['sha256'] for x in audit}),'original_sha256_checks':'passed','locator_reread_text_checks':'passed','fresh_extraction_sha256_checks':'passed'},sort_keys=True))
+PY
+```
+
+实际输出：
+
+```json
+{"distinct_sources": 15, "fresh_extraction_sha256_checks": "passed", "locator_reread_text_checks": "passed", "original_sha256_checks": "passed", "source_locations": 35}
+```
