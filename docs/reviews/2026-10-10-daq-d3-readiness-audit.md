@@ -45,3 +45,11 @@ consistency validation to reject unrelated facts during reload. Runtime integrit
 validation now preserves those facts while continuing to hide expired links.
 Publication/activation/rollback still require current reviews. This does not grant
 any real candidate approval or activate a real release.
+
+
+A second review reproduced an empty bootstrap overwriting a signed nonempty
+active pointer without adapters. Three failing regressions cover this downgrade,
+a different empty version, and a competing writer winning the transition lock.
+Empty bootstrap activation now checks the pointer inside the shared lock and only
+allows first boot or idempotent activation of the same empty ID. Existing active
+state is preserved on every rejected bootstrap transition.

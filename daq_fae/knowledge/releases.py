@@ -207,7 +207,14 @@ def activate_release(root, release_id, *, verify_approval=None, observe=None):
     """Governed public activation; callbacks are trusted server-owned dependencies."""
     manifest, _ = _read_release(root, release_id)
     if not any(manifest.get(key) for key in ('sources', 'records', 'sections')):
-        return _activate_release(root, release_id)
+        from .release_readiness import _lock
+        with _lock(root):
+            active = read_active_release(root)
+            if active is not None:
+                if active['release_id'] == release_id:
+                    return None  # Same immutable empty bootstrap, no pointer write.
+                raise ValueError('empty bootstrap cannot replace an active release')
+            return _activate_release(root, release_id)
     if not callable(verify_approval) or not callable(observe):
         raise ValueError('release readiness approval and Dev observation adapters required')
     from .release_readiness import activate_checked

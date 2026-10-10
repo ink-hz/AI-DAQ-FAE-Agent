@@ -45,7 +45,10 @@ publisher. The manifest embeds the entire signed readiness bundle under
 review digests, Dev batch and prior release immutable together. Staging never
 changes `active.json`. Public `publish_release` and `activate_release` enforce D3 for every nonempty
 package; only truly empty sources, records and sections permit bootstrap without
-approval. Storage/pointer primitives are private and used only by the gate and
+approval. Empty bootstrap activation takes the same D3 transition lock and only
+permits an absent pointer or the exact same empty release ID as an idempotent
+operation. It cannot replace any different active release, including a signed
+nonempty release or another empty release. Storage/pointer primitives are private and used only by the gate and
 explicit offline test fixtures. An arbitrary privately written or rehashed
 package still fails the mandatory runtime loader.
 

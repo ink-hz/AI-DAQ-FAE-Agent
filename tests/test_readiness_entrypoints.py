@@ -190,3 +190,45 @@ def test_runtime_reload_preserves_facts_after_natural_link_expiry(tmp_path, monk
     assert not any(r['kind'] == 'link' for r in view.records_for('internal_fae'))
     with pytest.raises(ValueError):
         gate.activate_checked(tmp_path, rid, verify_approval=trusted, observe=observe)
+
+
+def test_empty_bootstrap_cannot_replace_reviewed_active_knowledge(tmp_path):
+    first = gate.stage_release(tmp_path, candidate(), verify_approval=verify)
+    gate.activate_checked(tmp_path, first, verify_approval=verify, observe=observe)
+    empty = {'archive_manifest_sha256': 'f'*64, 'sources': [], 'chunks': []}
+    bootstrap = releases.publish_release(tmp_path, empty, [], None, REVIEW)
+    before = (tmp_path/'active.json').read_bytes()
+    with pytest.raises(ValueError, match='bootstrap'):
+        releases.activate_release(tmp_path, bootstrap)
+    assert (tmp_path/'active.json').read_bytes() == before
+
+
+def test_empty_bootstrap_first_boot_and_idempotence_only(tmp_path):
+    empty = {'archive_manifest_sha256': 'f'*64, 'sources': [], 'chunks': []}
+    first = releases.publish_release(tmp_path, empty, [], None, REVIEW)
+    second = releases.publish_release(tmp_path, empty, [], first, REVIEW)
+    releases.activate_release(tmp_path, first)
+    before = (tmp_path/'active.json').read_bytes()
+    releases.activate_release(tmp_path, first)
+    assert (tmp_path/'active.json').read_bytes() == before
+    with pytest.raises(ValueError, match='bootstrap'):
+        releases.activate_release(tmp_path, second)
+    assert (tmp_path/'active.json').read_bytes() == before
+
+
+def test_bootstrap_checks_pointer_only_after_acquiring_transition_lock(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+    empty = {'archive_manifest_sha256': 'f'*64, 'sources': [], 'chunks': []}
+    bootstrap = releases.publish_release(tmp_path, empty, [], None, REVIEW)
+    first = gate.stage_release(tmp_path, candidate(), verify_approval=verify)
+    original = gate._lock
+    @contextmanager
+    def concurrent_activation(root):
+        with original(root):
+            # A preceding writer wins the lock before bootstrap sees current state.
+            releases._activate_release(root, first)
+            yield
+    monkeypatch.setattr(gate, '_lock', concurrent_activation)
+    with pytest.raises(ValueError, match='bootstrap'):
+        releases.activate_release(tmp_path, bootstrap)
+    assert releases.read_active_release(tmp_path)['release_id'] == first
