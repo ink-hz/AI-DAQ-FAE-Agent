@@ -82,6 +82,12 @@ class DaqToolBox:
     def dispatch(self, name: str, arguments: dict) -> ToolResult:
         if self.access_guard is not None:
             self.access_guard()
+        result = self._dispatch(name, arguments)
+        if self.access_guard is not None:
+            self.access_guard()
+        return result
+
+    def _dispatch(self, name: str, arguments: dict) -> ToolResult:
         if name not in _TOOLS:
             return ToolResult(status="tool_error", content={"error": "unknown_tool"})
         if name == "session_state":

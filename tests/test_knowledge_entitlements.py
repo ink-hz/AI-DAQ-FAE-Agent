@@ -166,3 +166,105 @@ def test_nonempty_task_mode_rejects_missing_role_bound_result_contract(tmp_path,
     monkeypatch.setenv('DAQ_KNOWLEDGE_ENTITLEMENTS_FILE', str(path))
     with pytest.raises(ValueError, match='daq_knowledge_task_role_replay_contract_missing'):
         create_app(provider_mode='offline', knowledge_release_root=tmp_path / 'release')
+
+
+@pytest.mark.parametrize('window', ['before_write', 'after_write', 'after_commit',
+                                    'actual_send', 'replay_reserve', 'replay_frame'])
+def test_revocation_at_commit_or_frame_boundary_never_sends_private_terminal(
+    tmp_path, monkeypatch, pg_database, window,
+):
+    view = make_view(tmp_path / 'release')
+    activate_release(tmp_path / 'release', view.release_id)
+    path = tmp_path / 'roles.json'
+    grants(path, 'internal_fae')
+    env = {**identity_environment(tmp_path), **persistence_environment(tmp_path),
+           'DAQ_KNOWLEDGE_ENTITLEMENTS_FILE': str(path)}
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    def run(runtime, *args, **kwargs):
+        yield {'type': 'done', 'answer': 'PRIVATE_TERMINAL_SENTINEL',
+               'outcome': 'safe_abstained', 'sources': [{'source_id': 'PRIVATE_SOURCE_SENTINEL'}],
+               'tool_calls': [], 'capability_coverage': {}}
+    monkeypatch.setattr('daq_fae.authenticated_chat.LoopRuntime.run', run)
+    durable = store(pg_database)
+    conversations = Conversations()
+    app = create_app(provider_mode='offline', knowledge_release_root=tmp_path / 'release',
+                     platform_client=FakePlatform(), identity_repository=InMemoryAuthenticatedSessionRepository(),
+                     conversation_repository=conversations, feedback_store=Feedback(),
+                     review_store=object(), durable_state=durable)
+    client = TestClient(app, base_url=env['DAQ_PLATFORM_PUBLIC_ORIGIN'])
+    launch = client.post('/enterprise/session', json={'code': CODE},
+                         headers={'Origin': env['DAQ_PLATFORM_PUBLIC_ORIGIN']})
+    headers = {'Origin': env['DAQ_PLATFORM_PUBLIC_ORIGIN'],
+               'X-DAQ-Enterprise-CSRF': launch.json()['csrf_token']}
+    body = {'message': '采集', 'client_request_id': 'boundary-' + window}
+    if window.startswith('replay'):
+        initial = client.post('/chat', json=body, headers=headers)
+        assert terminal(initial)['answer'] == 'PRIVATE_TERMINAL_SENTINEL'
+        assert client.post('/chat', json=body, headers=headers).text == initial.text
+        original = durable.reserve
+        def reserve(*args, **kwargs):
+            reservation = original(*args, **kwargs)
+            if reservation.status == 'replay':
+                if window == 'replay_reserve':
+                    grants(path, None)
+                else:
+                    def frames():
+                        for frame in reservation.events:
+                            if frame.startswith('event: text_delta'):
+                                grants(path, None)
+                            yield frame
+                    return replace(reservation, events=frames())
+            return reservation
+        monkeypatch.setattr(durable, 'reserve', reserve)
+    elif window == 'actual_send':
+        from daq_fae.authenticated_chat import iter_with_heartbeat
+        def heartbeat(*args, **kwargs):
+            for item in iter_with_heartbeat(*args, **kwargs):
+                if isinstance(item, str) and item.startswith('event: text_delta'):
+                    grants(path, None)
+                yield item
+        monkeypatch.setattr('daq_fae.authenticated_chat.iter_with_heartbeat', heartbeat)
+    else:
+        original = durable.complete_turn
+        def complete(*args, **kwargs):
+            writer = kwargs['write_turn']
+            def write(connection):
+                if window == 'before_write':
+                    grants(path, None)
+                result = writer(connection)
+                if window == 'after_write':
+                    grants(path, None)
+                return result
+            kwargs['write_turn'] = write
+            result = original(*args, **kwargs)
+            if window == 'after_commit':
+                grants(path, None)
+            return result
+        monkeypatch.setattr(durable, 'complete_turn', complete)
+    response = client.post('/chat', json=body, headers=headers)
+    assert 'PRIVATE_TERMINAL_SENTINEL' not in response.text
+    assert 'PRIVATE_SOURCE_SENTINEL' not in response.text
+    assert 'event: done' not in response.text
+    assert '"stage": "authorization"' in response.text
+    if window == 'before_write':
+        assert not conversations.writes
+
+
+def test_tool_revocation_during_section_read_withholds_body(tmp_path, monkeypatch):
+    from daq_fae.domain_tools import DaqToolBox
+    from daq_fae.knowledge.entitlements import KnowledgeEntitlements
+    path = tmp_path / 'roles.json'
+    grants(path, 'internal_fae')
+    policy = KnowledgeEntitlements(path)
+    view = make_view(tmp_path / 'release')
+    original = view.sections_for
+    def sections(*args, **kwargs):
+        result = original(*args, **kwargs)
+        grants(path, None)
+        return result
+    monkeypatch.setattr(view, 'sections_for', sections)
+    box = DaqToolBox(knowledge=view, role='internal_fae',
+                     access_guard=lambda: policy.role_for(FakePlatform().subject))
+    with pytest.raises(PlatformIdentityError):
+        box.with_request_context('录制').dispatch('read_doc', {'section_id': 'section:recording'})

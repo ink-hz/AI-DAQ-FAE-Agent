@@ -49,6 +49,25 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
         binding = policy.binding_for(subject, knowledge_release) if knowledge is not None else None
     except PlatformIdentityError as exc:
         raise HTTPException(exc.status_code, exc.code) from None
+    def assert_current_access():
+        if binding is not None and policy.binding_for(subject, knowledge_release) != binding:
+            raise PlatformIdentityError("daq_knowledge_role_changed", status_code=403)
+
+    def authorized_frames(frames):
+        # This is the last iterator boundary before StreamingResponse sends bytes.
+        # Check after obtaining each frame, including buffered/replayed frames.
+        try:
+            for frame in frames:
+                assert_current_access()
+                yield frame
+        except PlatformIdentityError as exc:
+            yield sse_event("stage", {"stage": "authorization", "status": "error",
+                                      "reason": exc.code})
+        finally:
+            close = getattr(frames, "close", None)
+            if close is not None:
+                close()
+
     payload = body.model_dump(mode="json")
     if binding is not None:
         payload["knowledge_access"] = binding
@@ -72,7 +91,7 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
     except DurableStateError:
         raise HTTPException(503, "daq_durable_storage_unavailable") from None
     if reservation.status == "replay":
-        return StreamingResponse(iter(reservation.events), media_type="text/event-stream")
+        return StreamingResponse(authorized_frames(iter(reservation.events)), media_type="text/event-stream")
     if reservation.status != "execute":
         raise HTTPException(409, f"daq_request_{reservation.status}")
 
@@ -105,10 +124,6 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
         interrupt("context_load_failed")
         app.state.chat_concurrency_gate.release()
         raise HTTPException(503, "daq_durable_storage_unavailable") from None
-
-    def assert_current_access():
-        if binding is not None and policy.binding_for(subject, knowledge_release) != binding:
-            raise PlatformIdentityError("daq_knowledge_role_changed", status_code=403)
 
     prior_history = list(session.messages)
     lease_lost = threading.Event()
@@ -266,21 +281,30 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
                     knowledge_release=knowledge_release if binding else None,
                 ) if plan or binding else None
                 def terminal_events(turn_id):
+                    assert_current_access()
                     done["turn_id"] = turn_id
                     return [*frames,
                             sse_event("text_delta", {"delta": done["answer"]}),
                             sse_event("sources", done["sources"]),
                             sse_event("done", done)]
 
-                _, all_frames = durable.complete_turn(
-                    subject, reservation,
-                    write_turn=lambda connection: persistence.save_turn(
+                def write_turn(connection):
+                    assert_current_access()
+                    turn_id = persistence.save_turn(
                         subject, working_session, turn=turn,
                         attachment_relations=attachment_relations, connection=connection,
-                    ),
+                    )
+                    assert_current_access()
+                    return turn_id
+
+                assert_current_access()
+                _, all_frames = durable.complete_turn(
+                    subject, reservation,
+                    write_turn=write_turn,
                     terminal_events=terminal_events, context=context,
                     expected_context_revision=checkpoint.revision if checkpoint else 0,
                 )
+                assert_current_access()
                 terminal_frames = all_frames[len(frames):]
                 session.messages = working_session.messages
                 session.session_context = working_session.session_context
@@ -303,7 +327,9 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
                                 "runtime_release": runtime_release,
                                 "knowledge_release": knowledge_release,
                             })
-            yield from terminal_frames
+            for frame in terminal_frames:
+                assert_current_access()
+                yield frame
         except PlatformIdentityError as exc:
             interrupt("knowledge_authorization_changed")
             trace.finalize({"outcome": "authorization_error", "fallback_used": True,
@@ -354,4 +380,4 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
                 lease_lost.set()
                 interrupt("client_disconnected_or_stream_incomplete")
 
-    return StreamingResponse(stream(), media_type="text/event-stream")
+    return StreamingResponse(authorized_frames(stream()), media_type="text/event-stream")

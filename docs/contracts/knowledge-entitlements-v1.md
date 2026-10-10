@@ -45,3 +45,21 @@ nonempty knowledge plus Task enablement fails startup with
 unchanged. A future Task contract must bind role/release at submission, execution
 and result replay before enabling this combination. This is not production or
 pilot authorization, and does not activate real candidate knowledge.
+
+## Revocation during execution or delivery
+
+The authorization check also runs after each domain tool computes its result,
+before and after the transactional conversation writer, when terminal replay
+frames are constructed, and after the completion transaction returns. Both new
+responses and idempotent replays pass through the same final iterator guard: it
+checks current entitlements after obtaining each frame and immediately before
+handing that frame to StreamingResponse. This includes buffered terminal frames,
+source frames, done/trace metadata, stages and heartbeats. A failed check terminates
+the remaining stream with a sanitized authorization error stage. No previously
+buffered private frames follow that error.
+
+If revocation occurs after commit, the committed record stays bound to the old
+role/release and cannot be delivered to the revoked role. It is not rewritten or
+uncommitted. Frames already transmitted while authorized cannot be recalled;
+revocation controls subsequent application-level frame deliveries. Filesystem
+policy updates and network writes are not one atomic transaction.

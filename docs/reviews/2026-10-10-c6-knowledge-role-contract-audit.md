@@ -77,3 +77,33 @@ Final fresh verification and commit identity are recorded below after execution.
 Code/test/contract/audit only; report uses synthetic IDs and no document payloads,
 secrets, live grant mappings or release activation pointers. Commit is the commit
 containing this report; root agent receives the exact SHA separately.
+
+## C6 P1 review correction: commit, replay and tool-return races
+
+Review reproduced revocation after complete_turn committed but before terminal
+frames were sent, plus replay without per-frame checks. A second finding showed
+revocation during section retrieval passed the dispatch-entry-only check.
+
+TDD commands (same working directory and interpreter as above):
+
+- `<interpreter> -m pytest -q tests/test_knowledge_entitlements.py -k boundary --tb=short`:
+  RED, **6 failed / 5 deselected**, 1.96s. Before writer, after writer, after commit,
+  actual send iterator, replay reservation and replay frame boundaries each leaked
+  synthetic private answer/source sentinels.
+- `<interpreter> -m pytest -q tests/test_knowledge_entitlements.py -k during_section --tb=short`:
+  RED, **1 failed / 11 deselected**, 0.82s. Revocation after sections_for returned
+  did not raise and allowed the private read_doc body to return.
+- Implementation reuses assert_current_access around persistence callbacks, after
+  commit and at the final frame iterator shared by execute/replay. Domain dispatch
+  checks both before and after evidence calculation; with_request_context preserves
+  the guard. Revocation emits only a sanitized authorization error and withholds
+  remaining private frames, including sources and done/trace metadata.
+- `<interpreter> -m pytest -q tests/test_knowledge_entitlements.py tests/test_authenticated_chat.py tests/test_authenticated_atomic_completion.py --tb=short`:
+  GREEN, **20 passed**, 6 existing dependency warnings, 3.81s. Includes normal
+  continuation and same-request idempotent replay regression contracts.
+
+Previously committed authorized records remain role/release bound. Already sent
+bytes cannot be recalled; no claim of atomic filesystem-policy/network transport
+transactions is made. No real data, model or production execution was involved.
+- Final `<interpreter> -m pytest -q tests --tb=short`: **613 passed**, 6 existing
+  dependency warnings, 12.73s. `git diff --check`: clean, exit 0.
