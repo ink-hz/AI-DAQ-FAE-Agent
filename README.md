@@ -14,9 +14,13 @@
 | 附件上传、会话内检索/精读、图片分析、归档 | 已接入；认证模式可启用独立归档清单与删除确认，关闭新归档后仍处理既有删除，真实 Postgres 往返及删除与归档确认竞态测试通过；视觉 Provider 尚未配置时明确失败 |
 | WebUI | 本机 `/app/` 与内部认证模式 `/daq/` 分别装配，沿用旧客户端合同 |
 | Platform 身份、Postgres 会话/反馈、review、HTTP Task | 已装配可选内部认证模式；数采 Agent ID、任务签名 audience、会话和资料隔离；真实 Platform 联调未完成 |
-| 数采事实、关系、权限和知识发布 | 在线仍为空知识；K-1 有离线导入、影响审计、本机不可变发布及回滚工具；K-2/K-3 有私有复审包；K-7 有 70 条可追溯候选/冲突记录及其中 47 条的具名复审提案，尚无事实/权限签认或真实知识激活 |
+| 数采事实、关系、权限和知识发布 | 在线仍为空知识；原件清单、候选章节/记录、增量影响图、角色过滤和受审核的不可变 Dev 发布/回滚门已有离线工程实现。真实章节、事实、权限、链接均未签认，未激活真实知识 |
 
 **尚不能宣布完整能力等价或试点可发布。** 共享源码虽已推送远端集成分支，受保护依赖 pin 尚未核实；真实 Opus 网关有一次 476 秒传输失败，相机 Dev 回归有一个硬失败和一个答案矛盾；数采真实知识、Platform 实例联调和部署回滚仍未验收。原始数采资料已有本机受限归档候选和逐文件哈希，但持久存储与资料裁决尚未验收，不进入当前知识发布。[接管门禁核查](docs/reviews/2026-10-08-daq-takeover-gate-audit.md)、[迁移计划](docs/superpowers/plans/2026-10-08-full-runtime-parity-migration.md)与[完整设计](docs/2026-10-08-数采FAE完整设计.md)记录发布门。
+
+### 数采知识专项进度（2026-10-10）
+
+按[知识专项任务书](docs/superpowers/plans/2026-10-10-daq-knowledge-workstream-task-brief.md)建立了从原件清单到 Dev 答案复审的工程合同。私有候选包含 276 份原件、114 个章节、405 条记录和 375 个更新依赖题；它们仍不能作为已审核答案使用。B2 审计保留 293 处章节一致性发现和 325 条待规范化转录。D2 的 572 项事实、权限或页面审核均未签认。独立受控原件归档与重取尚未完成；D3 真实发布审计拒绝激活；D4 的 375 道题全是同一题族草案，十类冻结题、真实 Dev 模型回放和独立答案复审均未完成。[逐项状态与阻断](docs/reviews/2026-10-10-daq-knowledge-workstream-status.md)区分工程验证、资料签认和真实发布。合入代码或推送远端不等于 Dev 知识切换，更不等于生产部署。
 
 ## 本机启动
 
@@ -77,7 +81,7 @@ cd webui && npm test && npm run build
   --current data/knowledge/review/<新归档哈希>-<新配方版本>.json
 ```
 
-同一归档和同一抽取器版本重导入得到同一候选快照；抽取规则变化时须提升 `extractor_version` 并另存快照，不覆盖原文件。更新报告按文件内容哈希列出新增、变更、删除，以及必须复审的记录。PDF 按页、Markdown/TXT 按行定位；软件、固件、图片等仅保留元数据。`publish` 命令会重新读取并核验归档，要求记录的来源哈希、定位、事实复审和资料权限复审匹配。它只生成本机不可变快照，需另用 `activate` 显式切换；`rollback` 可切回既有快照。命令详情见 `.venv/bin/python scripts/daq_knowledge.py --help`。这套工具不改变当前 API 的 `empty-dev-v0`，不代表真实知识、Platform 或生产已发布。
+同一归档和同一抽取器版本重导入得到同一候选快照；抽取规则变化时须提升 `extractor_version` 并另存快照，不覆盖原文件。更新报告按文件内容哈希列出新增、变更、删除，以及必须复审的记录。PDF 按页、Markdown/TXT 按行定位；软件、固件、图片等仅保留元数据。非空 `publish`、`activate` 和 `rollback` 现在要求可信 D3 审核与 Dev 观察适配器；仓库 CLI 没有这些适配器时拒绝非空切换。不可变快照与活动指针是独立步骤。命令详情见 `.venv/bin/python scripts/daq_knowledge.py --help` 和 [D3 合同](docs/knowledge/2026-10-10-daq-d3-readiness-contract.md)。这些工具不改变当前 API 的 `empty-dev-v0`，不代表真实知识、Platform 或生产已发布。
 
 `fingerprint` 只计算待审核摘要，不代替审核。具名事实复审、资料权限复审和链接复审须各自将对应摘要写入 `record_sha256`；更改值、条件或来源会使旧事实审核失效，扩大可见或转发角色还会使旧权限审核失效。已核验规格、软件关系和组合步骤必须引用同一发布中已核验的实体或拓扑。当前角色标识限于 `internal_fae`、`tmall_support`、`channel`，实际可见范围仍待 K-2 负责人签认。字段和审核格式见[记录合同](docs/knowledge/2026-10-08-daq-k1-record-contract.md)。
 
@@ -91,7 +95,7 @@ K-6 从已归档的详细指南再提取 USB 与 Wi-Fi 单机 PC 采集拓扑/�
 
 K-7 修正了两条 HUB 阈值比较符并补齐组合流程的未决标记，从 70 条中划出 47 条供苍渊做事实与权限复审；提案只有候选指纹，没有签名。临时发布演练通过，真实知识仍未激活。见 [K-7 复审提案](docs/reviews/2026-10-09-daq-k7-review-proposal.md)。
 
-本机 Dev 可选用 `DAQ_KNOWLEDGE_RELEASE_ROOT` 指向 K-1 已审核发布目录；启动时读取活动指针并冻结该知识版本，健康和 trace 报告其确切哈希。工具先按 `internal_fae` 查看权限过滤；链接还要求转发权限。发布目录无活动指针时继续使用 `empty-dev-v0`。切换或回滚活动指针后须重启本机 Dev 服务；认证/Platform 模式在细粒度角色合同完成前拒绝加载非空快照。合成验证见 [K-4 本机消费者设计](docs/superpowers/specs/2026-10-09-daq-k4-dev-consumer-design.md)。当前没有经裁决的真实知识发布，也未设置该活动指针。
+`DAQ_KNOWLEDGE_RELEASE_ROOT` 指向独立活动指针；无活动指针时继续使用 `empty-dev-v0`。非空发布必须通过 D3 审核，启动时校验签名、运行时版本和上游源码身份。未启用认证身份的本机服务拒绝加载非空知识，不再默认授予 `internal_fae`；认证模式还要求可信的逐人资料角色映射。切换或回滚指针后须重启 Dev 服务，健康和 trace 均报告确切知识版本。早期 [K-4 本机消费者设计](docs/superpowers/specs/2026-10-09-daq-k4-dev-consumer-design.md)仅记录合成演练；当前实际边界以 [D3 合同](docs/knowledge/2026-10-10-daq-d3-readiness-contract.md)为准。当前没有经裁决的真实知识发布，也未设置该活动指针。
 
 ## 内部认证模式的装配
 
