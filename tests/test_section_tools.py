@@ -155,6 +155,8 @@ LOCAL_SOURCE_PATHS = [
     'Downloads/private/secret', r'\\server\share\secret',
     './tmp/private/secret', r'tmp\private\secret', '~/archive/original',
     '原件位于tmp/private/secret', r'.\Downloads\private\secret',
+    '原件位于/private/archive/secret', '原件位于/home/neo/archive/original',
+    r'原件位于\private\archive\secret', '原件位于／private／archive／secret',
 ]
 
 
@@ -245,3 +247,16 @@ def test_local_paths_in_metadata_rejected_at_publication_and_retrieval(tmp_path,
     manifest['sections'][0][field] = section[field]
     box = DaqToolBox(knowledge=ReviewedKnowledge(valid.release_id, manifest), role='internal_fae')
     assert box.dispatch('read_doc', {'section_id': 'section:product'}).status == 'not_found'
+
+
+@pytest.mark.parametrize('path', ['/private/archive/secret', '/home/neo/archive/original',
+                                  r'\private\archive\secret', '／private／archive／secret'])
+def test_manifest_load_rejects_chinese_adjacent_absolute_path(tmp_path, path):
+    valid = make_view(tmp_path)
+    manifest = deepcopy(valid.manifest)
+    section = manifest['sections'][0]
+    # Keep signatures valid: this tests the path gate, not stale-review rejection.
+    section['title'] = '原件位于' + path
+    sign(section, section['body'], manifest['records'])
+    with pytest.raises(ValueError, match='section local source path'):
+        ReviewedKnowledge.from_manifest(valid.release_id, manifest)

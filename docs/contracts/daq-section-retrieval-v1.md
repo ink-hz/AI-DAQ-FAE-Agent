@@ -26,7 +26,8 @@ their references cannot contribute retrieval terms or results.
   rejected by C1 publication/manifest validation and excluded again before C2 scoring
   or reading. The shared detector checks exact original-source paths, explicit
   restricted roots (including relative/backslash forms), UNC, drive, absolute and
-  home paths, including decoded typed JSON. Product alternatives such as Viewer/SDK
+  home paths, including multi-level Unix absolute paths adjoining Chinese prose
+  and decoded typed JSON. Product alternatives such as Viewer/SDK
   and USB/以太网 remain valid. It does not rewrite source content or waive reviews.
 - Missing and unauthorized section IDs return identical `not_found` shapes with
   empty matches and sources. Query arguments are not echoed in these results.

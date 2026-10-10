@@ -52,3 +52,19 @@ a blanket slash ban. Dotted URL failures retain their existing publication error
 Targeted verification: 102 passed in 0.93s.
 Final correction full suite: **502 passed, 6 existing dependency deprecation
 warnings in 11.60s**, exit 0. No real knowledge or release state changed.
+
+## Re-review correction: Chinese-adjacent absolute paths
+
+A second independent review identified multi-level Unix absolute paths immediately
+following Chinese prose. The previous boundary rejected Chinese preceding
+characters to preserve slash-separated product terms, allowing this case through.
+Six RED tests reproduced the problem in publication, validly signed manifest load,
+and search/read of a legacy view (6 failed, 58 passed in 0.95s). The shared detector
+now recognizes the multi-level absolute form after Chinese text. Existing single
+slash positive terms such as 输入/输出 and USB/以太网 remain available.
+The expanded regression also covers backslashes and fullwidth slashes. Replacing
+only the detector with its exact pre-fix Git version reproduced 11 failures
+(59 passed); restoring the correction yielded 114 targeted passes in 1.05s.
+Publication, signed metadata loading and runtime body/excerpt guards are covered.
+Final expanded full suite: **514 passed, 6 existing dependency deprecation warnings
+in 11.67s**, exit 0. No real data or release state changed.
