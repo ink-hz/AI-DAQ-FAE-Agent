@@ -64,6 +64,12 @@ def _record(kind="claim", status="verified", **overrides):
     if kind == "link" and status == "verified":
         row["link_review"] = {"reviewer": "link-owner", "reviewed_at": "2026-10-08",
                               "final_url": data["url"]}
+    if row['kind'] == 'link':
+        row['data']['page_evidence'] = {
+            'title': 'Synthetic reviewed page', 'version': 'not_stated',
+            'captured_at': '2026-10-08', 'valid_until': '2099-12-31',
+            'snapshot_sha256': 'c' * 64, 'sku_scope': deepcopy(row['scope']),
+        }
     row.update(overrides)
     return _bind_reviews(row)
 

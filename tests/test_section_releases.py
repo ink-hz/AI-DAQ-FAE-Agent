@@ -151,6 +151,12 @@ def reviewed_link():
     row = _record()
     row.update(id='link:synthetic', kind='link', data={
         'url': 'https://example.com/guide', 'title': 'Synthetic guide', 'link_type': 'documentation'})
+    if row['kind'] == 'link':
+        row['data']['page_evidence'] = {
+            'title': 'Synthetic reviewed page', 'version': 'not_stated',
+            'captured_at': '2026-10-08', 'valid_until': '2099-12-31',
+            'snapshot_sha256': 'c' * 64, 'sku_scope': deepcopy(row['scope']),
+        }
     row['access_review']['forward_roles'] = ['internal_fae']
     row['fact_review']['record_sha256'] = record_fingerprint(row)
     row['access_review']['record_sha256'] = access_fingerprint(row)

@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 
 from daq_fae.knowledge.records import (KINDS, ROLES, STATUSES,
-                                       access_fingerprint, record_fingerprint)
+                                       access_fingerprint, record_fingerprint, link_review_valid)
 from daq_fae.knowledge.releases import read_active_release
 
 
@@ -142,8 +142,7 @@ class ReviewedKnowledge:
                 raise ValueError("knowledge review invalid")
             if row.get("kind") == "link":
                 review = row.get("link_review")
-                if not isinstance(review, dict) or review.get("record_sha256") != \
-                        record_fingerprint(row) or review.get("final_url") != row.get("data", {}).get("url"):
+                if not link_review_valid(row) or review.get("record_sha256") != record_fingerprint(row):
                     raise ValueError("knowledge link review invalid")
         if manifest.get("answerable_count") != answerable:
             raise ValueError("knowledge release answerable count invalid")
@@ -158,6 +157,8 @@ class ReviewedKnowledge:
         visible = []
         for row in self._records:
             if not row["answerable"]:
+                continue
+            if row["kind"] == "link" and not link_review_valid(row):
                 continue
             access = row["access_review"]
             if role not in access["view_roles"]:

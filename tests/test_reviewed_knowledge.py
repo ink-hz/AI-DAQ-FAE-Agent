@@ -32,6 +32,12 @@ def _row(record_id, kind, data, *, view=("internal_fae",), forward=()):
            "fact_review": {"reviewer": "fae", "reviewed_at": "2026-10-09"},
            "access_review": {"reviewer": "owner", "reviewed_at": "2026-10-09",
                              "view_roles": list(view), "forward_roles": list(forward)}}
+    if row['kind'] == 'link':
+        row['data']['page_evidence'] = {
+            'title': 'Synthetic reviewed page', 'version': 'not_stated',
+            'captured_at': '2026-10-08', 'valid_until': '2099-12-31',
+            'snapshot_sha256': 'c' * 64, 'sku_scope': deepcopy(row['scope']),
+        }
     row["fact_review"]["record_sha256"] = record_fingerprint(row)
     row["access_review"]["record_sha256"] = access_fingerprint(row)
     if kind == "link":

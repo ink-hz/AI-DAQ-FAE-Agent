@@ -103,6 +103,36 @@ def _review_valid(review: object) -> bool:
     return True
 
 
+def link_review_valid(row: dict) -> bool:
+    """Validate a separately reviewed page bound to exact delivery applicability."""
+    review = row.get("link_review")
+    data = row.get("data", {})
+    if not isinstance(data, dict):
+        return False
+    page = data.get("page_evidence")
+    if not _review_valid(review) or not isinstance(page, dict):
+        return False
+    url = data.get("url")
+    if not isinstance(url, str) or any(c.isspace() or ord(c) < 32 for c in url):
+        return False
+    try:
+        parsed = urlsplit(url)
+        if parsed.scheme != "https" or not parsed.hostname or parsed.username or \
+                parsed.password or parsed.port not in (None, 443):
+            return False
+        captured = date.fromisoformat(page["captured_at"])
+        expires = date.fromisoformat(page["valid_until"])
+        reviewed = date.fromisoformat(review["reviewed_at"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    return (review.get("final_url") == url and
+            captured <= reviewed <= date.today() <= expires and
+            all(_nonempty(page.get(key)) for key in ("title", "version")) and
+            isinstance(page.get("snapshot_sha256"), str) and
+            re.fullmatch(r"[0-9a-f]{64}", page["snapshot_sha256"]) is not None and
+            bool(row.get("scope")) and page.get("sku_scope") == row["scope"])
+
+
 def _valid_source_ref(ref: object, sources: dict, chunks: set) -> str | None:
     if not isinstance(ref, dict):
         return "source_ref_invalid"
@@ -245,11 +275,7 @@ def validate_records(records: list[dict], snapshot: dict) -> tuple[list[dict], l
                 findings.append(_finding(record_id, "asset_cannot_verify_support"))
             if kind == "link":
                 review = row.get("link_review")
-                url = data.get("url")
-                parsed = urlsplit(url) if isinstance(url, str) else None
-                if not _review_valid(review) or review.get("final_url") != url \
-                        or parsed is None or parsed.scheme != "https" or not parsed.hostname \
-                        or parsed.username or parsed.password:
+                if not link_review_valid(row):
                     findings.append(_finding(record_id, "link_review_missing"))
                 elif review.get("record_sha256") != fingerprint:
                     findings.append(_finding(record_id, "link_review_stale"))
