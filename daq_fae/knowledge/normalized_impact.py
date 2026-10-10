@@ -56,7 +56,7 @@ def extend_review_graph(baseline: dict, candidates: list[dict],
                 ref not in candidate.get("source_refs", []) or
                 original not in section.get("record_assertions", []) or
                 oid not in section.get("dependency_claim_ids", []) or
-                any(candidate["scope"].get(k) != v for k, v in original["scope"].items()) or
+                candidate.get("scope") != original.get("scope") or
                 ref not in original.get("source_refs", []) or
                 ref not in section.get("source_refs", [])):
             raise ValueError("normalization binding differs from original section or source")
@@ -78,10 +78,13 @@ def extend_review_graph(baseline: dict, candidates: list[dict],
                sources[ref["path"]]["sha256"] != ref["sha256"] for ref in refs):
             raise ValueError("candidate source is missing from baseline snapshot")
         new_row = deepcopy(row)
+        # The normalized claim is a proposal derived from this exact original
+        # assertion. Section context can affect the original's applicability,
+        # so changes to it must conservatively reach the normalized claim.
+        new_row["dependency_record_ids"] = [row["data"]["original_record_id"]]
         result["records"].append(new_row)
-        # These are context dependencies for review, not assertions in the
-        # chapter body. Keep the edge claim -> section one-way so another
-        # source in a shared section does not invalidate this claim.
+        # This remains a context dependency, not a reviewed assertion in the
+        # chapter body. Candidate changes still trigger chapter re-review.
         for sid in {b["section_id"] for b in by_candidate[cid]}:
             result_section = sections[sid]
             if cid not in result_section["dependency_claim_ids"]:

@@ -10,7 +10,8 @@ import pytest
 
 from daq_fae.knowledge.normalized_impact import extend_review_graph
 from daq_fae.knowledge.update_impact import plan_update
-from scripts.prepare_b3_normalized_impact import build
+from daq_fae.knowledge.section_consistency import render_record
+from scripts.prepare_b3_normalized_impact import _review_snapshot, build
 
 
 REF = {"path": "restricted/spec.md", "sha256": "a" * 64,
@@ -19,12 +20,15 @@ REF = {"path": "restricted/spec.md", "sha256": "a" * 64,
 
 def inputs():
     original = {"id": "claim:old", "kind": "claim", "status": "candidate",
-                "scope": {"product": "ego"}, "source_refs": [deepcopy(REF)],
+                "scope": {"product": "ego", "resolution_variant": "1600x1200"},
+                "source_refs": [deepcopy(REF)],
                 "data": {"entity_id": "entity:ego", "field": "source_text",
                          "value": "2 cameras", "unit": "source_text", "conditions": {}}}
+    section_body = render_record(original)
     section = {"section_id": "section:imaging", "source_refs": [deepcopy(REF)],
-               "scope": {"product": "ego"}, "dependency_claim_ids": ["claim:old"],
-               "record_assertions": [deepcopy(original)], "body_sha256": "b" * 64}
+               "scope": deepcopy(original["scope"]), "dependency_claim_ids": ["claim:old"],
+               "record_assertions": [deepcopy(original)],
+               "body_sha256": hashlib.sha256(section_body.encode()).hexdigest()}
     baseline = {
         "snapshot": {"sources": [{"path": REF["path"], "sha256": REF["sha256"],
                                   "kind": "markdown"}], "extractor_version": "1",
@@ -34,7 +38,7 @@ def inputs():
         "sku_definitions": {}, "field_definitions": {},
     }
     candidate = {"id": "claim:new", "kind": "claim", "status": "candidate",
-                 "scope": {"product": "ego", "resolution_variant": "1600x1200"},
+                 "scope": deepcopy(original["scope"]),
                  "source_refs": [deepcopy(REF)],
                  "data": {"entity_id": "entity:ego", "field": "camera_count",
                           "value": 2, "unit": "camera", "comparator": "=",
@@ -58,6 +62,7 @@ def test_exact_scoped_candidate_reaches_section_coverage_and_question_without_pr
     assert row["status"] == "candidate"
     assert "claim:new" in enriched["sections"][0]["dependency_claim_ids"]
     assert "dependency_section_ids" not in row
+    assert row["dependency_record_ids"] == ["claim:old"]
     cell = enriched["coverage"][0]
     assert cell["record_ids"] == ["claim:new"]
     assert cell["scope"] == {"product_scope": candidate_scope(),
@@ -96,6 +101,7 @@ def test_source_change_and_field_definition_change_reach_only_bound_candidate():
     lambda c, b, v: b[0].update(section_id="section:wrong"),
     lambda c, b, v: b[0]["source_ref"].update(sha256="f" * 64),
     lambda c, b, v: c[0]["scope"].update(product="eg-db"),
+    lambda c, b, v: c[0]["scope"].update(extra_variant="invented"),
     lambda c, b, v: c[0]["source_refs"][0]["locator"].update(start=3),
     lambda c, b, v: b.clear(),
     lambda c, b, v: v.update(blocked_field_ids=[]),
@@ -120,7 +126,7 @@ def test_different_applicability_stays_in_distinct_coverage_cells():
     baseline, candidates, bindings, vocabulary = inputs()
     another = deepcopy(candidates[0])
     another["id"] = "claim:another"
-    another["scope"]["resolution_variant"] = "1920x1080"
+    another["data"]["conditions"]["document_revision"] = "v2"
     candidates.append(another)
     bindings.append(dict(bindings[0], candidate_record_id=another["id"]))
     enriched = extend_review_graph(baseline, candidates, bindings, vocabulary)
@@ -129,7 +135,7 @@ def test_different_applicability_stays_in_distinct_coverage_cells():
         ("claim:new",), ("claim:another",)}
 
 
-def test_two_sources_in_one_section_do_not_invalidate_each_others_claims():
+def test_two_sources_in_one_section_recheck_both_assertions_and_normalizations():
     baseline, candidates, bindings, vocabulary = inputs()
     other_ref = deepcopy(REF)
     other_ref["path"] = "restricted/other.md"
@@ -163,11 +169,11 @@ def test_two_sources_in_one_section_do_not_invalidate_each_others_claims():
     affected = plan_update(enriched, changed)["affected"]
     assert "section:imaging" in affected["section_ids"]
     assert "claim:new" in affected["record_ids"]
-    assert "claim:other-new" not in affected["record_ids"]
+    assert "claim:other-new" in affected["record_ids"]
     other_question = next(q["question_id"] for q in enriched["questions"]
                           if any(c["record_ids"] == ["claim:other-new"] and
                                  c["coverage_id"] in q["coverage_ids"] for c in enriched["coverage"]))
-    assert other_question not in affected["question_ids"]
+    assert other_question in affected["question_ids"]
 
 
 def _write_json(path: Path, value) -> str:
@@ -175,32 +181,99 @@ def _write_json(path: Path, value) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def test_alternate_pdf_extraction_is_recorded_without_replacing_snapshot_text():
+    baseline, _, _, _ = inputs()
+    source_audit = [{"source_ref": deepcopy(REF), "raw_text": "layout text",
+                     "text_sha256": hashlib.sha256(b"layout text").hexdigest()}]
+    baseline["snapshot"]["chunks"][0]["text"] = "extractor text"
+    expanded, alternatives = _review_snapshot(baseline, source_audit, {"chunks": []})
+    assert expanded["snapshot"]["chunks"][0]["text"] == "extractor text"
+    assert alternatives == [{"source_ref": REF,
+                             "snapshot_text_sha256": hashlib.sha256(b"extractor text").hexdigest(),
+                             "review_text_sha256": hashlib.sha256(b"layout text").hexdigest()}]
+
+
 def test_private_cli_verifies_input_hashes_and_refuses_reused_output(tmp_path):
     baseline, candidates, bindings, vocabulary = inputs()
+    baseline["snapshot"]["chunks"] = []
+    context_ref = deepcopy(REF)
+    context_ref["path"] = "restricted/context.md"
+    baseline["snapshot"]["sources"].append({"path": context_ref["path"],
+                                               "sha256": context_ref["sha256"], "kind": "markdown"})
+    baseline["sections"][0]["source_refs"].append(context_ref)
     review = tmp_path / "review"
     review.mkdir()
     hashes = {}
     for name, value in (("candidate-records.json", candidates),
                         ("proposal-bindings.json", bindings),
-                        ("field-vocabulary-review.json", vocabulary)):
+                        ("field-vocabulary-review.json", vocabulary),
+                        ("subline-locator-overlay.json", {
+                            "review_only": True, "source_snapshot_sha256": "a" * 64,
+                            "chunks": [{"source_path": REF["path"],
+                                        "source_sha256": REF["sha256"],
+                                        "locator": REF["locator"], "text": "2 cameras",
+                                        "text_sha256": hashlib.sha256(b"2 cameras").hexdigest()}]})):
         hashes[name] = _write_json(review / name, value)
-    _write_json(review / "summary.json", {"output_sha256": hashes})
+    _write_json(review / "summary.json", {"output_sha256": hashes,
+                                           "source_snapshot_sha256": "a" * 64})
     baseline_path = tmp_path / "baseline.json"
     baseline_sha = _write_json(baseline_path, baseline)
     manifest = tmp_path / "baseline-manifest.json"
     _write_json(manifest, {baseline_path.name: baseline_sha})
+    source_audit = tmp_path / "source-extraction-audit.json"
+    _write_json(source_audit, [{"source_ref": context_ref, "raw_text": "context",
+                                "text_sha256": hashlib.sha256(b"context").hexdigest()}])
+    section_index = tmp_path / "bound-section-index.json"
+    _write_json(section_index, {"sections": baseline["sections"],
+                                "bodies": {"section:imaging": render_record(baseline["records"][0])}})
     output = tmp_path / "output"
     args = SimpleNamespace(baseline_bundle=baseline_path, baseline_manifest=manifest,
-                           review_dir=review, outdir=output)
+                           review_dir=review, source_extraction_audit=source_audit,
+                           bound_section_index=section_index, outdir=output)
     summary = build(args)
     assert summary["candidate_records"] == 1
     assert summary["new_coverage_cells"] == 1
+    assert summary["source_update_scenarios"] == 2
+    assert summary["record_findings"] == 0
+    assert summary["new_section_findings"] == 0
     assert summary["online_eligible"] is False
     assert (output / "dependency-bundle.json").stat().st_mode & 0o777 == 0o600
     with pytest.raises(FileExistsError):
         build(args)
     hashes["candidate-records.json"] = "0" * 64
-    _write_json(review / "summary.json", {"output_sha256": hashes})
+    _write_json(review / "summary.json", {"output_sha256": hashes,
+                                           "source_snapshot_sha256": "a" * 64})
     args.outdir = tmp_path / "other"
     with pytest.raises(ValueError, match="review artifact hash"):
+        build(args)
+
+
+def test_private_cli_rejects_missing_candidate_locator_even_when_source_hash_matches(tmp_path):
+    baseline, candidates, bindings, vocabulary = inputs()
+    baseline["snapshot"]["chunks"] = []
+    review = tmp_path / "review"
+    review.mkdir()
+    hashes = {}
+    for name, value in (("candidate-records.json", candidates),
+                        ("proposal-bindings.json", bindings),
+                        ("field-vocabulary-review.json", vocabulary),
+                        ("subline-locator-overlay.json", {
+                            "review_only": True, "source_snapshot_sha256": "a" * 64,
+                            "chunks": []})):
+        hashes[name] = _write_json(review / name, value)
+    _write_json(review / "summary.json", {"output_sha256": hashes,
+                                           "source_snapshot_sha256": "a" * 64})
+    baseline_path = tmp_path / "baseline.json"
+    baseline_sha = _write_json(baseline_path, baseline)
+    manifest = tmp_path / "manifest.json"
+    _write_json(manifest, {baseline_path.name: baseline_sha})
+    source_audit = tmp_path / "source-audit.json"
+    _write_json(source_audit, [])
+    section_index = tmp_path / "sections.json"
+    _write_json(section_index, {"sections": baseline["sections"],
+                                "bodies": {"section:imaging": render_record(baseline["records"][0])}})
+    args = SimpleNamespace(baseline_bundle=baseline_path, baseline_manifest=manifest,
+                           review_dir=review, source_extraction_audit=source_audit,
+                           bound_section_index=section_index, outdir=tmp_path / "output")
+    with pytest.raises(ValueError, match="source_locator_missing"):
         build(args)
