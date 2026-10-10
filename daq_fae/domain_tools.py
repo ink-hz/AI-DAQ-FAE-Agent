@@ -8,6 +8,7 @@ from src.agent.loop.tools import ToolResult
 
 from daq_fae.knowledge.reviewed_view import ReviewedKnowledge
 from daq_fae.knowledge.source_paths import contains_source_path
+from daq_fae.knowledge.software_evidence import missing_conditions, support_gap
 from daq_fae.knowledge.section_search import (
     EXCERPT_CHARS, MAX_BODY_CHARS, MAX_QUERY_CHARS, body_text, rank_sections,
 )
@@ -29,6 +30,18 @@ _TOOLS: dict[str, tuple[str, dict[str, dict], tuple[str, ...]]] = {
     "risk": ("Find reviewed operating and data integrity risks for an acquisition setup.", {"query": {"type": "string"}}, ("query",)),
     "session_state": ("Read user-provided context in the current DAQ session.", {}, ()),
 }
+
+
+# Keep legacy query-only SDK callers valid, but require structured conditions
+# before either software tool can return affirmative support evidence.
+for _software_tool in ('check_software_support', 'sdk_evidence'):
+    _description, _properties, _required = _TOOLS[_software_tool]
+    _TOOLS[_software_tool] = (
+        _description + ' Support requires exact selectors and reviewed device/combination tests.',
+        {**_TOOLS['check_software_support'][1], **_properties,
+         'software_versions': {'type': 'object'}, 'topology_id': {'type': 'string'}},
+        _required,
+    )
 
 
 class DaqToolBox:
@@ -85,8 +98,29 @@ class DaqToolBox:
         entities = {row["id"]: row["data"]["name"] for row in rows
                     if row["kind"] == "entity"}
         topologies = {row["id"]: row for row in rows if row["kind"] == "topology"}
+        if name in {'check_software_support', 'sdk_evidence'}:
+            missing = missing_conditions(arguments)
+            gaps = [support_gap(row, arguments, self._entity_names(row, entities, topologies), topologies)
+                    for row in rows if row['kind'] == 'software']
+            if missing or not any(gap is None for gap in gaps):
+                reason = ('software_conditions_required' if missing else next(
+                    (gap for gap in gaps if gap != 'reviewed_evidence_unavailable'),
+                    'reviewed_evidence_unavailable'))
+                return ToolResult(status='not_found', content={
+                    'release_id': self.knowledge.release_id, 'reason': reason,
+                    'claim_status': 'unknown', 'missing_conditions': missing,
+                    'matches': [], 'matched_requirement_ids': self._attempted_requirement_ids(name, arguments),
+                })
         matches = [row for row in rows if self._matches(name, arguments, row, entities, topologies)]
         attempted = self._attempted_requirement_ids(name, arguments)
+        if name in {'check_software_support', 'sdk_evidence'} and len({
+            row['status'] for row in matches
+        }) > 1:
+            return ToolResult(status='not_found', content={
+                'release_id': self.knowledge.release_id,
+                'reason': 'software_support_conflict', 'claim_status': 'conflict',
+                'matches': [], 'matched_requirement_ids': attempted,
+            })
         if name == "lookup_spec" and len({
             json.dumps([row["status"], row["data"].get("value"), row["data"].get("unit")],
                        ensure_ascii=False, sort_keys=True) for row in matches
@@ -227,7 +261,7 @@ class DaqToolBox:
         text = cls._record_text(row)
         query = str(arguments.get("query") or arguments.get("text") or "").strip().casefold()
         if name not in {"catalog", "resolve_entity", "lookup_spec",
-                        "check_software_support"} and not cls._scope_selectors_match(
+                        "check_software_support", "sdk_evidence"} and not cls._scope_selectors_match(
             row["scope"], {}
         ):
             return False
@@ -257,29 +291,10 @@ class DaqToolBox:
             return kind == "procedure" and bool(task and entity) and \
                 task == str(data["task"]).casefold() and \
                 entity in cls._entity_names(row, entities, topologies)
-        if name == "check_software_support":
-            if kind != "software":
-                return False
-            conditions = arguments.get("conditions") or {}
-            if not isinstance(conditions, dict) or any(
-                key in arguments and arguments[key] != value
-                for key, value in conditions.items()
-            ) or not cls._scope_selectors_match(
-                row["scope"], {**arguments, **conditions}
-            ):
-                return False
-            software = str(arguments.get("software") or "").casefold()
-            entity = str(arguments.get("entity") or "").casefold()
-            if not software or not entity or entity not in cls._entity_names(row, entities, topologies):
-                return False
-            return all(str(arguments.get(key) or "").casefold() == str(data[key]).casefold()
-                       for key in ("platform", "version", "hardware_revision",
-                                   "connection_mode", "capability")) and \
-                software == data["software"].casefold()
+        if name in {'check_software_support', 'sdk_evidence'}:
+            return support_gap(row, arguments, cls._entity_names(row, entities, topologies), topologies) is None
         if name == "official_links":
             return kind == "link" and row["status"] == "verified" and bool(query) and query in text
-        if name == "sdk_evidence":
-            return kind == "software" and bool(query) and query in text
         if name in {"experience", "risk"}:
             return kind == "claim" and data.get("field") == name and bool(query) and query in text
         if name == "search_knowledge":
