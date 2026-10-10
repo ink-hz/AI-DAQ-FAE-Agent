@@ -120,3 +120,112 @@ def test_conflict_candidate_source_cannot_be_omitted_from_section():
 def test_extra_section_source_is_checked_against_snapshot():
     s,b,r,snap=fixture();extra=deepcopy(r['source_refs'][0]);extra['sha256']='b'*64;s['source_refs'].append(extra)
     assert any(f['code']=='section_source_hash_mismatch' for f in run(s,b,[r],snap)['findings'])
+
+
+def metadata_fixture():
+    s,b,r,snap=fixture()
+    r['data']['hardware_revision']='rev-a';r['data']['software_versions']={'viewer':'1.0'}
+    s.update(entity_id='entity:demo',entity_ids=['entity:demo'],conditions={'mode':'test'},
+             hardware_revision='rev-a',software_versions={'viewer':'1.0'})
+    s['record_assertions']=[deepcopy(r)];b=audit.render_record(r);s['body_sha256']=hashlib.sha256(b.encode()).hexdigest()
+    return s,b,r,snap
+
+
+@pytest.mark.parametrize('key,value', [('entity_id','entity:other'), ('entity_ids',['entity:other']),
+    ('conditions',{}), ('hardware_revision','rev-b'), ('software_versions',{'viewer':'2.0'})])
+def test_section_claim_metadata_cannot_contradict_record(key,value):
+    s,b,r,snap=metadata_fixture();s[key]=value
+    assert not run(s,b,[r],snap)['consistent']
+
+
+def test_matching_claim_metadata_is_consistent():
+    s,b,r,snap=metadata_fixture()
+    assert run(s,b,[r],snap)['consistent']
+
+
+@pytest.mark.parametrize('key', ['hardware_revision','software_versions'])
+def test_metadata_without_typed_representation_is_explicit_gap(key):
+    s,b,r,snap=fixture();s[key]='unconfirmed'
+    assert any(f['code']=='section_'+key+'_unreconciled' for f in run(s,b,[r],snap)['findings'])
+
+
+def test_multi_entity_section_compares_union_not_every_claim_to_primary_entity():
+    s,b,r,snap=metadata_fixture();other=deepcopy(r);other['id']='claim:other';other['data']['entity_id']='entity:other'
+    s['entity_ids'].append('entity:other');s['dependency_claim_ids'].append(other['id'])
+    s['record_assertions'].append(deepcopy(other));b+='\n'+audit.render_record(other);s['body_sha256']=hashlib.sha256(b.encode()).hexdigest()
+    assert run(s,b,[r,other],snap)['consistent']
+    s['entity_ids'].append('entity:unrepresented')
+    assert not run(s,b,[r,other],snap)['consistent']
+
+
+def procedure_fixture():
+    s,b,r,snap=fixture();r['id']='procedure:demo';r['kind']='procedure'
+    step={'step_id':'connect','text':'Connect the cable','topology_id':'topology:demo',
+          'source_refs':deepcopy(r['source_refs']),'checkpoint':'Ready','failure_branch':'Check cable'}
+    r['data']={'task':'connect','topology_id':'topology:demo','steps':[step],
+               'prerequisites':['power off'],'checks':['Ready'],'failure_branches':['Check cable']}
+    s.update(topology_id='topology:demo',steps=[deepcopy(step)],preparation_requirements=['power off'],
+             checks=['Ready'],failure_branches=['Check cable'])
+    s['dependency_claim_ids']=[r['id']];s['record_assertions']=[deepcopy(r)]
+    b=audit.render_record(r);s['body_sha256']=hashlib.sha256(b.encode()).hexdigest()
+    return s,b,r,snap
+
+
+@pytest.mark.parametrize('key,value', [('topology_id','topology:other'), ('steps',[]),
+    ('preparation_requirements',[]), ('checks',['Unsafe']), ('failure_branches',[])])
+def test_section_procedure_metadata_cannot_contradict_record(key,value):
+    s,b,r,snap=procedure_fixture();s[key]=value
+    if key=='topology_id':s['steps'][0]['topology_id']=value
+    assert not run(s,b,[r],snap)['consistent']
+
+
+@pytest.mark.parametrize('key,value', [('topology_id','topology:other'),('checkpoint','Ignore status'),
+                                      ('failure_branch','Continue anyway')])
+def test_step_details_checked_against_typed_procedure(key,value):
+    s,b,r,snap=procedure_fixture();s['steps'][0][key]=value
+    assert any(f['code']=='section_steps_mismatch' for f in run(s,b,[r],snap)['findings'])
+
+
+def test_matching_procedure_metadata_is_consistent():
+    s,b,r,snap=procedure_fixture()
+    assert run(s,b,[r],snap)['consistent']
+
+
+def test_multiple_procedures_can_form_ordered_section_steps():
+    s,b,r,snap=procedure_fixture();other=deepcopy(r);other['id']='procedure:other'
+    other['data']['steps'][0]['step_id']='record';other['data']['steps'][0]['text']='Start recording'
+    for sk,rk in [('steps','steps'),('preparation_requirements','prerequisites'),('checks','checks'),('failure_branches','failure_branches')]:
+        s[sk]+=deepcopy(other['data'][rk])
+    s['record_assertions'].append(deepcopy(other));s['dependency_claim_ids'].append(other['id'])
+    b+='\n'+audit.render_record(other);s['body_sha256']=hashlib.sha256(b.encode()).hexdigest()
+    assert run(s,b,[r,other],snap)['consistent']
+
+
+def test_procedure_metadata_without_procedure_assertion_is_gap():
+    s,b,r,snap=fixture();s['topology_id']='topology:demo';s['steps']=[]
+    assert any(f['code']=='section_topology_id_unreconciled' for f in run(s,b,[r],snap)['findings'])
+
+
+def test_invalid_record_data_is_a_finding_not_a_crash():
+    s,b,r,snap=fixture();r['data']=None;s['record_assertions']=[deepcopy(r)]
+    b=audit.render_record(r);s['body_sha256']=hashlib.sha256(b.encode()).hexdigest()
+    result=run(s,b,[r],snap)
+    assert not result['consistent'] and any(f['code']=='data_invalid' for f in result['findings'])
+
+
+def test_section_dependencies_must_exist_and_edges_are_preserved():
+    s,b,r,snap=fixture();s['dependency_section_ids']=['section:missing']
+    assert any(f['code']=='section_dependency_missing' for f in run(s,b,[r],snap)['findings'])
+    other=deepcopy(s);other['section_id']='section:other';other.pop('dependency_section_ids')
+    s['dependency_section_ids']=['section:other']
+    result=audit.audit_sections([s,other],{s['section_id']:b,other['section_id']:b},[r],snap)
+    assert result['consistent']
+    assert result['section_dependencies']==[{'section_id':'section:demo','dependency_section_id':'section:other'}]
+
+
+@pytest.mark.parametrize('section_field,record_field,bad', [('checks','checks',['Unsafe']),
+    ('failure_branches','failure_branches',['Continue anyway'])])
+def test_step_checkpoints_and_failures_reconcile_with_separate_typed_arrays(section_field,record_field,bad):
+    s,b,r,snap=procedure_fixture();s.pop(section_field);r['data'][record_field]=bad
+    s['record_assertions']=[deepcopy(r)];b=audit.render_record(r);s['body_sha256']=hashlib.sha256(b.encode()).hexdigest()
+    assert any(f['code']=='section_step_'+record_field+'_mismatch' for f in run(s,b,[r],snap)['findings'])

@@ -26,8 +26,19 @@ this audit did not substitute locators or assert that the facts agree.
 result covers serialization and record/source structure only. It does **not**
 make the 114 original sections consistent or eligible for publication.
 
-Verification: 96 focused synthetic/regression tests pass across section
+Verification: 120 focused synthetic/regression tests pass across section
 consistency, candidate sections/guidance, record governance and identity/coverage.
 Mutation cases reject changed value, unit, comparator, condition, entity, scope,
 status, source hash/locator, missing conflict references, duplicate identity,
 body tampering and altered historical contents.
+
+Review correction added metadata reconciliation and section dependency closure.
+The bound audit now contains 293 findings: 114 original body gaps plus 179
+metadata findings. These include 38 unrepresented topologies, 14 step-list gaps,
+5 preparation gaps, 31 condition gaps, 27 hardware-revision gaps, 27 software-
+version gaps, 17 primary-entity gaps, 12 entity-set gaps, 3 entity-set mismatches,
+and 5 embedded-checkpoint versus typed-check-array mismatches. All are retained
+in the private per-section gap records. None was automatically repaired by
+rewriting candidate facts. The 335 new candidate records and their binding file
+remain byte-identical across this review correction, as do the 70 historical
+records. The audit preserves 166 existing section dependency edges.

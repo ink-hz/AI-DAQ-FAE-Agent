@@ -44,3 +44,34 @@ adds stable candidate IDs and section bindings in a separate ignored directory,
 and rehashes/re-extracts referenced archive locations. No restricted source text,
 filenames, record payloads or private scripts belong in Git. A sanitized audit
 may contain aggregate counts and limitations only.
+
+## Section metadata and section graph
+
+Metadata declared outside the rendered blocks is also audited. `entity_id` must
+belong to the union of typed assertion entities; `entity_ids` must exactly match
+that union. A procedure's member identities may be resolved through its explicit
+typed topology record. Multiple claims are not each forced to equal the section's
+primary entity. A declared topology must match the asserted topology/procedure
+identity; an unrelated claim cannot substantiate topology metadata.
+
+Declared conditions, hardware revisions and software versions must be represented
+in every asserted record and match exactly. Claim `data.conditions` is the normal
+condition representation. Transcription envelopes may explicitly store
+`conditions.section_conditions`, `conditions.hardware_revision` and
+`conditions.software_versions`. Software records may use their `version` field.
+Missing typed representation yields `section_<field>_unreconciled`; it never
+silently passes. Common section metadata applies to every assertion; different
+applicability conditions belong in individual record blocks or separate sections.
+
+Procedure steps, preparation requirements/prerequisites, checks and failure
+branches are compared with the ordered concatenation of the asserted procedures.
+Step objects are compared in full, including topology, checkpoint, failure branch
+and source refs. Embedded checkpoints/failure branches also reconcile against the
+separate typed checks/failure arrays; missing step annotations stay unreconciled.
+No fallback checkpoint is inferred.
+
+`dependency_section_ids` must resolve within the supplied section inventory.
+`section_dependencies` retains these edges for subsequent impact traversal.
+Invalid record data remains a finding rather than crashing downstream metadata
+or dependency inspection. These checks preserve every existing nonpublication
+and independent-review boundary.
