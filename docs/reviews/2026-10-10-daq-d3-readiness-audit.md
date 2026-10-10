@@ -67,3 +67,12 @@ regressions now cover signed staging, manifest validation and an old in-memory
 view with Unix/Windows/UNC/relative/normalized path sentinels, plus legitimate
 slash terms. Typed content is rejected at the immutable boundary and withheld by
 runtime role views; structured provenance and valid official links are preserved.
+
+The third integration finding was a valid signed release whose exact predecessor
+was the empty bootstrap: rollback rejected the target for lacking its own D3
+bundle. Rollback now authenticates the current package and signed prior binding,
+checks the empty target hash/inventory, and observes its release ID against the
+current reviewed runtime. Revoked current approval, a forged predecessor binding,
+wrong health/trace identities and post-replacement fsync failure all preserve or
+restore current state. Nonempty rollback targets retain their full current-link
+activation gate; natural expiry in the current package uses runtime semantics.

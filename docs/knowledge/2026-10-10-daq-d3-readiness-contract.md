@@ -119,3 +119,18 @@ Structured source references remain provenance; approved link URLs retain their
 separate URL/current-page contract. Conflict candidate values remain private and
 only the separately authorized conflict notice fields are scanned for delivery.
 Common product alternatives such as Viewer/SDK, USB/以太网 and RGB-D/IMU remain valid.
+
+## Governed rollback to an empty predecessor
+
+`rollback_checked` first verifies the current signed active manifest and its exact
+previous-release binding. Current validation permits natural link expiry, as with
+runtime loading, while preserving every immutable review/source/role check.
+A nonempty target still requires its own approval and current link reviews.
+
+If the signed predecessor is a genuinely empty bootstrap, its content hash and
+empty inventory are verified and the current approval authorizes only that exact
+target. Health and trace must report the empty target's release ID, the DAQ agent
+ID and the runtime identity from the verified current package. A trace ID remains
+mandatory. Pointer/observation failures use the same compensating transition.
+No caller-supplied arbitrary empty target or unsigned current release is allowed;
+the ungoverned bootstrap API still cannot overwrite any different active release.

@@ -220,6 +220,14 @@ def rollback_checked(root, *, verify_approval, observe):
         active = releases.read_active_release(root)
         if not active or not active['manifest'].get('previous_release'):
             raise ValueError('previous release unavailable')
-        target = active['manifest']['previous_release']
+        # The current approval authorizes this exact prior ID. Validate it even
+        # when the target is empty; an empty package has no standalone D3 grant.
+        current = _checked(root, active['release_id'], verify_approval, require_current_links=False)
+        target = current['previous_release']
+        manifest, _ = releases._read_release(root, target)
+        if not any(manifest.get(key) for key in ('sources', 'records', 'sections', 'source_locations')):
+            # Knowledge-only rollback retains the reviewed current runtime.
+            # _switch observes the exact empty target ID and compensates failures.
+            return _switch(root, target, current, active, observe)
         manifest = _checked(root, target, verify_approval)
         return _switch(root, target, manifest, active, observe)
