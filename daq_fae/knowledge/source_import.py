@@ -9,7 +9,7 @@ from pathlib import Path
 import re
 import stat
 
-import fitz
+import pymupdf as fitz
 
 from scripts.archive_candidate_snapshot import verify_archive
 
