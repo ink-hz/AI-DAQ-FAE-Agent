@@ -45,3 +45,46 @@ def validate_section(section, body):
         seen.add(step['step_id'])
         require(bool(section.get('topology_id')) and step.get('topology_id') == section['topology_id'], 'step topology')
         require(bool(step.get('source_refs')) and all(ref in refs for ref in step['source_refs']), 'step source refs')
+
+
+def validate_guidance_section(section, body):
+    """Check candidate guidance structure, not factual truth or release eligibility.
+
+    A documented procedure is not a test result. Stronger evidence labels need a
+    separately identified record, whose authenticity remains a private audit gate.
+    """
+    validate_section(section, body)
+
+    def require(condition, reason):
+        if not condition:
+            raise ValueError(reason)
+
+    require(section.get('capability') in {'selection', 'troubleshoot', 'risk', 'experience'}, 'capability')
+    entities = section.get('entity_ids')
+    require(isinstance(entities, list) and bool(entities), 'section entities')
+    items = section.get('evidence_items')
+    gaps = section.get('gap_ids')
+    require(isinstance(items, list) and isinstance(gaps, list) and bool(items or gaps), 'evidence or gap')
+    seen = set()
+    for item in items:
+        identity = item.get('item_id')
+        require(isinstance(identity, str) and bool(identity) and identity not in seen, 'item identity')
+        seen.add(identity)
+        text = item.get('text')
+        require(isinstance(text, str) and bool(text) and text in body, 'item body')
+        ids = item.get('entity_ids')
+        require(isinstance(ids, list) and bool(ids) and all(i in entities for i in ids), 'item entities')
+        require(bool(section.get('topology_id')) and item.get('topology_id') == section['topology_id'], 'item topology')
+        require(isinstance(item.get('conditions'), dict) and bool(item['conditions']), 'item conditions')
+        refs = item.get('source_refs')
+        require(isinstance(refs, list) and bool(refs) and all(r in section['source_refs'] for r in refs), 'item source refs')
+        level = item.get('evidence_level')
+        require(level in {'product_specification', 'documented_procedure', 'combination_validation', 'field_experience'}, 'evidence level')
+        require(item.get('conclusion_scope') in {'entity', 'topology'}, 'conclusion scope')
+        require(type(item.get('actionable')) is bool, 'actionable')
+        require(not (level == 'product_specification' and (item['conclusion_scope'] == 'topology' or item['actionable'])), 'specification cannot prove action or combination')
+        if level in {'combination_validation', 'field_experience'}:
+            record = item.get('evidence_record')
+            require(isinstance(record, dict) and bool(record.get('record_id'))
+                    and record.get('source_refs') == refs
+                    and record.get('conditions') == item['conditions'], 'independent evidence record required')
