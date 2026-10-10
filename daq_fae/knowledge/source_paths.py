@@ -13,9 +13,8 @@ _ROOT = re.compile(
     r'data/knowledge|knowledge/private)/[^\s/"\'`<>]+'
 )
 _ABSOLUTE = re.compile(
-    r'(?:[a-z]:/|(?<![a-z0-9_])~/|(?<![a-z0-9_])//[^/\s]+/|'
-    r'(?<![a-z0-9_\u3400-\u9fff/])/(?!/)[^\s/"\'`<>]+|'
-    r'(?<=[\u3400-\u9fff])/(?!/)[^\s/"\'`<>]+/[^\s/"\'`<>]+)'
+    r'(?:[a-z]:/|~/|//[^/\s]+/|'
+    r'/(?:private|home|users|var|opt|mnt|volumes|tmp|etc|usr|srv)/[^\s/"\'`<>]+)'
 )
 
 

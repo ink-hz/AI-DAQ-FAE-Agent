@@ -68,3 +68,17 @@ only the detector with its exact pre-fix Git version reproduced 11 failures
 Publication, signed metadata loading and runtime body/excerpt guards are covered.
 Final expanded full suite: **514 passed, 6 existing dependency deprecation warnings
 in 11.67s**, exit 0. No real data or release state changed.
+
+## Re-review correction: Chinese product alternatives
+
+The generic multi-level slash rule falsely rejected Chinese product alternatives.
+Five positive publication/read tests first failed (70 passed) for common
+acquisition/recording/synchronization and product/flow/topic wording. Replaced that
+rule with explicit OS root recognition plus exact source references, existing
+restricted relative roots, drive/UNC and home paths. No slash-count or arbitrary
+Chinese-boundary classifier remains. URL classification retains the separate C1
+URL gate. The same regression suite includes whitespace variants, common Chinese
+alternatives, exact original paths and ordinary/backslash/fullwidth malicious
+forms; additional Users/var/opt/mnt roots are checked.
+Final expanded targeted: **129 passed in 1.06s**. Full: **529 passed, 6 existing
+dependency deprecation warnings in 12.24s**, exit 0.

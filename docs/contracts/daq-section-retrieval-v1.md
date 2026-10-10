@@ -25,9 +25,11 @@ their references cannot contribute retrieval terms or results.
   and locator, never the local source path. Sections containing local source paths in content are
   rejected by C1 publication/manifest validation and excluded again before C2 scoring
   or reading. The shared detector checks exact original-source paths, explicit
-  restricted roots (including relative/backslash forms), UNC, drive, absolute and
-  home paths, including multi-level Unix absolute paths adjoining Chinese prose
-  and decoded typed JSON. Product alternatives such as Viewer/SDK
+  restricted roots (including relative/backslash forms), UNC, drive, home paths
+  and explicit OS roots (`private`, `home`, `users`, `var`, `opt`, `mnt`, `volumes`,
+  `tmp`, `etc`, `usr`, `srv`), including forms adjoining Chinese prose and decoded
+  typed JSON. Unknown roots require an exact source reference match; slash counts
+  or Chinese word boundaries alone do not establish that text is a local path. Product alternatives such as Viewer/SDK
   and USB/以太网 remain valid. It does not rewrite source content or waive reviews.
 - Missing and unauthorized section IDs return identical `not_found` shapes with
   empty matches and sources. Query arguments are not echoed in these results.

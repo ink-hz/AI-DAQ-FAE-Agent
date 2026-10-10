@@ -157,6 +157,8 @@ LOCAL_SOURCE_PATHS = [
     '原件位于tmp/private/secret', r'.\Downloads\private\secret',
     '原件位于/private/archive/secret', '原件位于/home/neo/archive/original',
     r'原件位于\private\archive\secret', '原件位于／private／archive／secret',
+    '原件位于/Users/demo/archive', '原件位于/var/archive/original',
+    '原件位于/opt/archive/original', '原件位于/mnt/archive/original',
 ]
 
 
@@ -197,6 +199,9 @@ def test_results_are_deterministic_and_do_not_certify_search_requirements(tmp_pa
 @pytest.mark.parametrize('text', [
     'USB/以太网接口', 'Viewer/SDK/固件版本', 'RGB-D/IMU 同步',
     '输入/输出支持采集', 'data/format 数据格式', 'tmp 仅表示临时状态',
+    '采集/录制/同步操作', '产品/流程/专题说明', '输入/输出/存储设置',
+    '安装/连接/调试步骤', '型号/版本/平台条件',
+    '采集 /录制/同步操作', '产品 /流程/专题说明',
 ])
 def test_product_terms_with_slashes_remain_publishable_and_readable(tmp_path, text):
     box = DaqToolBox(knowledge=make_view(tmp_path, product_text=text), role='internal_fae')
