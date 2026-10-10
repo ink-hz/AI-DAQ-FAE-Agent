@@ -217,11 +217,10 @@ def test_failed_restore_does_not_claim_rollback_success(tmp_path, monkeypatch):
     first = m.stage_release(tmp_path, candidate(), verify_approval=verify)
     m.activate_checked(tmp_path, first, verify_approval=verify, observe=observe)
     second = m.stage_release(tmp_path, candidate(first), verify_approval=verify)
-    original = releases._activate_release
-    def broken_restore(root, rid):
-        if rid == first: raise OSError('rollback pointer failed')
-        original(root, rid)
-    monkeypatch.setattr(releases, '_activate_release', broken_restore)
+    def broken_restore(root, previous):
+        assert previous['release_id'] == first
+        raise OSError('rollback pointer failed')
+    monkeypatch.setattr(releases, '_restore_active_release', broken_restore)
     with pytest.raises(OSError, match='rollback pointer failed'):
         m.activate_checked(tmp_path, second, verify_approval=verify, observe=lambda rid: {})
     assert releases.read_active_release(tmp_path)['release_id'] == second

@@ -202,3 +202,47 @@ def test_rollback_expiry_rules_distinguish_current_from_target(tmp_path, monkeyp
         with pytest.raises(ValueError, match='content_contract'):
             gate.rollback_checked(tmp_path, verify_approval=verify, observe=observe)
         assert (tmp_path/'active.json').read_bytes() == before
+
+
+@pytest.mark.parametrize('failure', ['observation', 'post_replace',
+                                     'restore_before_replace', 'restore_after_replace'])
+def test_expired_current_is_restored_without_reactivation_gate(tmp_path, monkeypatch, failure):
+    from test_reviewed_knowledge import _records
+    from test_release_readiness import sign
+    from test_official_link_gate import advance_past_link_expiry
+    empty = {'archive_manifest_sha256': 'f'*64, 'sources': [], 'chunks': []}
+    target = releases.publish_release(tmp_path, empty, [], None, REVIEW)
+    releases.activate_release(tmp_path, target)
+    bundle = candidate(target)
+    bundle['records'] = _records(link_forward=('internal_fae',))
+    bundle['sections'], bundle['bodies'] = [], {}
+    bundle['scope']['answerable_ids'] = [r['id'] for r in bundle['records']]
+    bundle['scope']['excluded_topics'].remove('links')
+    bundle['scope']['topic_reviews'] = {'links': 'a'*64}
+    current = gate.stage_release(tmp_path, sign(bundle), verify_approval=verify)
+    gate.activate_checked(tmp_path, current, verify_approval=verify, observe=observe)
+    advance_past_link_expiry(monkeypatch)
+    before = (tmp_path/'active.json').read_bytes()
+    fsync = releases.os.fsync
+    count = 0
+    fail_at = {'post_replace': 2, 'restore_before_replace': 3, 'restore_after_replace': 4}.get(failure)
+    def maybe_fail(fd):
+        nonlocal count
+        count += 1
+        if count == fail_at:
+            raise OSError('synthetic durability failure')
+        return fsync(fd)
+    monkeypatch.setattr(releases.os, 'fsync', maybe_fail)
+    def observe_failure(rid):
+        assert rid == target
+        return {}  # Triggers failed observation only after the target was installed.
+    if failure.startswith('restore_'):
+        with pytest.raises(OSError, match='durability failure'):
+            gate.rollback_checked(tmp_path, verify_approval=verify, observe=observe_failure)
+        expected = target if failure == 'restore_before_replace' else current
+        assert releases.read_active_release(tmp_path)['release_id'] == expected
+    else:
+        with pytest.raises(ValueError, match='previous pointer restored'):
+            gate.rollback_checked(tmp_path, verify_approval=verify, observe=observe_failure)
+        assert (tmp_path/'active.json').read_bytes() == before
+        assert releases.read_active_release(tmp_path)['release_id'] == current

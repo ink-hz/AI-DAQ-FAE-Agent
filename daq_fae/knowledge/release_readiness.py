@@ -195,7 +195,7 @@ def _switch(root, rid, manifest, previous, observe):
         if current == previous:
             raise
         if previous:
-            releases._activate_release(root, previous['release_id'])
+            releases._restore_active_release(root, previous)
         else:
             (root/'active.json').unlink()
             fd = os.open(root, os.O_RDONLY)

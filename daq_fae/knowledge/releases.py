@@ -148,7 +148,24 @@ def _activate_release(root: Path, release_id: str) -> None:
     if any(row["kind"] == "link" and row["answerable"] and not link_review_valid(row)
            for row in manifest["records"]):
         raise ValueError("cannot activate release with expired link review")
-    releases = _prepare_root(root)
+    _write_active_pointer(root, checked_id)
+
+
+def _restore_active_release(root: Path, previous: dict) -> None:
+    """Compensate to an exact captured active release, without a new expiry gate.
+
+    The D3 caller holds the transition lock and already verified this snapshot.
+    Recheck immutable contents before restoration; this is never target approval.
+    """
+    manifest, checked_id = _read_release(root, previous['release_id'])
+    if manifest != previous['manifest']:
+        raise ValueError('previous release changed before pointer restoration')
+    _write_active_pointer(root, checked_id)
+
+
+def _write_active_pointer(root: Path, checked_id: str) -> None:
+    """Atomic durable pointer write shared by activation and compensation."""
+    _prepare_root(root)
     pointer = root / "active.json"
     if pointer.is_symlink():
         raise ValueError("active pointer must not be a symlink")

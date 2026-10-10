@@ -134,3 +134,19 @@ ID and the runtime identity from the verified current package. A trace ID remain
 mandatory. Pointer/observation failures use the same compensating transition.
 No caller-supplied arbitrary empty target or unsigned current release is allowed;
 the ungoverned bootstrap API still cannot overwrite any different active release.
+
+### Compensation restores the captured active state
+
+Failure compensation is not a new activation. It restores only the exact active
+release captured before the attempted switch, rehashes its immutable manifest and
+compares it with the captured contents, using runtime-style integrity validation.
+It does not rerun the current-link-expiry gate: a naturally expired link cannot
+prevent restoration of an otherwise valid previously active snapshot. Runtime
+continues to hide that expired link.
+
+Activation and compensation share the atomic pointer writer (private tempfile,
+file fsync, atomic replacement and directory fsync). A failed observation or
+post-replacement fsync is compensated while holding the same transition lock.
+If compensation itself fails before or after replacement, that error propagates;
+no successful restore or durability claim is made. Public target activation and
+rollback validation retain their current-link gates.

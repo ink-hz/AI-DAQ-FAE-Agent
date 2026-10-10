@@ -76,3 +76,12 @@ current reviewed runtime. Revoked current approval, a forged predecessor binding
 wrong health/trace identities and post-replacement fsync failure all preserve or
 restore current state. Nonempty rollback targets retain their full current-link
 activation gate; natural expiry in the current package uses runtime semantics.
+
+Final integration review combined natural expiry with a failed empty rollback
+observation and reproduced a compensation regression: the pointer remained empty
+because restoring current used the new-activation expiry gate. Compensation now
+rehashes and matches the exact captured snapshot through a separate private
+restoration path, sharing the existing atomic/fsync pointer writer without a
+fresh expiry gate. Four synthetic failure cases cover observation failure,
+post-replacement fsync, and restoration failure before/after replacement. Failed
+restoration still propagates explicitly; no real release or shared runtime changed.
