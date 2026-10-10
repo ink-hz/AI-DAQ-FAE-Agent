@@ -108,3 +108,14 @@ release when identity mode is disabled, before any local chat or provider work.
 The local empty Dev path never assigns an implicit knowledge role. A genuinely
 empty bootstrap continues to work without identity; authenticated entitled users
 retain the existing role/revocation/replay contract.
+
+## Typed evidence source paths
+
+The shared source-path detector also guards deliverable typed record IDs, scope
+and data at manifest validation and before role-filtered tool evidence is returned.
+D3 staging therefore refuses signed typed records containing local source paths,
+and legacy in-memory views cannot leak those values through `lookup_spec`.
+Structured source references remain provenance; approved link URLs retain their
+separate URL/current-page contract. Conflict candidate values remain private and
+only the separately authorized conflict notice fields are scanned for delivery.
+Common product alternatives such as Viewer/SDK, USB/以太网 and RGB-D/IMU remain valid.

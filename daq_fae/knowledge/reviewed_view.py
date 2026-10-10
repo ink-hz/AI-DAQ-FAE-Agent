@@ -9,6 +9,7 @@ import re
 from daq_fae.knowledge.records import (KINDS, ROLES, STATUSES,
                                        access_fingerprint, record_fingerprint, link_review_valid)
 from daq_fae.knowledge.releases import read_active_release
+from daq_fae.knowledge.source_paths import record_contains_source_path
 
 
 _SHA = re.compile(r"^[0-9a-f]{64}$")
@@ -128,6 +129,8 @@ class ReviewedKnowledge:
             if (row["kind"] != "link" and urls) or (row["kind"] == "link" and
                     any(value != row["data"].get("url") for value in urls)):
                 raise ValueError("knowledge URL must be a reviewed link record")
+            if record_contains_source_path(row):
+                raise ValueError('knowledge local source path in typed content')
             if not expected_answerable:
                 continue
             answerable += 1
@@ -164,7 +167,7 @@ class ReviewedKnowledge:
             raise ValueError("knowledge role invalid")
         visible = []
         for row in self._records:
-            if not row["answerable"]:
+            if not row["answerable"] or record_contains_source_path(row):
                 continue
             if row["kind"] == "link" and not link_review_valid(row):
                 continue
@@ -181,7 +184,8 @@ class ReviewedKnowledge:
         if role not in ROLES:
             raise ValueError("knowledge role invalid")
         return [notice for row in self._records
-                if (notice := conflict_notice(row, role)) is not None]
+                if not record_contains_source_path(row)
+                and (notice := conflict_notice(row, role)) is not None]
 
     def sections_for(self, role: str, *, for_delivery: bool = False) -> list[dict]:
         """Filter whole sections before retrieval; never expose a mixed paragraph."""

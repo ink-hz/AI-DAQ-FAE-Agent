@@ -60,3 +60,10 @@ knowledge without authenticated mode, and the local toolbox has no implicit
 `internal_fae` role. The red regression exercised a synthetic `/chat` request and
 observed HTTP 200 before correction; the corrected configuration fails before any
 model/tool work. Authenticated entitlement and empty-Dev contracts remain covered.
+
+Typed records previously had a URL gate but lacked the section source-path gate;
+`lookup_spec` copied their data directly into model-visible evidence. Synthetic
+regressions now cover signed staging, manifest validation and an old in-memory
+view with Unix/Windows/UNC/relative/normalized path sentinels, plus legitimate
+slash terms. Typed content is rejected at the immutable boundary and withheld by
+runtime role views; structured provenance and valid official links are preserved.

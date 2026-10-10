@@ -32,3 +32,50 @@ def test_signed_private_knowledge_cannot_be_served_by_local_unauthenticated_chat
         return
     response = TestClient(app).post('/chat', json={'message': 'EGO 1600 resolution'})
     assert response.status_code == 403 and 'INTERNAL_CLAIM_SENTINEL' not in response.text
+
+
+def typed_candidate(value):
+    from test_release_readiness import sign
+    bundle = candidate()
+    bundle['records'] = [_entity(), _record(value=value)]
+    bundle['sections'], bundle['bodies'] = [], {}
+    return sign(bundle)
+
+
+@pytest.mark.parametrize('path', ['/tmp/private-secret', r'C:\private\secret',
+    r'\\host\share\secret', '~/private-secret', 'data/knowledge/private-secret',
+    '请读取／tmp／private-secret', 'spec.md'])
+@pytest.mark.parametrize('boundary', ['stage', 'manifest', 'tool'])
+def test_typed_paths_never_reach_model_visible_claims(tmp_path, path, boundary):
+    from daq_fae.knowledge.reviewed_view import ReviewedKnowledge
+    from daq_fae.domain_tools import DaqToolBox
+    from test_knowledge_releases import _reviewed
+    if boundary == 'stage':
+        with pytest.raises(ValueError):
+            gate.stage_release(tmp_path, typed_candidate(path), verify_approval=verify)
+        assert not list(tmp_path.iterdir())
+        return
+    manifest = gate._manifest(typed_candidate('normal value'))
+    row = next(r for r in manifest['records'] if r['kind'] == 'claim')
+    row['data']['value'] = path
+    _reviewed(row)
+    if boundary == 'manifest':
+        with pytest.raises(ValueError, match='source path|URL'):
+            ReviewedKnowledge.from_manifest('a'*64, manifest)
+        return
+    # Defense for an old in-memory view bypassing manifest validation.
+    view = ReviewedKnowledge('a'*64, manifest)
+    result = DaqToolBox(knowledge=view, role='internal_fae').dispatch(
+        'lookup_spec', {'entity': 'EGO 1600', 'field': 'resolution'})
+    assert result.status == 'not_found' and not result.content['matches']
+
+
+@pytest.mark.parametrize('term', ['Viewer/SDK', 'USB/以太网', 'RGB-D/IMU', '连接/供电/同步', 'V1/V2'])
+def test_typed_legitimate_slash_terms_remain_answerable(tmp_path, term):
+    from daq_fae.knowledge.reviewed_view import ReviewedKnowledge
+    from daq_fae.domain_tools import DaqToolBox
+    rid = gate.stage_release(tmp_path, typed_candidate(term), verify_approval=verify)
+    view = ReviewedKnowledge.from_manifest(rid, releases._read_release(tmp_path, rid)[0])
+    result = DaqToolBox(knowledge=view, role='internal_fae').dispatch(
+        'lookup_spec', {'entity': 'EGO 1600', 'field': 'resolution'})
+    assert result.status == 'ok' and result.content['matches'][0]['data']['value'] == term

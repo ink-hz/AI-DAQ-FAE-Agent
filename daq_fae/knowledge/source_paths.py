@@ -56,3 +56,29 @@ def contains_source_path(section: dict) -> bool:
     return any(_ROOT.search(text) or _ABSOLUTE.search(text)
                or any(path in text for path in paths)
                for value in values for text in [_normalize(value)])
+
+
+def record_contains_source_path(row: dict) -> bool:
+    """Check only typed fields that can be delivered, preserving structured refs.
+
+    Governed link URLs have their own review gate. Conflict candidates are never
+    delivered; only the approved conflict notice's identity/scope/conditions are.
+    """
+    if row.get('status') not in {'verified', 'unsupported', 'conflict'}:
+        return False
+    data = row.get('data', {})
+    if row.get('status') == 'conflict':
+        data = {key: data.get(key) for key in ('entity_id', 'field', 'conditions')}
+    if row.get('kind') == 'link':
+        approved_url = data.get('url')
+        def without_url(value):
+            if isinstance(value, str) and value == approved_url:
+                return ''
+            if isinstance(value, dict):
+                return {key: without_url(child) for key, child in value.items()}
+            if isinstance(value, list):
+                return [without_url(child) for child in value]
+            return value
+        data = without_url(data)
+    return contains_source_path({'id': row.get('id'), 'scope': row.get('scope'),
+                                 'data': data, 'source_refs': row.get('source_refs', [])})
