@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 from collections import defaultdict
 from copy import deepcopy
 from pathlib import PurePosixPath
@@ -22,6 +24,25 @@ def _safe_path(name: str) -> bool:
     path = PurePosixPath(name)
     return (isinstance(name, str) and bool(name) and not path.is_absolute() and
             all(part not in {"", ".", ".."} for part in name.split("/")))
+
+
+def _chapter_bodies(document: bytes) -> dict[str, str]:
+    text = document.decode("utf-8")
+    headings = list(re.finditer(r"(?m)^## ([^\n]+)\n\n", text))
+    if not headings or not re.fullmatch(r"# [^\n]+\n\n", text[:headings[0].start()]):
+        raise ValueError("candidate chapter has unbound introductory prose")
+    bodies = {}
+    for position, heading in enumerate(headings):
+        title = heading.group(1)
+        if title in bodies:
+            raise ValueError("duplicate candidate chapter title")
+        end = headings[position + 1].start() if position + 1 < len(headings) else len(text)
+        bodies[title] = text[heading.end():end].strip()
+    return bodies
+
+
+def _plain_bound_body(body: str) -> str:
+    return re.sub(r"(?s)\n\n```daq-record\n.*?\n```", "", body).strip()
 
 
 def _fact(row: dict) -> dict:
@@ -61,7 +82,8 @@ def compose_layout(manifest_sha256: str, manifest: dict, disposition: dict,
                    assets: dict, groups: dict[str, tuple[dict, dict[str, bytes]]],
                    dictionary: dict, transcriptions: list[dict],
                    normalized: list[dict], vocabulary: dict,
-                   graph: dict, audit: dict, software_matrix, link_ledger
+                   graph: dict, audit: dict, software_matrix, link_ledger,
+                   bound_index: dict
                    ) -> tuple[dict[str, bytes], dict]:
     """Return private files; preserve candidate status and exact source identities."""
     source_rows = manifest["files"]
@@ -91,9 +113,19 @@ def compose_layout(manifest_sha256: str, manifest: dict, disposition: dict,
         expected_docs = {section["document"] for section in index["sections"]}
         if expected_docs != set(documents):
             raise ValueError("chapter document inventory differs from index")
+        actual_bodies = {name: _chapter_bodies(body) for name, body in documents.items()}
         for section in index["sections"]:
             name = section["document"]
+            permitted = (
+                (group_name == "a2" and re.fullmatch(
+                    r"products/[a-z0-9-]+/(index|product|hardware|software)\.md", name)) or
+                (group_name == "a3" and re.fullmatch(
+                    r"systems/[a-z0-9-]+/(overview|setup|recording|troubleshooting)\.md", name)) or
+                (group_name == "a4" and re.fullmatch(
+                    r"systems/[a-z0-9-]+/(selection|troubleshoot|risk|experience)\.md", name)) or
+                (group_name in {"a3", "a4"} and re.fullmatch(r"topics/[a-z0-9-]+\.md", name)))
             if (not _safe_path(name) or name.split("/")[0] not in {"products", "systems", "topics"} or
+                    not permitted or
                     section.get("review_status") != "candidate" or
                     section.get("fact_review") is not None or
                     section.get("permission_review") is not None or
@@ -102,6 +134,10 @@ def compose_layout(manifest_sha256: str, manifest: dict, disposition: dict,
             if any(source_map.get(ref["path"], {}).get("sha256") != ref["sha256"]
                    for ref in section["source_refs"]):
                 raise ValueError("chapter source differs from original archive")
+            body = actual_bodies[name].pop(section["title"], None)
+            if (body is None or
+                    hashlib.sha256(body.encode()).hexdigest() != section.get("body_sha256")):
+                raise ValueError("candidate chapter body differs from section index")
             section_rows.append(deepcopy(section))
             parts = name.split("/")
             if parts[0] == "products":
@@ -116,19 +152,14 @@ def compose_layout(manifest_sha256: str, manifest: dict, disposition: dict,
             if not isinstance(body, bytes) or not body.strip() or name in files:
                 raise ValueError("empty or duplicate candidate chapter")
             files[name] = body
+        if any(actual_bodies.values()):
+            raise ValueError("candidate chapter contains unindexed sections")
     if len({row["section_id"] for row in section_rows}) != len(section_rows):
         raise ValueError("duplicate section identity")
     graph_sections = {row["section_id"]: row for row in graph["sections"]}
     if len(graph_sections) != len(graph["sections"]) or set(graph_sections) != {
             row["section_id"] for row in section_rows}:
         raise ValueError("chapter inventory differs from impact graph")
-    for section in section_rows:
-        graph_section = graph_sections[section["section_id"]]
-        if any(section.get(key) != graph_section.get(key) for key in (
-                "document", "title", "source_refs", "scope", "review_status",
-                "fact_review", "permission_review", "view_roles", "forward_roles")):
-            raise ValueError("chapter metadata differs from impact graph")
-
     old = dictionary["record_inventory"]
     if any(row.get("status") not in {"candidate", "conflict"} for row in old):
         raise ValueError("baseline contains an unexpected approved record")
@@ -142,6 +173,38 @@ def compose_layout(manifest_sha256: str, manifest: dict, disposition: dict,
     all_input_ids = [row["id"] for row in [*baseline_and_transcriptions, *normalized]]
     if len(all_input_ids) != len(set(all_input_ids)) or set(all_input_ids) != set(graph_by_id):
         raise ValueError("knowledge record inventories differ from impact graph")
+    bound_sections = {row["section_id"]: row for row in bound_index["sections"]}
+    if (len(bound_sections) != len(bound_index["sections"]) or
+            set(bound_sections) != set(graph_sections) or
+            set(bound_index["bodies"]) != set(bound_sections)):
+        raise ValueError("bound chapter inventory differs from impact graph")
+    base_ids = {row["id"] for row in old}
+    base_ids.update(assertion["id"] for section in bound_sections.values()
+                    for assertion in section.get("record_assertions", [])
+                    if "section_body_sha256" in assertion.get("data", {}))
+    transcribed_ids = {row["id"] for row in transcriptions}
+    normalized_ids = {row["id"] for row in normalized}
+    for section in section_rows:
+        sid = section["section_id"]
+        bound = bound_sections[sid]
+        graph_section = graph_sections[sid]
+        if ({key: value for key, value in section.items()
+             if key not in {"body_sha256", "dependency_claim_ids"}} !=
+                {key: value for key, value in bound.items()
+                 if key not in {"body_sha256", "dependency_claim_ids", "record_assertions"}} or
+                {key: value for key, value in bound.items() if key != "dependency_claim_ids"} !=
+                {key: value for key, value in graph_section.items() if key != "dependency_claim_ids"}):
+            raise ValueError("chapter metadata differs from bound impact graph")
+        bound_body = bound_index["bodies"][sid]
+        if (hashlib.sha256(bound_body.encode()).hexdigest() != bound["body_sha256"] or
+                hashlib.sha256(_plain_bound_body(bound_body).encode()).hexdigest() != section["body_sha256"]):
+            raise ValueError("chapter body differs from bound impact graph")
+        bound_deps = bound.get("dependency_claim_ids", [])
+        graph_deps = graph_section.get("dependency_claim_ids", [])
+        if ([rid for rid in bound_deps if rid in base_ids] != section.get("dependency_claim_ids", []) or
+                any(rid not in base_ids and rid not in transcribed_ids for rid in bound_deps) or
+                [rid for rid in graph_deps if rid not in normalized_ids] != bound_deps):
+            raise ValueError("chapter dependencies differ from bound impact graph")
     for row in baseline_and_transcriptions:
         if graph_by_id[row["id"]] != row:
             raise ValueError("baseline or source transcription differs from graph")
@@ -188,7 +251,7 @@ def compose_layout(manifest_sha256: str, manifest: dict, disposition: dict,
         documents = sorted(name for name in files if name.startswith(prefix))
         topologies = {section.get("topology_id") for section in section_rows
                       if section["document"].startswith(prefix)} - {None}
-        rows = [row for row in old if row["kind"] in {"topology", "procedure"} and
+        rows = [row for row in [*old, *transcriptions] if row["kind"] in {"topology", "procedure"} and
                 (row["id"] in topologies or row.get("data", {}).get("topology_id") in topologies)]
         files[prefix + "records.yaml"] = _yaml({
             "format_version": "daq-candidate-system-records-v1", "status": "candidate",

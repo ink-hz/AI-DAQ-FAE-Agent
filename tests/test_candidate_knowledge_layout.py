@@ -1,5 +1,6 @@
 """Camera-style DAQ candidate files remain source-bound and unpublished."""
 
+import hashlib
 from copy import deepcopy
 
 import pytest
@@ -19,21 +20,29 @@ def fixture():
     product = {"section_id": "product:ego-1600:index:identity", "entity_id": "entity:ego-1600",
                "document": "products/ego-1600/index.md", "title": "型号身份",
                "source_refs": [ref], "review_status": "candidate", "fact_review": None,
-               "permission_review": None, "view_roles": [], "forward_roles": []}
+               "permission_review": None, "view_roles": [], "forward_roles": [],
+               "dependency_claim_ids": [],
+               "body_sha256": hashlib.sha256(b"EGO").hexdigest()}
     system = {"section_id": "system:ego-standalone:overview",
               "topology_id": "topology:ego-standalone",
               "document": "systems/ego-standalone/overview.md", "title": "适用范围",
               "source_refs": [ref], "review_status": "candidate", "fact_review": None,
-              "permission_review": None, "view_roles": [], "forward_roles": []}
+              "permission_review": None, "view_roles": [], "forward_roles": [],
+              "dependency_claim_ids": [],
+              "body_sha256": hashlib.sha256(b"EGO system").hexdigest()}
     selection = {**system, "section_id": "guidance:ego-standalone:selection",
-                 "document": "systems/ego-standalone/selection.md", "title": "选型"}
+                 "document": "systems/ego-standalone/selection.md", "title": "选型",
+                 "body_sha256": hashlib.sha256(b"Selection").hexdigest()}
     groups = {
         "a2": ({"archive_manifest_sha256": "m" * 64, "sections": [product],
-                "online_eligible": False}, {"products/ego-1600/index.md": b"# EGO\n"}),
+                "online_eligible": False}, {"products/ego-1600/index.md":
+                                           "# EGO\n\n## 型号身份\n\nEGO\n".encode()}),
         "a3": ({"archive_manifest_sha256": "m" * 64, "sections": [system],
-                "online_eligible": False}, {"systems/ego-standalone/overview.md": b"# EGO system\n"}),
+                "online_eligible": False}, {"systems/ego-standalone/overview.md":
+                                           "# EGO system\n\n## 适用范围\n\nEGO system\n".encode()}),
         "a4": ({"archive_manifest_sha256": "m" * 64, "sections": [selection],
-                "online_eligible": False}, {"systems/ego-standalone/selection.md": b"# Selection\n"}),
+                "online_eligible": False}, {"systems/ego-standalone/selection.md":
+                                           "# Selection\n\n## 选型\n\nSelection\n".encode()}),
     }
     old = [{"id": "claim:old", "kind": "claim", "status": "candidate",
             "scope": {"product": "ego"}, "source_refs": [ref],
@@ -47,10 +56,16 @@ def fixture():
                    "scope": {"product": "ego"}, "source_refs": [ref],
                    "data": {"entity_id": "entity:ego-1600", "field": "camera_count",
                             "value": 2, "unit": "camera", "original_record_id": "claim:source"}}]
+    bound_sections = deepcopy([product, system, selection])
+    for row in bound_sections:
+        row["record_assertions"] = []
     graph = {"records": [*deepcopy(old), *deepcopy(transcriptions),
                          {**deepcopy(normalized[0]), "dependency_record_ids": ["claim:source"]}],
-             "sections": deepcopy([product, system, selection]),
+             "sections": deepcopy(bound_sections),
              "coverage": [{"entity_id": "entity:ego-1600", "status": "candidate"}]}
+    bound = {"sections": bound_sections,
+             "bodies": {product["section_id"]: "EGO", system["section_id"]: "EGO system",
+                        selection["section_id"]: "Selection"}}
     dictionary = {"record_inventory": old, "fields": [], "names": [],
                   "relations": [], "ambiguities": []}
     vocabulary = {"fields": [{"field_id": "camera_count", "vocabulary_status":
@@ -58,7 +73,7 @@ def fixture():
     links = {"archive_manifest_sha256": "m" * 64, "approved_delivery_count": 0,
              "candidate_count": 0, "links": []}
     return ("m" * 64, manifest, text, assets, groups, dictionary, transcriptions, normalized,
-            vocabulary, graph, {"findings": []}, [], links)
+            vocabulary, graph, {"findings": []}, [], links, bound)
 
 
 def test_layout_materializes_camera_layers_as_candidate_only():
@@ -66,7 +81,7 @@ def test_layout_materializes_camera_layers_as_candidate_only():
     before = deepcopy(args)
     files, summary = compose_layout(*args)
     assert args == before
-    assert files["products/ego-1600/index.md"] == b"# EGO\n"
+    assert files["products/ego-1600/index.md"] == "# EGO\n\n## 型号身份\n\nEGO\n".encode()
     assert "systems/ego-standalone/overview.md" in files
     assert "systems/ego-standalone/selection.md" in files
     facts = yaml.safe_load(files["products/ego-1600/facts.yaml"])
@@ -100,4 +115,42 @@ def test_layout_rejects_unbound_or_approved_candidate_input(mutate):
     args = list(fixture())
     mutate(args)
     with pytest.raises(ValueError):
+        compose_layout(*args)
+
+
+def test_layout_rejects_changed_chapter_prose_with_unchanged_evidence():
+    args = list(fixture())
+    args[4]["a2"][1]["products/ego-1600/index.md"] = b"# EGO\n\nnew unbound assertion\n"
+    with pytest.raises(ValueError, match="body|chapter"):
+        compose_layout(*args)
+
+
+def test_layout_rejects_changed_system_topology_metadata():
+    args = list(fixture())
+    args[4]["a3"][0]["sections"][0]["topology_id"] = "topology:wrong"
+    with pytest.raises(ValueError, match="metadata"):
+        compose_layout(*args)
+
+
+def test_layout_keeps_transcribed_procedure_in_local_system_records():
+    args = list(fixture())
+    procedure = {"id": "procedure:b2:source", "kind": "procedure", "status": "candidate",
+                 "scope": {"product": "ego"},
+                 "source_refs": args[6][0]["source_refs"],
+                 "data": {"topology_id": "topology:ego-standalone", "steps": ["connect"]}}
+    args[6].append(procedure)
+    args[9]["records"].append(deepcopy(procedure))
+    files, _ = compose_layout(*args)
+    records = yaml.safe_load(files["systems/ego-standalone/records.yaml"])["records"]
+    assert procedure["id"] in {row["id"] for row in records}
+
+
+def test_layout_rejects_chapter_collision_with_generated_system_index():
+    args = list(fixture())
+    section = args[4]["a3"][0]["sections"][0]
+    section["document"] = "systems/ego-standalone/index.md"
+    docs = args[4]["a3"][1]
+    docs[section["document"]] = docs.pop("systems/ego-standalone/overview.md")
+    args[9]["sections"][1]["document"] = section["document"]
+    with pytest.raises(ValueError, match="chapter|collision"):
         compose_layout(*args)

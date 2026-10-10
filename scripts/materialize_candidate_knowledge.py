@@ -124,7 +124,8 @@ def build(args) -> dict:
         raise ValueError("C4 link ledger differs from A1 source disposition")
     files, summary = compose_layout(
         source["manifest_sha256"], manifest, disposition, assets, groups, dictionary,
-        transcriptions, normalized, vocabulary, graph, audit, software_matrix, link_ledger)
+        transcriptions, normalized, vocabulary, graph, audit, software_matrix, link_ledger,
+        bound_index)
     files["_sources/manifest.json"] = manifest_raw
     if summary["files"] != len(files):
         raise ValueError("candidate layout file inventory mismatch")
