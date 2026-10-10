@@ -10,6 +10,7 @@ import json
 import re
 
 from .source_paths import contains_source_path
+from src.agent.protocol import FINAL_OUTCOMES
 
 
 REQUIRED_FAMILIES = (
@@ -23,8 +24,12 @@ SERIOUS_FAILURES = frozenset({
 })
 FAILURE_LAYERS = frozenset({'source', 'governance', 'retrieval', 'coverage',
                             'synthesis', 'runtime'})
-OUTCOMES = frozenset({'resolved', 'partial', 'escalated', 'unknown',
-                      'unsupported', 'runtime_error'})
+# The DAQ HTTP adapters emit these additional terminal failures around the
+# shared Loop. Preserve the wire outcome instead of normalizing it for eval.
+OUTCOMES = FINAL_OUTCOMES | frozenset({
+    'provider_rate_limited', 'provider_protocol_error', 'provider_error',
+    'internal_error', 'persistence_error', 'authorization_error',
+})
 _DRAFT_PROMPT = ('Check evidence status, exact applicability and sources for this '
                  'coverage cell; preserve gaps and conflicts.')
 _SHA256 = re.compile(r'^[0-9a-f]{64}$')
@@ -135,6 +140,8 @@ def validate_frozen_suite(suite, *, verify_approval=None):
               _text(case.get('expected_boundary')), 'question evidence boundary missing')
         if family == 'multi_turn':
             _need(len(turns) >= 2, 'multi-turn question requires multiple turns')
+        if family == 'update_rollback':
+            _need(len(turns) == 3, 'update and rollback require three observed turns')
     _need(len(ids) == len(set(ids)), 'duplicate question IDs')
     _need(set(REQUIRED_FAMILIES) <= families, 'required question family missing')
     required = suite.get('required_question_ids')
@@ -147,7 +154,8 @@ def validate_frozen_suite(suite, *, verify_approval=None):
 
 
 def validate_replay_batch(suite, release, replays, *, verify_suite=None,
-                          verify_release=None):
+                          verify_release=None, verify_release_pair=None,
+                          verify_capture=None):
     """Validate captured Dev observations against a trusted D3 release identity.
 
     The caller's verifier must authenticate the actual D3 release manifest and
@@ -169,10 +177,24 @@ def validate_replay_batch(suite, release, replays, *, verify_suite=None,
     _need(release.get('dev_batch_id') == suite['batch_id'] and
           release.get('questions_sha256') == suite['questions_sha256'],
           'Dev release question batch mismatch')
+    _need(callable(verify_capture), 'trusted Dev capture verifier required')
+    if any(q['family'] == 'update_rollback' for q in suite['questions']):
+        prior = release.get('previous_release')
+        _need(isinstance(prior, str) and _SHA256.fullmatch(prior) and
+              prior != release['release_id'], 'distinct previous release required')
+        _need(callable(verify_release_pair), 'trusted adjacent release verifier required')
+        try:
+            adjacent = verify_release_pair(deepcopy(release)) is True
+        except Exception:
+            adjacent = False
+        _need(adjacent, 'signed adjacent release pair not verified')
     _need(isinstance(replays, list), 'replay rows missing')
     cases = {q['id']: q for q in suite['questions']}
-    _need(len(replays) == len(cases) and
-          {row.get('case_id') for row in replays if isinstance(row, dict)} == set(cases),
+    replay_ids = [row.get('case_id') for row in replays if isinstance(row, dict)]
+    _need(len(replay_ids) == len(replays) and all(_text(i) for i in replay_ids),
+          'replay case identity invalid')
+    _need(len(replays) == len(cases) and len(set(replay_ids)) == len(replay_ids)
+          and set(replay_ids) == set(cases),
           'replay case set incomplete or duplicated')
     for row in replays:
         case = cases[row['case_id']]
@@ -180,14 +202,26 @@ def validate_replay_batch(suite, release, replays, *, verify_suite=None,
               and row.get('knowledge_release') == release['release_id']
               and row.get('runtime_release') == release['runtime_release']
               and row.get('upstream_sha') == release['upstream_sha']
+              and row.get('agent_id') == 'ai-daq-fae-agent'
+              and row.get('observed_role') == case['role']
+              and _text(row.get('capture_ref'))
               and _text(row.get('answer_model')) and _text(row.get('prompt_version'))
               and _timestamp(row.get('captured_at')), 'replay identity mismatch')
         turns = row.get('turns')
         _need(isinstance(turns, list) and len(turns) == len(case['turns']),
               'replay turn count mismatch')
-        for prompt, turn in zip(case['turns'], turns):
+        expected_releases = ([release['previous_release'], release['release_id'],
+                              release['previous_release']]
+                             if case['family'] == 'update_rollback' else
+                             [release['release_id']] * len(turns))
+        for prompt, version, turn in zip(case['turns'], expected_releases, turns):
             _need(isinstance(turn, dict) and turn.get('question') == prompt and
                   isinstance(turn.get('answer'), str), 'replay question or answer missing')
+            _need(turn.get('agent_id') == 'ai-daq-fae-agent' and
+                  turn.get('observed_role') == case['role'] and
+                  turn.get('knowledge_release') == version and
+                  turn.get('runtime_release') == release['runtime_release'],
+                  'observed turn identity, role or release mismatch')
             _need(not contains_source_path({'body': turn['answer']}),
                   'answer prose contains a local source path')
             sources = turn.get('sources')
@@ -207,25 +241,65 @@ def validate_replay_batch(suite, release, replays, *, verify_suite=None,
             statuses = turn.get('provider_http_statuses')
             _need(isinstance(statuses, list) and all(type(s) is int and 100 <= s <= 599
                   for s in statuses), 'provider status observation missing')
+            terminal_status = turn.get('provider_terminal_status_code')
+            _need(terminal_status is None or
+                  (type(terminal_status) is int and terminal_status in statuses),
+                  'provider terminal status inconsistent with observation')
+            if terminal_status is not None:
+                expected_outcome = (
+                    'provider_configuration_error' if terminal_status in {400, 401, 403, 404, 422}
+                    else 'provider_rate_limited' if terminal_status == 429
+                    else 'provider_unavailable' if terminal_status >= 500
+                    else 'provider_error'
+                )
+                _need(turn['outcome'] == expected_outcome and turn['fallback'] != 'none',
+                      'provider terminal error was relabelled')
         if case['family'] in {'provider_http_400', 'provider_http_503'}:
             required_status = int(case['family'][-3:])
-            _need(any(required_status in turn['provider_http_statuses'] for turn in turns),
-                  'provider failure family not observed')
+            _need(any(required_status in turn['provider_http_statuses'] and
+                      turn['provider_terminal_status_code'] == required_status
+                      for turn in turns), 'provider terminal failure family not observed')
         transitions = row.get('release_transitions')
         _need(isinstance(transitions, list), 'release transitions missing')
         if case['family'] == 'update_rollback':
-            _need(any(isinstance(t, dict) and t.get('action') == 'rollback' and
-                      isinstance(t.get('before'), str) and _SHA256.fullmatch(t['before']) and
-                      isinstance(t.get('after'), str) and _SHA256.fullmatch(t['after'])
-                      for t in transitions), 'rollback observation missing')
+            _need(len({turn['trace_id'] for turn in turns}) == 3,
+                  'update/rollback turns need distinct traces')
+            expected = [('activate', expected_releases[0], expected_releases[1]),
+                        ('rollback', expected_releases[1], expected_releases[2])]
+            _need(len(transitions) == 2, 'activation and rollback observations required')
+            for index, (action, before, after) in enumerate(expected):
+                transition = transitions[index]
+                _need(isinstance(transition, dict) and
+                      transition.get('action') == action and
+                      transition.get('before') == before and
+                      transition.get('after') == after and before != after,
+                      'update/rollback release chain mismatch')
+                observation = transition.get('observation')
+                _need(isinstance(observation, dict), 'transition observation missing')
+                for kind in ('health', 'trace'):
+                    observed = observation.get(kind)
+                    _need(isinstance(observed, dict) and
+                          observed.get('agent_id') == 'ai-daq-fae-agent' and
+                          observed.get('knowledge_release') == after and
+                          observed.get('runtime_release') == release['runtime_release'],
+                          'transition health/trace identity mismatch')
+                _need(observation['trace'].get('trace_id') == turns[index + 1]['trace_id'],
+                      'transition trace does not bind observed answer turn')
+        else:
+            _need(not transitions, 'unexpected release transition in ordinary case')
+        _approved({k: v for k, v in row.items() if k != 'capture_approval'},
+                  row.get('capture_approval'), verify_capture)
     return digest(replays)
 
 
 def prepare_review_packet(suite, release, replays, *, verify_suite=None,
-                          verify_release=None):
+                          verify_release=None, verify_release_pair=None,
+                          verify_capture=None):
     """Return private, unsigned answer records for an independent reviewer."""
     replay_sha = validate_replay_batch(suite, release, replays, verify_suite=verify_suite,
-                                       verify_release=verify_release)
+                                       verify_release=verify_release,
+                                       verify_release_pair=verify_release_pair,
+                                       verify_capture=verify_capture)
     cases = {q['id']: q for q in suite['questions']}
     return {'format': 'daq-dev-answer-review/v1', 'environment': 'dev',
             'suite_sha256': digest(suite), 'replays_sha256': replay_sha,
@@ -237,10 +311,13 @@ def prepare_review_packet(suite, release, replays, *, verify_suite=None,
 
 
 def audit_answer_reviews(suite, release, replays, reviews, *, verify_suite=None,
-                         verify_release=None, verify_reviewer=None):
+                         verify_release=None, verify_reviewer=None,
+                         verify_release_pair=None, verify_capture=None):
     """Require one externally authenticated reviewer decision per captured case."""
     replay_sha = validate_replay_batch(suite, release, replays, verify_suite=verify_suite,
-                                       verify_release=verify_release)
+                                       verify_release=verify_release,
+                                       verify_release_pair=verify_release_pair,
+                                       verify_capture=verify_capture)
     _need(callable(verify_reviewer), 'independent answer reviewer verifier required')
     _need(isinstance(reviews, list) and len(reviews) == len(replays),
           'independent answer reviews incomplete')

@@ -19,10 +19,20 @@ machine-readable report is `data/knowledge/curated/d4-20261010/draft-audit.json`
 The new offline D4 contract validates: exact frozen question identity and
 trusted approval; required family and impact-question coverage; trusted D3 Dev
 release and exact replay version binding; per-turn answer, structured sources,
-capability plan/actual, coverage, fallback, outcome, trace and latency;
+capability plan/actual, coverage, fallback, exact terminal outcome, trace and latency;
 Provider 400/503 and rollback observations; and one detached, independent
 review per answer. The review packet begins unsigned. Severe findings or
 failed reviews reject the batch. No accepting verifier is bundled.
+
+Independent review found three D4 contract gaps in the first commit. The
+follow-up binds every replay to a trusted capture approval, records the
+observed Agent/role and release on every turn, and requires a trusted verifier
+for both adjacent signed releases. The update/rollback case now needs three
+old → new → old answers with distinct traces and two health/trace transition
+observations. Provider terminal outcomes keep their exact app wire values;
+captured 400 cannot be changed into a knowledge abstention. Malformed case IDs
+return a validation error. Synthetic `create_app` offline, HTTP 400 and HTTP
+503 terminals are copied into D4 replay records to exercise these contracts.
 
 The source-neutral family authoring guide and field contract are in
 `docs/knowledge/2026-10-10-daq-d4-dev-evaluation-contract.md`. It does not
@@ -32,7 +42,7 @@ Dev. The reviewer's signed semantic judgment must remain separate from the
 answering model.
 
 **Verification:** `python -m pytest -q tests/test_dev_evaluation.py` reported
-6 passed; `python -m pytest -q tests` reported 710 passed, 6 third-party
+13 passed; `python -m pytest -q tests` reported 717 passed, 6 third-party
 deprecation warnings. Neither command runs a model or verifies real
 knowledge. The candidate file and private report are Git-ignored.
 

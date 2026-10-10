@@ -53,15 +53,31 @@ Only after a signed nonempty D3 release is active in Dev may an operator replay
 the frozen suite. `validate_replay_batch` requires a trusted release verifier;
 an arbitrary `release_id` string does not satisfy it. The verifier must check
 the actual signed D3 manifest, active Dev pointer and observed release identity.
-Each case records exact suite/release/runtime/upstream IDs, answer model,
+Each replay also needs a detached trusted **capture** approval over the whole
+record. Its adapter must compare the record to retained Dev request/response,
+authenticated role, terminal frame, health and trace evidence. Merely signing
+caller-supplied JSON is insufficient. Each case records exact
+suite/release/runtime/upstream IDs, observed Agent and role, answer model,
 prompt version, an offset-aware capture timestamp, and
 one record per user turn: question, answer, structured sources, planned and
-actual capabilities, requirement coverage, fallback, outcome, trace ID,
-latency, and observed Provider HTTP statuses. The 400 and 503 cases must
-actually record those respective statuses. The update/rollback case records a
-rollback transition. Answer prose is checked by the same local source-path
+actual capabilities, requirement coverage, fallback, **exact wire outcome**,
+trace ID, latency, and observed Provider HTTP statuses. The 400 and 503 cases
+must actually record those respective **terminal** statuses. A terminal Provider status
+keeps its original error class (`provider_configuration_error` for 400,
+`provider_unavailable` for 503); it cannot be relabelled `safe_abstained`.
+Other current shared Loop and DAQ HTTP terminal outcomes are retained verbatim.
+Answer prose is checked by the same local source-path
 scanner used for section publication. The controlled runner must retain complete trace details;
 this module is only its minimum integrity contract, not that runner.
+
+The update/rollback case requires three **separately captured answers** on
+old → new → old knowledge releases, with an observed role and trace ID on
+each turn. Activation and rollback each record before/after release IDs plus
+health and trace observations bound to the following answer turn. The new D3
+manifest's `previous_release` must equal the old ID, and the IDs must differ.
+An additional trusted release-pair verifier must authenticate both signed D3
+manifests and their exact adjacency; comparing caller-supplied SHA strings
+alone is not approval. A fake, unrelated or equal-ID transition rejects.
 
 `prepare_review_packet` copies the full per-case replay and expected boundary
 to a private packet with `review=null` for every item. It grants no approval.
@@ -85,5 +101,7 @@ batch result cannot be reused across a changed suite or knowledge release.
 No real D3 knowledge release, frozen D4 suite, Dev model replay or independent
 answer review exists. B2 content consistency, D1 independent archive, D2
 fact/access signatures and other D3 source/role/link gates remain prerequisites.
-Synthetic tests verify only the fail-closed contract. Production and the
+Synthetic tests include actual `create_app` offline, HTTP 400 and HTTP 503
+terminal frames copied into a synthetic replay record. They verify exact
+outcomes without running a model or activating real knowledge. Production and the
 camera FAE runtime are untouched by this D4 preparation.
