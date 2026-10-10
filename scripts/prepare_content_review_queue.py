@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import subprocess
 from collections import defaultdict
 from copy import deepcopy
 from pathlib import Path
@@ -53,10 +54,47 @@ def _sections_match(baseline: list[dict], enriched: list[dict],
     return expected == actual
 
 
+def _candidate_records_match(candidates: list[dict], graph_records: list[dict]) -> bool:
+    by_id = {row["id"]: row for row in graph_records}
+    if len(by_id) != len(graph_records):
+        return False
+    for candidate in candidates:
+        enriched = deepcopy(by_id.get(candidate["id"]))
+        if not isinstance(enriched, dict) or enriched.pop("dependency_record_ids", None) != [
+                candidate["data"]["original_record_id"]]:
+            return False
+        if enriched != candidate:
+            return False
+    return True
+
+
+def _private_outdir(outdir: Path, repo_root: Path | None = None) -> None:
+    """Confine source excerpts to the repository's ignored private artifact root."""
+    target = outdir.resolve()
+    if repo_root is None:
+        ancestor = outdir
+        while not ancestor.exists():
+            ancestor = ancestor.parent
+        result = subprocess.run(["git", "-C", str(ancestor), "rev-parse", "--show-toplevel"],
+                                capture_output=True, text=True, check=False)
+        if result.returncode:
+            raise ValueError("private queue output must be in a Git-ignored curated root")
+        repo_root = Path(result.stdout.strip())
+    root = repo_root.resolve()
+    curated = root / "data" / "knowledge" / "curated"
+    if not target.is_relative_to(curated) or target == curated:
+        raise ValueError("private queue output must be under the curated root")
+    ignored = subprocess.run(["git", "-C", str(root), "check-ignore", "-q", "--no-index",
+                              "--", str(target)], capture_output=True, check=False)
+    if ignored.returncode:
+        raise ValueError("private queue output is not Git-ignored")
+
+
 def build(args) -> dict:
     """Refuse changed input versions and write only unsigned, Git-ignored output."""
     if args.outdir.exists():
         raise FileExistsError(args.outdir)
+    _private_outdir(args.outdir)
     b2_summary, b2_sha = _load(args.b2_review_dir / "summary.json")
     b3_summary, b3_sha = _load(args.b3_review_dir / "summary.json")
     if b3_summary["input_sha256"]["review_summary"] != b2_sha:
@@ -97,6 +135,9 @@ def build(args) -> dict:
     if not _sections_match(section_index["sections"], graph["sections"],
                            candidate_by_section):
         raise ValueError("B3 sections differ from B2 bound section index")
+    if (len(graph["records"]) != b3_summary["total_records"] or
+            not _candidate_records_match(b2["candidate-records.json"], graph["records"])):
+        raise ValueError("B3 candidate records differ from B2 reviewed candidates")
     if audit_sections(graph["sections"], section_index["bodies"],
                       graph["records"], graph["snapshot"]) != audit:
         raise ValueError("B3 section audit differs from dependency graph")

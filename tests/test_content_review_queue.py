@@ -6,7 +6,11 @@ import pytest
 
 from daq_fae.knowledge.content_review_queue import assemble_queue
 from daq_fae.knowledge.records import record_fingerprint
-from scripts.prepare_content_review_queue import _sections_match
+from scripts.prepare_content_review_queue import (
+    _candidate_records_match,
+    _private_outdir,
+    _sections_match,
+)
 
 REF = {"path": "private/spec.md", "sha256": "a" * 64,
        "locator": {"kind": "lines", "start": 2, "end": 2}}
@@ -109,3 +113,36 @@ def test_enriched_graph_sections_allow_only_bound_candidate_dependencies():
     assert not _sections_match(base, graph, {})
     graph[0]["title"] = "changed"
     assert not _sections_match(base, graph, {"section:imaging": {"claim:camera"}})
+
+
+def test_linked_review_hashes_change_when_candidate_value_changes():
+    args = list(inputs())
+    before = assemble_queue(*args)
+    args[2][0]["data"]["value"] = 3
+    args[8][0]["record"]["data"]["value"] = 3
+    after = assemble_queue(*args)
+    for key in ("field_definitions", "content_decisions", "sections"):
+        assert before[key][0]["review_sha256"] != after[key][0]["review_sha256"]
+
+
+def test_b3_graph_candidate_payload_allows_only_original_dependency():
+    candidate = inputs()[2][0]
+    graph = deepcopy(candidate)
+    graph["dependency_record_ids"] = ["claim:source"]
+    assert _candidate_records_match([candidate], [graph])
+    graph["data"]["value"] = 3
+    assert not _candidate_records_match([candidate], [graph])
+    graph = deepcopy(candidate)
+    graph["dependency_record_ids"] = ["claim:other"]
+    assert not _candidate_records_match([candidate], [graph])
+
+
+def test_private_queue_rejects_git_visible_outdir(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".gitignore").write_text("/data/\n")
+    from subprocess import run
+    run(["git", "-C", str(repo), "init", "-q"], check=True)
+    with pytest.raises(ValueError):
+        _private_outdir(repo / "docs" / "review", repo)
+    _private_outdir(repo / "data" / "knowledge" / "curated" / "review", repo)

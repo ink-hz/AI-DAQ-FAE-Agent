@@ -94,6 +94,7 @@ def assemble_queue(originals: list[dict], dispositions: list[dict],
         section_by_candidate[cid].add(sid)
     if set(section_by_candidate) != set(new):
         raise ValueError("candidate has no section binding")
+    candidate_item_digests = {cid: _digest(item) for cid, item in items.items()}
     for cid, row in new.items():
         if row.get("status") != "candidate" or row.get("kind") != "claim":
             raise ValueError("review queue accepts candidate claims only")
@@ -150,6 +151,8 @@ def assemble_queue(originals: list[dict], dispositions: list[dict],
             "safe_partial_candidate_ids": sorted(
                 cid for cid, row in new.items() if row["data"]["original_record_id"] == oid),
         }
+        payload["linked_candidate_sha256"] = {
+            cid: candidate_item_digests[cid] for cid in payload["safe_partial_candidate_ids"]}
         payload["review_sha256"] = _digest(payload)
         decision_queue.append(payload)
 
@@ -172,6 +175,14 @@ def assemble_queue(originals: list[dict], dispositions: list[dict],
             "content_decision_ids": decision_ids,
             "findings": deepcopy(by_section_findings[sid]),
         }
+        payload["linked_candidate_sha256"] = {
+            cid: candidate_item_digests[cid] for cid in candidate_ids}
+        payload["linked_field_sha256"] = {
+            row["field_id"]: row["review_sha256"] for row in field_queue
+            if row["field_id"] in payload["field_ids"]}
+        payload["linked_decision_sha256"] = {
+            row["original_record_id"]: row["review_sha256"] for row in decision_queue
+            if row["original_record_id"] in decision_ids}
         payload["review_sha256"] = _digest(payload)
         section_queue.append(payload)
     return {"field_definitions": field_queue, "content_decisions": decision_queue,
