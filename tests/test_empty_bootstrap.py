@@ -121,6 +121,23 @@ def test_bootstrap_rejects_unreviewed_knowledge_files(tmp_path):
         create_app(provider_mode="offline", knowledge_dir=tmp_path)
 
 
+def test_default_bootstrap_keeps_private_candidate_drafts_unloaded():
+    from daq_fae.app import create_app
+
+    response = TestClient(create_app(provider_mode="offline")).get("/health")
+    assert response.json()["knowledge_release"] == "empty-dev-v0"
+
+
+def test_custom_knowledge_directory_cannot_hide_unreviewed_drafts(tmp_path):
+    from daq_fae.app import create_app
+
+    drafts = tmp_path / "drafts"
+    drafts.mkdir()
+    (drafts / "rogue.md").write_text("unreviewed", encoding="utf-8")
+    with pytest.raises(ValueError, match="empty knowledge"):
+        create_app(provider_mode="offline", knowledge_dir=tmp_path)
+
+
 @pytest.mark.parametrize(
     ("status_code", "outcome"),
     [(400, "provider_configuration_error"), (503, "provider_unavailable")],

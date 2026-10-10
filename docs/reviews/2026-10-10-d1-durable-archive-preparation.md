@@ -1,6 +1,6 @@
 # D1 原件持久归档工程准备
 
-状态：工程准备已验证；D1 实际验收仍阻塞。没有复制真实原件。
+状态：工程准备已验证；真实原件已按用户指示复制到本项目的 Git 忽略目录并逐件核验；D1 独立持久归档与重取验收仍阻塞。
 
 只读核查：本机 v2 归档的 manifest SHA-256 为
 `e35fe11f6773bc157734d65a3b19c87a18fdf14bab3c5458d1b4d75b22387d56`。
@@ -8,8 +8,7 @@
 本机 v1 的不同 manifest 被预期锚点拒绝；没有用 v1 替代 v2。
 
 挂载清单中独立 SMB 卷为只读；另一外部挂载是只读安装镜像。
-可写 APFS 属本机。没有发现获确认、可写、独立且受控的目标。
-不得据此选择本机第二目录或云同步目录。等待资料保管人提供目标和控制证据。
+可写 APFS 属本机。用户随后授权在本项目目录内存放原件；已建立 `data/knowledge/local_archive/candidate-originals-v2-local-copy-20261010/` 私有本机副本，目录和文件分别为 `0500`、`0400`，来源、副本与 manifest 的 276 个大小和 SHA-256 均一致。收据位于同级 Git 忽略目录，明确标为同机复制、无独立重取。这个副本可供本机清洗复核，不能证明灾备独立性或通过 D1。尚未发现获确认、可写、独立且受控的目标；后续 D1 仍需保管人提供目标和控制证据。
 
 ## 执行合同
 
@@ -48,7 +47,7 @@ python3.11 scripts/durable_candidate_archive.py retrieve "$RETRIEVED_ARCHIVE" \
 输出仅为 `copy_verified_pending_independent_retrieval` 或
 `retrieved_bytes_verified_pending_review`，从不自动标记 D1 pass。
 独立 Codex/人工核对全部 276 文件和上述控制记录后，才更新 D1 验收。
-同机源文件继续保留；候选材料仍不是授权知识发布输入。
+同机源文件及本项目副本继续保留；候选材料仍不是授权知识发布输入。
 详细原件名、manifest、证据位置和真实命令参数不得进入 Git。
 
 ## 验证

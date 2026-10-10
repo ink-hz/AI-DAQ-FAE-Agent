@@ -117,7 +117,10 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
     knowledge_dir = knowledge_dir or _ROOT / "knowledge"
     if not knowledge_dir.is_dir():
         raise ValueError("empty knowledge directory is missing")
-    if any(path.is_file() and path.name not in {".gitkeep", "README.md"}
+    default_knowledge_dir = knowledge_dir.resolve() == (_ROOT / "knowledge").resolve()
+    allowed_root_files = {knowledge_dir / name for name in (".gitkeep", "README.md", ".gitignore")}
+    if any(path.is_file() and path not in allowed_root_files and
+           not (default_knowledge_dir and path.relative_to(knowledge_dir).parts[0] == "drafts")
            for path in knowledge_dir.rglob("*")):
         raise ValueError("empty knowledge bootstrap cannot load unreviewed knowledge files")
     release_root = knowledge_release_root or Path(os.getenv(
