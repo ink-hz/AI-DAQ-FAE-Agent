@@ -98,8 +98,9 @@ batch result cannot be reused across a changed suite or knowledge release.
 
 ## Current state
 
-No real D3 knowledge release, frozen D4 suite, Dev model replay or independent
-answer review exists. B2 content consistency, D1 independent archive, D2
+No real D3 knowledge release, frozen D4 suite, formal nonempty-knowledge Dev replay or signed independent
+answer review exists. A separate [five-turn empty-knowledge Dev model baseline](../reviews/2026-10-10-daq-real-dev-empty-knowledge-baseline.md)
+and Codex semantic review verify only conservative behavior. B2 content consistency, D1 independent archive, D2
 fact/access signatures and other D3 source/role/link gates remain prerequisites.
 Synthetic tests include actual `create_app` offline, HTTP 400 and HTTP 503
 terminal frames copied into a synthetic replay record. They verify exact

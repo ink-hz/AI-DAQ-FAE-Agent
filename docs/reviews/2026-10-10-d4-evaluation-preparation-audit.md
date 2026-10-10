@@ -2,7 +2,9 @@
 
 **Status:** engineering preparation implemented; real D4 is blocked by the
 absence of a signed, activated D3 Dev knowledge release. No model call or
-semantic answer review was performed.
+semantic answer review was performed **for this preparation audit**. A later
+[five-turn real-model empty-knowledge Dev baseline](2026-10-10-daq-real-dev-empty-knowledge-baseline.md)
+does not satisfy the nonempty-release D4 gate.
 
 The original private B3 draft-question file has SHA-256
 `9a85cf4d805ee2440fbea8526a6ab095f1d49aea3449a5b90f635af2a00fc931`.
