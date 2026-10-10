@@ -284,14 +284,13 @@ def test_software_support_accepts_explicit_variant_selector(tmp_path):
     assert "conditions" in schema["parameters"]["properties"]
 
 
-def test_local_dev_app_reports_loaded_immutable_release(tmp_path):
+def test_local_dev_app_refuses_nonempty_immutable_release(tmp_path):
     release_id = publish_release(tmp_path, SNAPSHOT, _records(), None, RELEASE_REVIEW)
     activate_release(tmp_path, release_id)
     release_id, verifier = approve_fixture_for_app(tmp_path)
-    app = create_app(provider_mode="offline", knowledge_release_root=tmp_path, knowledge_approval_verifier=verifier,
-                     state_db_path=tmp_path / "state.sqlite3")
-    assert TestClient(app).get("/health").json()["knowledge_release"] == release_id
-    assert app.state.daq_knowledge.release_id == release_id
+    with pytest.raises(ValueError, match='requires_authenticated_mode'):
+        create_app(provider_mode="offline", knowledge_release_root=tmp_path,
+                   knowledge_approval_verifier=verifier, state_db_path=tmp_path / "state.sqlite3")
 
 
 def test_authenticated_app_rejects_real_release_without_role_contract(tmp_path, monkeypatch):

@@ -98,3 +98,13 @@ The same static validation now applies to v2 section consistency checks, preserv
 unrelated facts after a link expires. This exception never accepts missing,
 forged, changed, wrongly scoped or invalidly dated link evidence and cannot waive
 current-link checks in a public transition.
+
+## Authenticated nonempty access
+
+A valid release signature authorizes the knowledge snapshot, not an anonymous
+caller. Nonempty knowledge requires authenticated application mode and the
+server-owned subject entitlement map. `create_app` rejects a signed nonempty
+release when identity mode is disabled, before any local chat or provider work.
+The local empty Dev path never assigns an implicit knowledge role. A genuinely
+empty bootstrap continues to work without identity; authenticated entitled users
+retain the existing role/revocation/replay contract.

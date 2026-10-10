@@ -109,14 +109,14 @@ def test_runtime_identity_is_checked_against_trusted_process_configuration(tmp_p
                    knowledge_approval_verifier=verify)
 
 
-def test_real_app_loads_reviewed_synthetic_package_via_trusted_verifier(tmp_path):
+def test_real_app_requires_auth_even_with_trusted_release_verifier(tmp_path):
     from synthetic_release_helpers import approve_fixture_for_app
     from fastapi.testclient import TestClient
     unchecked_fixture(tmp_path)
     rid, trusted = approve_fixture_for_app(tmp_path)
-    app = create_app(provider_mode='offline', knowledge_release_root=tmp_path,
-        knowledge_approval_verifier=trusted, state_db_path=tmp_path/'state.sqlite3')
-    assert TestClient(app).get('/health').json()['knowledge_release'] == rid
+    with pytest.raises(ValueError, match='requires_authenticated_mode'):
+        create_app(provider_mode='offline', knowledge_release_root=tmp_path,
+            knowledge_approval_verifier=trusted, state_db_path=tmp_path/'state.sqlite3')
 
 
 @pytest.mark.parametrize('field,value', [('archive.independent_durable', False),
@@ -182,9 +182,11 @@ def test_runtime_reload_preserves_facts_after_natural_link_expiry(tmp_path, monk
     releases._activate_release(tmp_path, rid)
     rid, trusted = approve_fixture_for_app(tmp_path)
     advance_past_link_expiry(monkeypatch)
-    app = create_app(provider_mode='offline', knowledge_release_root=tmp_path,
-        knowledge_approval_verifier=trusted, state_db_path=tmp_path/'state.sqlite3')
-    view = app.state.daq_knowledge
+    from daq_fae.app import RUNTIME_RELEASE
+    from pathlib import Path
+    upstream = json.loads((Path(__file__).resolve().parents[1]/'upstream-source.json').read_text())['revision']
+    view = ReviewedKnowledge.load_active(tmp_path, verify_approval=trusted,
+        runtime_release=RUNTIME_RELEASE, upstream_sha=upstream)
     assert view.release_id == rid
     assert any(r['kind'] == 'claim' for r in view.records_for('internal_fae'))
     assert not any(r['kind'] == 'link' for r in view.records_for('internal_fae'))

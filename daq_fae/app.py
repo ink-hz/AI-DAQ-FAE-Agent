@@ -128,6 +128,9 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
         runtime_release=RUNTIME_RELEASE,
         upstream_sha=json.loads((_ROOT / 'upstream-source.json').read_text())['revision'],
     )
+    if knowledge is not None and any(knowledge.manifest.get(key)
+                                     for key in ('sources', 'records', 'sections')) and not auth_mode:
+        raise ValueError('daq_nonempty_knowledge_requires_authenticated_mode')
     entitlements = None
     if auth_mode and knowledge is not None:
         entitlement_path = os.getenv("DAQ_KNOWLEDGE_ENTITLEMENTS_FILE")
@@ -385,7 +388,7 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                         )
                         base_toolbox = DaqToolBox(
                             context=plan.context.tool_context(), knowledge=knowledge,
-                            role="internal_fae" if knowledge is not None else None,
+                            role=None,
                             requirements=plan.requirements,
                         )
                         toolbox = (

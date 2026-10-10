@@ -53,3 +53,10 @@ a different empty version, and a competing writer winning the transition lock.
 Empty bootstrap activation now checks the pointer inside the shared lock and only
 allows first boot or idempotent activation of the same empty ID. Existing active
 state is preserved on every rejected bootstrap transition.
+
+Integration review reproduced unauthenticated local chat receiving internal
+knowledge even with valid release governance. Startup now refuses nonempty
+knowledge without authenticated mode, and the local toolbox has no implicit
+`internal_fae` role. The red regression exercised a synthetic `/chat` request and
+observed HTTP 200 before correction; the corrected configuration fails before any
+model/tool work. Authenticated entitlement and empty-Dev contracts remain covered.
