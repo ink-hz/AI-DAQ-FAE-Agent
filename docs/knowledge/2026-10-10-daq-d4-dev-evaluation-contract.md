@@ -18,6 +18,10 @@ The offline audit maps this generic family only to a *candidate* for
 `evidence_gap`; it reports nine missing candidate families and all ten missing
 frozen families. It never changes those 375 records or counts them as D4 passes.
 The private audit is `data/knowledge/curated/d4-20261010/draft-audit.json`.
+That audit applies to the original generic B3 drafts. A separate [2026-10-12
+private preparation](../reviews/2026-10-12-daq-locator-and-d4-preparation.md)
+adds ten concrete candidate cases, one per family. They remain unreviewed,
+unfrozen, outside a release-bound suite and count as zero D4 passes.
 
 Use the following source-neutral authoring guide. Each row requires at least
 one concrete question, an expected evidence boundary, coverage IDs, an
