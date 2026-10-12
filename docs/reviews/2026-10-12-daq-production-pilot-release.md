@@ -42,3 +42,11 @@
 ## 未完成验收与已知限制
 
 网页已可访问，但未持有苍渊的浏览器登录态完成个人交互验收，也没有在生产触发真实回答；用户业务试点反馈、并发延迟及全量知识仍待后续。上游 SHA 的受保护持久 Git ref 未核实。生产健康字段 `source_checked_records=0` 只统计 Dev 候选模式；正式 manifest 的 `record_count=23` 已在容器中校验，不能用该健康字段判断知识为空。以上限制不改变首批 23 条内部试点已经部署的事实。
+
+## 2026-10-12 直达登录热修
+
+首轮上线烟测只检查了 `/daq/` 的 HTTP 200，漏掉浏览器身份启动。生产 HTML 把 `fae-api-base` 输出为空，导致浏览器请求 Platform 的根路径 `/enterprise/session`，收到 Platform 的 401 响应后停在“企业身份校验未完成”，无法进入钉钉登录。数采实际 API 经过 `/daq/api/` 反向代理；相机内部页使用对应的 `/fae/api` 前缀。
+
+数采 Git `926667ed07bcfd5007f283a00718b138c5f7729f` 将内部页 API 前缀改为 `/daq/api`，本机 `/app/` 仍使用根 API。回归测试先复现失败再通过，DAQ Python 876/876、WebUI 235/235、WebUI 构建通过。发布包 SHA-256 为 `07dbd36feadcd8e282bd8a847d8f1408bfce2926fdcae762a5d6619b1082972b`；生产镜像为 `sha256:70b351a7a3498b7e5466faa849b2b2173ac33825d1e9658ed67a21890600f5e5`。此变更只修改数采 WebUI 挂载配置，`src/`、提示词和知识未变，故回答运行时标签 `daq-124ae1adc715` 与知识 release `6a2225fde85cd09339620088011d25bf2331953b6f981be6f1f184ce5537e8f4` 保持不变；镜像 tag `daq-926667ed07bc-overlay` 单独标识此次部署代码。
+
+切换后生产 `/daq/` HTML 带 `fae-api-base=/daq/api`；匿名 `/daq/api/enterprise/session` 为预期 401，`/login?return_path=%2Fdaq%2F` 为 200。无登录态的 Chrome 从 `/daq/` 实际导航至 Agent Platform 登录页，渲染出“钉钉扫码登录”按钮。DAQ 容器 healthy、重启计数 0，相机入口仍为 200 且相机容器 healthy。本次未使用苍渊的钉钉身份完成扫码后授权与回答验收。
