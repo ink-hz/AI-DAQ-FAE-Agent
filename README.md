@@ -22,6 +22,8 @@
 
 **尚不能宣布完整能力等价或试点可发布。** 共享源码虽已推送远端集成分支，受保护依赖 pin 尚未核实；真实 Opus 网关有一次 476 秒传输失败，相机 Dev 回归有一个硬失败和一个答案矛盾；数采认证知识、Platform 实例联调和部署回滚仍未验收。原始数采资料已有本机受限归档和逐文件哈希；当前仅供本机 Dev 显式预览。[接管门禁核查](docs/reviews/2026-10-08-daq-takeover-gate-audit.md)、[迁移计划](docs/superpowers/plans/2026-10-08-full-runtime-parity-migration.md)与[完整设计](docs/2026-10-08-数采FAE完整设计.md)记录发布门。
 
+正式上线的最新实测拒绝原因、23 条最小发布提案和 Platform 接入缺口见[2026-10-12 上线预检](docs/reviews/2026-10-12-daq-launch-preflight.md)。
+
 ### 数采知识专项进度（2026-10-12）
 
 按[知识专项任务书](docs/superpowers/plans/2026-10-10-daq-knowledge-workstream-task-brief.md)已完成 276 份原件本机哈希核验，形成 114 个候选章节、742 条候选/冲突图记录和高频更新影响图。本轮按用户调整去掉 D1 独立复制与 D2 具名签名门，逐页核对其中 23 条实体/规格记录，在本机 Dev 显式接入 90 节内部候选章节和这些可答记录。真实 Opus 5.5 已对正向规格与缺证题回放；复审修正后的 11 题批通过自动硬门和 Codex 逐题语义复核。其余候选、冲突、组合、软件与链接继续显示缺口，不能冒充已核验事实。完整结果见[逐项状态](docs/reviews/2026-10-10-daq-knowledge-workstream-status.md)及[Dev v2 来源核对与回放](docs/reviews/2026-10-12-daq-dev-source-checked-v2.md)。
