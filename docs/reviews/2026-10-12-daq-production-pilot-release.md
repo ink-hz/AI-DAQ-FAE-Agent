@@ -50,3 +50,13 @@
 数采 Git `926667ed07bcfd5007f283a00718b138c5f7729f` 将内部页 API 前缀改为 `/daq/api`，本机 `/app/` 仍使用根 API。回归测试先复现失败再通过，DAQ Python 876/876、WebUI 235/235、WebUI 构建通过。发布包 SHA-256 为 `07dbd36feadcd8e282bd8a847d8f1408bfce2926fdcae762a5d6619b1082972b`；生产镜像为 `sha256:70b351a7a3498b7e5466faa849b2b2173ac33825d1e9658ed67a21890600f5e5`。此变更只修改数采 WebUI 挂载配置，`src/`、提示词和知识未变，故回答运行时标签 `daq-124ae1adc715` 与知识 release `6a2225fde85cd09339620088011d25bf2331953b6f981be6f1f184ce5537e8f4` 保持不变；镜像 tag `daq-926667ed07bc-overlay` 单独标识此次部署代码。
 
 切换后生产 `/daq/` HTML 带 `fae-api-base=/daq/api`；匿名 `/daq/api/enterprise/session` 为预期 401，`/login?return_path=%2Fdaq%2F` 为 200。无登录态的 Chrome 从 `/daq/` 实际导航至 Agent Platform 登录页，渲染出“钉钉扫码登录”按钮。DAQ 容器 healthy、重启计数 0，相机入口仍为 200 且相机容器 healthy。本次未使用苍渊的钉钉身份完成扫码后授权与回答验收。
+
+## 2026-10-12 图片理解启用
+
+页面持续显示“当前环境图片理解未启用”有两个原因：数采应用此前未构造图片模型适配器，生产 `vision_enabled=false`；网页又调用被 Nginx 明确屏蔽的 `/daq/api/health` 获取能力，匿名或已登录浏览器均无法从该接口得到图片能力。修复后应用通过 `DAQ_VISION_ENABLED=true` 显式装配与回答同一数采 Anthropic 网关和固定 `claude-opus-5-5` 模型，使用 Opus 5.5 兼容的自动工具策略；网页改为查询受数采身份保护、禁止缓存的 `/daq/api/attachments/capabilities`。附件的会话、所有者和来源 ID 边界保持有效。
+
+共享相机运行时的图片工具会覆盖网关 HTTP 状态和错误码。相机仓 `4f453b77073005d24d9f07f36016b7172009443a` 在 `origin/master` 保留安全诊断字段；数采 `src/` 和 `requirements.txt` 与该提交的归档内容逐字节一致。相机相关 157 项及完整单元 3086 项通过。数采将 HTTP 400、HTTP 503 包装的 `model_not_found` 等归为图片 Provider 配置失败，保留 429 和真实 5xx 的独立类别；数采 Python 880 项、网页 235 项与构建通过。
+
+本机 Dev 的真实图片端到端回放上传 128×128 合成纯红 PNG，调用 `analyze_image` 成功，模型为 `claude-opus-5-5`，`vision_invoked=true`、`image_failures=[]`、`fallback_used=false`，正确识别红色和画面无可见物体。独立 Codex 对首批三道知识哨兵给出 PASS，对图片回答给出 PARTIAL 但可交付：观察准确，纯视觉问题仍有多余的“当前无法下结论”表述。全程未向生产模型发起测试。新的知识 release `a63baf103892250b8474ad9e464b8df47c889e020313e37dd71ad815af9d55a6` 绑定 DAQ runtime `daq-ace8726f2a74` 与相机上游 SHA；本机激活后通过真实 Dev EGO 规格问答观察，trace `5e69e485fa53e7fa5df7c9775f86a3b4`，结论为 165°、`resolved`。
+
+发布包 SHA-256 `8f6fa96ba7d85ff37a529b7b5b5aa2425567458908654bf993623af70a1f504b`，生产新镜像 `sha256:504e1aaa5167ef2017eecae2c04ecdaa63a74c74557c652da0f6d50b2f8f488d`，仍以原先核实的相机生产镜像为依赖基底。生产备份位于 `/opt/ai-daq-fae-agent/backups/vision-cutover-20261012T094230Z`，包含旧环境和旧知识指针；旧 release 目录与镜像仍保留，可按备份恢复。切换后数采容器 healthy、重启计数 0；内部健康接口显示 `vision_enabled=true`、`vision_reason=ready`、新知识与 runtime 身份。外网 `/daq/` 为 200，新能力接口匿名为 401 且 `Cache-Control: no-store`，`/daq/api/health` 继续为 404；相机入口为 200。线上苍渊登录态的图片交互和生产真实回答尚未做，不能将本次部署等同于该业务验收。上游 `origin/master` 是否受保护仍未核实，里程碑 0 的受保护 Git ref 门不宣称完成。
