@@ -29,6 +29,7 @@ from daq_fae.attachment_evidence import extend_with_attachments
 from daq_fae.task_context import prepare_turn
 from daq_fae.local_state import LocalStateError, LocalStateStore
 from daq_fae.knowledge.reviewed_view import ReviewedKnowledge
+from daq_fae.knowledge.dev_candidate import DevCandidateKnowledge
 from daq_fae.knowledge.entitlements import KnowledgeEntitlements
 from daq_fae.authenticated_chat import authenticated_chat
 from daq_fae.provider_errors import anthropic_failure
@@ -126,12 +127,31 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
     release_root = knowledge_release_root or Path(os.getenv(
         "DAQ_KNOWLEDGE_RELEASE_ROOT", str(_ROOT / "data" / "knowledge" / "published"),
     ))
-    knowledge = ReviewedKnowledge.load_active(
-        release_root, verify_approval=knowledge_approval_verifier,
-        runtime_release=RUNTIME_RELEASE,
-        upstream_sha=json.loads((_ROOT / 'upstream-source.json').read_text())['revision'],
-    )
-    if knowledge is not None and any(knowledge.manifest.get(key)
+    candidate_flag = os.getenv("DAQ_DEV_CANDIDATE_MODE", "false")
+    if candidate_flag not in {"true", "false"}:
+        raise ValueError("daq_dev_candidate_mode_invalid")
+    candidate_mode = candidate_flag == "true"
+    if candidate_mode and auth_mode:
+        raise ValueError("daq_dev_candidate_requires_local_mode")
+    if candidate_mode:
+        required = ("DAQ_DEV_CANDIDATE_GRAPH_DIR", "DAQ_DEV_CANDIDATE_BOUND_INDEX",
+                    "DAQ_DEV_CANDIDATE_ARCHIVE")
+        if not all(os.getenv(key) for key in required):
+            raise ValueError("daq_dev_candidate_paths_missing")
+        if (release_root / "active.json").exists():
+            raise ValueError("daq_dev_candidate_cannot_shadow_active_release")
+        knowledge = DevCandidateKnowledge.load(
+            Path(os.environ[required[0]]), Path(os.environ[required[1]]),
+            Path(os.environ[required[2]]),
+            Path(os.environ["DAQ_DEV_SOURCE_CHECK_FILE"])
+            if os.getenv("DAQ_DEV_SOURCE_CHECK_FILE") else None)
+    else:
+        knowledge = ReviewedKnowledge.load_active(
+            release_root, verify_approval=knowledge_approval_verifier,
+            runtime_release=RUNTIME_RELEASE,
+            upstream_sha=json.loads((_ROOT / 'upstream-source.json').read_text())['revision'],
+        )
+    if knowledge is not None and not candidate_mode and any(knowledge.manifest.get(key)
                                      for key in ('sources', 'records', 'sections')) and not auth_mode:
         raise ValueError('daq_nonempty_knowledge_requires_authenticated_mode')
     entitlements = None
@@ -198,6 +218,9 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
             "environment": "development",
             "agent_id": AGENT_ID,
             "knowledge_release": knowledge_release,
+            "knowledge_status": "candidate_dev_only" if candidate_mode else "reviewed_or_empty",
+            "source_checked_records": knowledge.manifest.get("source_checked_count", 0)
+            if candidate_mode else 0,
             "runtime_release": RUNTIME_RELEASE,
             "provider_mode": mode,
             "local_dev_only": not auth_mode,
@@ -388,10 +411,12 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                             previous=app.state.local_state.load_context(session.session_id),
                             attachment_source_ids=text_source_ids,
                             image_source_ids=image_source_ids,
+                            grounded_targets=(knowledge.ground_question(request.message)
+                                              if candidate_mode else None),
                         )
                         base_toolbox = DaqToolBox(
                             context=plan.context.tool_context(), knowledge=knowledge,
-                            role=None,
+                            role="internal_fae" if candidate_mode else None,
                             requirements=plan.requirements,
                         )
                         toolbox = (
@@ -404,10 +429,11 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                             adapter=adapter,
                             toolbox=toolbox,
                             system_prompt_path=_ROOT / "prompts" / (
+                                "candidate_knowledge_system.md" if candidate_mode else
                                 "reviewed_knowledge_system.md" if knowledge is not None
                                 else "empty_knowledge_system.md"
                             ),
-                            evidence_policy=DaqEvidencePolicy(),
+                            evidence_policy=DaqEvidencePolicy(allow_dev_source_check=candidate_mode),
                         )
                         events = runtime.run(
                             request.message, history=prior_history,

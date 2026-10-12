@@ -31,6 +31,9 @@ class _Requirement:
 
 
 class DaqEvidencePolicy:
+    def __init__(self, *, allow_dev_source_check: bool = False):
+        self.allow_dev_source_check = allow_dev_source_check
+
     def begin(self, requirements: Mapping[str, object]) -> "DaqEvidenceSession":
         raw = requirements.get("requirements", [])
         if not isinstance(raw, list):
@@ -60,17 +63,19 @@ class DaqEvidencePolicy:
             ))
         if not parsed:
             raise ValueError("daq_requirements_empty")
-        return DaqEvidenceSession(tuple(parsed))
+        return DaqEvidenceSession(tuple(parsed), allow_dev_source_check=self.allow_dev_source_check)
 
 
 class DaqEvidenceSession:
-    def __init__(self, requirements: tuple[_Requirement, ...]):
+    def __init__(self, requirements: tuple[_Requirement, ...], *,
+                 allow_dev_source_check: bool = False):
         self.requirements = requirements
         self.status = {item.id: "unknown" for item in requirements}
         self.actual: list[str] = []
         self.tool_failed = False
         self.attachment_failed = False
         self._observed_user_sources = {item.id: set() for item in requirements}
+        self.allow_dev_source_check = allow_dev_source_check
 
     def observe(self, tool_name: str, result: ToolResult) -> None:
         if tool_name not in self.actual:
@@ -120,7 +125,8 @@ class DaqEvidenceSession:
                 self.status[item.id] = "conflict"
             elif previous == "conflict":
                 continue
-            elif result.status == "ok" and _has_governed_source(result):
+            elif result.status == "ok" and _has_governed_source(
+                    result, allow_dev_source_check=self.allow_dev_source_check):
                 self.status[item.id] = "satisfied"
             elif result.status == "not_found" and previous != "satisfied":
                 self.status[item.id] = "missing"
@@ -171,11 +177,13 @@ class DaqEvidenceSession:
         )
 
 
-def _has_governed_source(result: ToolResult) -> bool:
+def _has_governed_source(result: ToolResult, *, allow_dev_source_check: bool = False) -> bool:
     return any(
         isinstance(source, dict)
-        and source.get("type") == "daq_governed_claim"
-        and source.get("verification_status") == "verified"
+        and ((source.get("type") == "daq_governed_claim"
+              and source.get("verification_status") == "verified")
+             or (allow_dev_source_check and source.get("type") == "daq_dev_source_checked_claim"
+                 and source.get("verification_status") == "source_checked"))
         and isinstance(source.get("release_id"), str)
         and bool(source["release_id"].strip())
         and isinstance(source.get("source_id"), str)

@@ -27,6 +27,10 @@ def terms(value: str) -> set[str]:
                           for i in range(len(word) - n + 1))
         else:
             result.add(word)
+            # Resolution and other compound selectors may be written as
+            # 1600x1200 in metadata and as separate numbers in a question.
+            if re.fullmatch(r'\d+(?:[x×]\d+)+', word):
+                result.update(re.findall(r'\d+', word))
     return result
 
 
@@ -79,6 +83,13 @@ def rank_sections(sections: list[dict], records: list[dict], query: str) -> list
                   (1, body_text(section['body']))]
         score = sum(weight * sum(len(term) for term in query_terms & terms(text))
                     for weight, text in fields)
+        scope = section.get('scope', {})
+        if isinstance(scope, dict):
+            selectors = scope.get('required_selectors', [])
+            if isinstance(selectors, list):
+                selector_text = ' '.join(str(scope.get(key, '')) for key in selectors
+                                         if isinstance(key, str))
+                score += 20 * sum(len(term) for term in query_terms & terms(selector_text))
         if score:
             ranked.append((score, section))
     return [s for _, s in sorted(ranked, key=lambda item: (-item[0], item[1]['section_id']))

@@ -6,6 +6,8 @@
 
 `master` 已推送到 `origin/master`，包含可运行的**本机 Dev 实例**；当前提交与远端状态请以 Git 查询结果为准。当前知识发布 `empty-dev-v0` 没有已审核数采事实，因此产品参数、兼容性、操作步骤和下载链接应明确缺证。当前共享 `src/` 是 [upstream-source.json](upstream-source.json) 记录的集成快照；上游集成分支已推送远端，但尚未核实受保护的持久 Git ref，因此不是正式依赖 pin。
 
+2026-10-12 起可显式开启**本机真实资料 Dev 预览**：逐文件哈希核对原件，加载 90 节仅限内部草案角色的候选章节，并从精确来源核对账本加载 15 条窄范围记录。候选章节只供检索和缺口诊断；`source_checked` 记录可在本机 Dev 精确型号/字段/条件匹配时回答。此路径没有切换正式 `active.json`，也不等于认证知识发布、Platform 联调或生产部署。用户已取消独立存储复制和具名签名作为当前 Dev 工作的前置门，仍须保留来源、冲突和权限边界。
+
 | 能力 | 当前接入情况 |
 | --- | --- |
 | Provider/Loop/终稿协议、SSE/心跳、trace、错误归因 | 已在数采 API 实际装配；Opus 5.5 使用 `submit_only_auto` |
@@ -14,13 +16,15 @@
 | 附件上传、会话内检索/精读、图片分析、归档 | 已接入；认证模式可启用独立归档清单与删除确认，关闭新归档后仍处理既有删除，真实 Postgres 往返及删除与归档确认竞态测试通过；视觉 Provider 尚未配置时明确失败 |
 | WebUI | 本机 `/app/` 与内部认证模式 `/daq/` 分别装配，沿用旧客户端合同 |
 | Platform 身份、Postgres 会话/反馈、review、HTTP Task | 已装配可选内部认证模式；数采 Agent ID、任务签名 audience、会话和资料隔离；真实 Platform 联调未完成 |
-| 数采事实、关系、权限和知识发布 | 在线仍为空知识；原件清单、候选章节/记录、增量影响图、角色过滤和受审核的不可变 Dev 发布/回滚门已有离线工程实现。真实章节、事实、权限、链接均未签认，未激活真实知识 |
+| 数采事实、关系、权限和知识发布 | 默认及正式活动指针仍为空知识；本机 Dev 已显式加载真实原件候选章节和 15 条逐项来源核对记录，支持窄范围正向答复。认证角色、软件、链接与组合结论未发布 |
 
-**尚不能宣布完整能力等价或试点可发布。** 共享源码虽已推送远端集成分支，受保护依赖 pin 尚未核实；真实 Opus 网关有一次 476 秒传输失败，相机 Dev 回归有一个硬失败和一个答案矛盾；数采真实知识、Platform 实例联调和部署回滚仍未验收。原始数采资料已有本机受限归档候选和逐文件哈希，但持久存储与资料裁决尚未验收，不进入当前知识发布。[接管门禁核查](docs/reviews/2026-10-08-daq-takeover-gate-audit.md)、[迁移计划](docs/superpowers/plans/2026-10-08-full-runtime-parity-migration.md)与[完整设计](docs/2026-10-08-数采FAE完整设计.md)记录发布门。
+本机候选预览的实现与真实模型结果见[Dev 来源核对与回放](docs/reviews/2026-10-12-daq-real-dev-candidate-knowledge.md)。默认启动仍是空知识；正式活动指针没有变化。
+
+**尚不能宣布完整能力等价或试点可发布。** 共享源码虽已推送远端集成分支，受保护依赖 pin 尚未核实；真实 Opus 网关有一次 476 秒传输失败，相机 Dev 回归有一个硬失败和一个答案矛盾；数采认证知识、Platform 实例联调和部署回滚仍未验收。原始数采资料已有本机受限归档和逐文件哈希；当前仅供本机 Dev 显式预览。[接管门禁核查](docs/reviews/2026-10-08-daq-takeover-gate-audit.md)、[迁移计划](docs/superpowers/plans/2026-10-08-full-runtime-parity-migration.md)与[完整设计](docs/2026-10-08-数采FAE完整设计.md)记录发布门。
 
 ### 数采知识专项进度（2026-10-12）
 
-按[知识专项任务书](docs/superpowers/plans/2026-10-10-daq-knowledge-workstream-task-brief.md)建立了从原件清单到 Dev 答案复审的工程合同。私有候选包含 276 份原件、114 个章节、70 条历史记录及 335 条新增候选；它们仍不能作为已审核答案使用。现已按相机 FAE 的产品正文、事实、专题、选型、软件与来源层次，重建[当前数采私有候选知识目录](docs/reviews/2026-10-12-daq-candidate-knowledge-refresh.md)，另设 5 个数采组合系统。B2 已将 335 条新增候选逐条回查原件并形成 337 条未签认字段候选和增量复审包，另有 142 个待补字段定义、52 条内容裁决项、288 处章节一致性发现及 102 处历史定位差异；五条流程检查点占位的[10-11 修订](docs/reviews/2026-10-11-daq-b2-checkpoint-refresh.md)与组合指导设备适用范围的[10-12 复审](docs/reviews/2026-10-12-daq-entity-scope-triage.md)保留了原件和未决缺口。[102 处历史定位差异已分类并备好私有核对包，D4 十类具体候选题已草拟](docs/reviews/2026-10-12-daq-locator-and-d4-preparation.md)，均未签认。B3 已将 337 条字段候选接入私有影响图，现有 712 个覆盖单元与同数的草案题；这些题仍是同一缺证题族，未冻结或回放。当前私有内容队列汇集 149 个字段定义、52 条裁决和 114 节正文，均未签认。D2 572 项与新增 337 项的事实、权限或页面审核均未签认；另备苍渊首批六项及组合指导十项交接包。独立受控原件归档与重取尚未完成；D3 真实发布审计拒绝激活；D4 已有[五轮真实模型空知识 Dev 基线](docs/reviews/2026-10-10-daq-real-dev-empty-knowledge-baseline.md)，但十类冻结题、非空知识 Dev 回放和正式独立答案复审仍未完成。[逐项状态与阻断](docs/reviews/2026-10-10-daq-knowledge-workstream-status.md)区分工程验证、资料签认和真实发布。合入代码或推送远端不等于 Dev 知识切换，更不等于生产部署。
+按[知识专项任务书](docs/superpowers/plans/2026-10-10-daq-knowledge-workstream-task-brief.md)已完成 276 份原件本机哈希核验，形成 114 个候选章节、742 条候选/冲突图记录和高频更新影响图。本轮按用户调整去掉 D1 独立复制与 D2 具名签名门，逐页核对其中 15 条实体/规格记录，在本机 Dev 显式接入 90 节内部候选章节和这些可答记录。真实 Opus 5.5 已对正向规格与缺证题回放；错误的 HUB 端口意图分类已根据 trace 修正。其余候选、冲突、组合、软件与链接继续显示缺口，不能冒充已核验事实。完整结果见[逐项状态](docs/reviews/2026-10-10-daq-knowledge-workstream-status.md)及[Dev 来源核对与回放](docs/reviews/2026-10-12-daq-real-dev-candidate-knowledge.md)。
 
 [10 月 12 日当前候选复审](docs/reviews/2026-10-12-daq-current-readiness-recheck.md)纳入 742 条图记录与 909 项未签认审核项：D3 仍 `ready=false`，D4 已备十类 12 道未冻结候选题；均不构成真实知识发布或验收。
 
@@ -46,6 +50,19 @@ curl -fsSN -H 'content-type: application/json' \
 浏览器可打开 `http://127.0.0.1:8081/app/`。`/chat` 返回具名 `session`、`stage`、`text_delta`、`sources`、`done` 事件；正常空知识终态是 `safe_abstained`，并附需求状态、能力覆盖、trace 与 turn ID。Provider HTTP 400 与 503 分别归为配置错误和上游不可用。
 
 若要在**开发环境**调用真实模型，设置 `DAQ_PROVIDER_MODE=anthropic`、`DAQ_ANTHROPIC_AUTH_TOKEN` 或 `DAQ_ANTHROPIC_API_KEY`、`DAQ_ANTHROPIC_BASE_URL` 和 `DAQ_ANTHROPIC_MODEL`。不要提交凭据。当前默认模型为 Opus 5.5 adaptive/high；不得对它发送 forced `tool_choice`。
+
+本机真实资料预览另设以下变量后重启 Dev 服务；只绑定 `127.0.0.1`，认证/Task 模式下拒绝此预览：
+
+```bash
+export DAQ_DEV_CANDIDATE_MODE=true
+export DAQ_DEV_CANDIDATE_GRAPH_DIR=data/knowledge/curated/b3-normalized-20261012/review-graph-v1
+export DAQ_DEV_CANDIDATE_BOUND_INDEX=data/knowledge/curated/b2-20261011/bound-section-index.json
+export DAQ_DEV_CANDIDATE_ARCHIVE=data/knowledge/local_archive/candidate-originals-v2-local-copy-20261010
+export DAQ_DEV_SOURCE_CHECK_FILE=review_recipes/dev_source_checked_v1.json
+.venv/bin/uvicorn daq_fae.app:app --host 127.0.0.1 --port 8081
+```
+
+每次来源图变化都生成新的 Dev release ID；账本以每条记录的精确来源、值、条件和范围指纹复用未变事实，改动或删除已核对记录会拒绝加载，必须核对后更新账本。候选章节的检索来源标为 `candidate`，无法满足 `resolved` 证据门；未经核对的 URL、软件关系与组合步骤不交付。
 
 验证命令：
 

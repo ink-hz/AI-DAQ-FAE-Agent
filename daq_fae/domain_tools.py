@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import re
+import unicodedata
 
 from src.agent.loop.tools import ToolResult
 
@@ -18,7 +20,7 @@ _TOOLS: dict[str, tuple[str, dict[str, dict], tuple[str, ...]]] = {
     "catalog": ("List governed DAQ products, kits, and release scope.", {"query": {"type": "string"}}, ("query",)),
     "selection": ("Evaluate a DAQ configuration against all stated acquisition constraints.", {"query": {"type": "string"}}, ("query",)),
     "resolve_entity": ("Resolve a DAQ product, variant, kit, or component.", {"text": {"type": "string"}}, ("text",)),
-    "lookup_spec": ("Look up a governed DAQ claim. Include required variant selectors in conditions; a generic product name cannot select a variant.", {"entity": {"type": "string"}, "field": {"type": "string"}, "conditions": {"type": "object"}}, ("entity", "field")),
+    "lookup_spec": ("Look up a governed DAQ claim. Use a canonical field such as rgb_resolution or rgb_camera_count; conditions must be a JSON object, for example {\"resolution_variant\":\"1600x1200\"}. A generic product name cannot select a variant.", {"entity": {"type": "string"}, "field": {"type": "string"}, "conditions": {"type": "object"}}, ("entity", "field")),
     "inspect_topology": ("Inspect a verified acquisition system topology.", {"query": {"type": "string"}}, ("query",)),
     "lookup_procedure": ("Find an applicable, reviewed acquisition procedure.", {"task": {"type": "string"}, "entity": {"type": "string"}}, ("task",)),
     "check_software_support": ("Check exact product, revision, connection, platform, software version and capability; include variant selectors in conditions.", {"entity": {"type": "string"}, "software": {"type": "string"}, "platform": {"type": "string"}, "version": {"type": "string"}, "hardware_revision": {"type": "string"}, "connection_mode": {"type": "string"}, "capability": {"type": "string"}, "conditions": {"type": "object"}}, ("entity", "software", "platform", "version", "hardware_revision", "connection_mode", "capability")),
@@ -30,6 +32,17 @@ _TOOLS: dict[str, tuple[str, dict[str, dict], tuple[str, ...]]] = {
     "risk": ("Find reviewed operating and data integrity risks for an acquisition setup.", {"query": {"type": "string"}}, ("query",)),
     "session_state": ("Read user-provided context in the current DAQ session.", {}, ()),
 }
+
+
+def _identity_text(value: str) -> str:
+    return re.sub(r'\s+', '', unicodedata.normalize('NFKC', value).casefold().replace('×', 'x'))
+
+
+def _field_intent_matches(intent: str, field: str) -> bool:
+    wanted = intent.casefold().split('_')
+    actual = field.casefold().split('_')
+    return any(actual[index:index + len(wanted)] == wanted
+               for index in range(len(actual) - len(wanted) + 1))
 
 
 # Keep legacy query-only SDK callers valid, but require structured conditions
@@ -100,6 +113,56 @@ class DaqToolBox:
                 "reason": "empty_knowledge_release", "query": dict(arguments),
                 "claim_status": "unknown", "matches": [],
             })
+        scope_normalized = False
+        if name == "lookup_spec" and getattr(self.knowledge, "is_candidate_preview", False):
+            arguments = dict(arguments)
+            field = arguments.get("field")
+            if isinstance(field, str):
+                canonical = self.knowledge.resolve_field(field)
+                if canonical and canonical != field:
+                    arguments["field"] = canonical
+                    scope_normalized = True
+            target = self.knowledge.ground_question(self.question)
+            entities = target.get("entities", [])
+            if len(entities) == 1:
+                entity_row = next((row for row in self.knowledge.records_for(self.role)
+                                   if row["id"] == entities[0]), None)
+                requested = arguments.get("entity")
+                requested_text = _identity_text(requested) if isinstance(requested, str) else ""
+                target_name = _identity_text(entity_row["data"]["name"]) if entity_row else ""
+                other_entities = [row for row in self.knowledge.records_for(self.role)
+                                  if row["kind"] == "entity" and row["id"] != entities[0]]
+                competing_name = any(
+                    len(_identity_text(row["data"]["name"])) > len(target_name)
+                    and _identity_text(row["data"]["name"]) in requested_text
+                    for row in other_entities)
+                competing_selector = any(
+                    row["data"].get("name") == entity_row["data"]["name"]
+                    and any(_identity_text(str(row["scope"][key])) in requested_text
+                            for key in row["scope"].get("required_selectors", []))
+                    for row in other_entities) if entity_row else False
+                if entity_row and requested_text and not competing_name and \
+                        not competing_selector and (requested_text == _identity_text(entity_row["id"])
+                            or target_name in requested_text):
+                    if arguments["entity"] != entity_row["id"]:
+                        arguments["entity"] = entity_row["id"]
+                        scope_normalized = True
+                    raw = arguments.get("conditions")
+                    conditions = dict(raw) if isinstance(raw, dict) else {}
+                    if not isinstance(raw, dict) and raw is not None:
+                        scope_normalized = True
+                    for selector, value in target.get("conditions", {}).items():
+                        if selector in conditions and conditions[selector] != value:
+                            break
+                        for alias in ("variant", "resolution_variant"):
+                            if alias != selector and alias in conditions and \
+                                    _identity_text(str(value)) in _identity_text(str(conditions[alias])):
+                                conditions.pop(alias)
+                                scope_normalized = True
+                        if selector not in conditions:
+                            conditions[selector] = value
+                            scope_normalized = True
+                    arguments["conditions"] = conditions
         if name == "read_doc" or (name == "search_knowledge" and
                                   self.knowledge.manifest["format_version"] == 2):
             return self._section_result(name, arguments)
@@ -161,11 +224,23 @@ class DaqToolBox:
         })
         return ToolResult(status="ok", content={
             "release_id": self.knowledge.release_id,
-            "matches": [{key: row[key] for key in ("id", "kind", "status", "scope", "data")}
+            **({"query_scope_normalized": scope_normalized} if
+               getattr(self.knowledge, "is_candidate_preview", False) else {}),
+            "evidence_level": ("dev_source_checked" if
+                               getattr(self.knowledge, "is_candidate_preview", False)
+                               else "reviewed"),
+            "matches": [{**{key: row[key] for key in ("id", "kind", "status", "scope", "data")},
+                         **({"status": "source_checked"} if
+                            getattr(self.knowledge, "is_candidate_preview", False) else {})}
                         for row in matches],
             "matched_requirement_ids": matched_requirements,
         }, sources=[{
-            "type": "daq_governed_claim", "verification_status": "verified",
+            "type": ("daq_dev_source_checked_claim" if
+                     getattr(self.knowledge, "is_candidate_preview", False)
+                     else "daq_governed_claim"),
+            "verification_status": ("source_checked" if
+                                    getattr(self.knowledge, "is_candidate_preview", False)
+                                    else "verified"),
             "release_id": self.knowledge.release_id, "source_id": row["id"],
             "source_refs": row["source_refs"],
         } for row in matches])
@@ -181,6 +256,8 @@ class DaqToolBox:
             matches = [s for s in sections if s["section_id"] == value]
         else:
             matches = rank_sections(sections, self.knowledge.records_for(self.role), value)
+            if getattr(self.knowledge, "is_candidate_preview", False):
+                matches = matches[:8]
         if not matches:
             return ToolResult(status="not_found", content={
                 "release_id": self.knowledge.release_id,
@@ -193,10 +270,12 @@ class DaqToolBox:
                 "matches": [], "matched_requirement_ids": [],
             })
         projected = []
+        candidate_preview = bool(getattr(self.knowledge, "is_candidate_preview", False))
         for section in matches:
             item = {key: section[key] for key in (
                 "section_id", "title", "knowledge_type", "scope")}
-            item.update(evidence_layer="reviewed_section", status="verified")
+            item.update(evidence_layer=("source_candidate" if candidate_preview else "reviewed_section"),
+                        status=("candidate" if candidate_preview else "verified"))
             for key in ("entity_id", "entity_ids", "topology_id", "conditions",
                         "hardware_revision", "software_versions", "link_ids"):
                 if key in section:
@@ -213,7 +292,8 @@ class DaqToolBox:
             # Retrieval relevance cannot certify typed facts or exact conditions.
             "matched_requirement_ids": [],
         }, sources=[{
-            "type": "daq_governed_section", "verification_status": "verified",
+            "type": "daq_source_candidate" if candidate_preview else "daq_governed_section",
+            "verification_status": "candidate" if candidate_preview else "verified",
             "release_id": self.knowledge.release_id, "source_id": s["section_id"],
             "scope": s["scope"], "source_refs": [{
                 "source_id": "source:" + ref["sha256"], "sha256": ref["sha256"],
@@ -242,7 +322,8 @@ class DaqToolBox:
                     not isinstance(requirement.get("id"), str):
                 continue
             field = requirement.get("field")
-            if field is not None and str(arguments.get("field") or "").casefold() != str(field).casefold():
+            if field is not None and not _field_intent_matches(
+                    str(field), str(arguments.get("field") or "")):
                 continue
             software = requirement.get("software")
             if software is not None and str(arguments.get("software") or "").casefold() != str(software).casefold():
@@ -285,7 +366,13 @@ class DaqToolBox:
         if name == "catalog":
             return kind == "entity" and (not query or query in text)
         if name == "resolve_entity":
-            return kind == "entity" and bool(query) and query in text
+            if kind != "entity" or not query:
+                return False
+            identity = _identity_text(query)
+            name_text = _identity_text(str(data["name"]))
+            return query in text or (name_text in identity and all(
+                _identity_text(str(row["scope"][key])) in identity
+                for key in row["scope"].get("required_selectors", [])))
         if name == "lookup_spec":
             if kind != "claim":
                 return False
@@ -328,7 +415,8 @@ class DaqToolBox:
         field = requirement.get("field")
         if requirement.get("capability") == "lookup_spec" and not field:
             return False
-        if field is not None and (row["kind"] != "claim" or row["data"].get("field") != field):
+        if field is not None and (row["kind"] != "claim" or not _field_intent_matches(
+                str(field), str(row["data"].get("field", "")))):
             return False
         software = requirement.get("software")
         if software is not None and (row["kind"] != "software" or

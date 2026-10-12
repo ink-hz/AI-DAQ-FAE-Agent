@@ -23,11 +23,11 @@ _INTENTS = {
     'catalog': r'有哪些|有多少|型号列表|产品目录|产品线|\b(?:catalog|product list|product range)\b',
     'selection': r'推荐|选型|选择|适合|选哪个|选什么|怎么选|如何选|怎样选|选用|方案建议|\b(?:recommend|selection|choose|suitable)\b',
     'resolve_entity': r'设备|型号|变体|配置|套件|\b(?:device|model|variant|kit)\b',
-    'lookup_spec': r'规格|参数|精度|分辨率|帧率|带宽|功耗|基线|视场角|\b(?:spec|specification|accuracy|resolution|fps|bandwidth|fov)\b',
-    'inspect_topology': r'接线|连接|主从|同步|组合|端口|供电|\b(?:topology|connection|sync|wiring|hub|power)\b',
+    'lookup_spec': r'规格|参数|精度|分辨率|帧率|带宽|功耗|基线|视场角|蓝牙|Wi[- ]?Fi|无线通信|USB.{0,8}(?:接口|物理)|物理接口|(?:几路|几颗|几个).{0,8}(?:相机|摄像头)|(?:相机|摄像头).{0,8}数量|(?:下游端口.{0,5}(?:有几个|数量|几个|数)|(?:有几个|几个).{0,5}下游端口)|\b(?:spec|specification|accuracy|resolution|fps|bandwidth|fov|camera count)\b',
+    'inspect_topology': r'接线|连接|主从|同步|组合|供电|\b(?:topology|connection|sync|wiring|power)\b',
     'lookup_procedure': r'步骤|安装|配置|采集|录制|落盘|保存|启动|\b(?:procedure|install|setup|record|capture|save)\b',
-    'check_software_support': r'版本|兼容|支持|固件|viewer|sdk|firmware|\b(?:version|compatible|support)\b',
-    'sdk_evidence': r'\bsdk\b|\bapi\b|\bros2?\b|\bpython\b|代码|接口',
+    'check_software_support': r'兼容|viewer|sdk|软件|固件|firmware|\b(?:compatible|software support)\b',
+    'sdk_evidence': r'\bsdk\b|\bapi\b|\bros2?\b|\bpython\b|代码|开发接口',
     'official_links': r'链接|下载|官网|\b(?:link|download|official website)\b',
     'experience': r'经验|案例|最佳实践|常见问题|\b(?:experience|case study|best practice)\b',
     'risk': r'风险|注意事项|安全|合规|数据丢失|\b(?:risk|safety|compliance|data loss)\b',
@@ -46,6 +46,10 @@ _TASKS = {
 }
 _SOFTWARE = {'sdk': r'\bsdk\b', 'viewer': r'\bviewer\b', 'firmware': r'固件|\bfirmware\b'}
 _SPEC_FIELDS = {
+    'camera_count': r'(?:几路|几颗|几个).{0,8}(?:相机|摄像头)|(?:相机|摄像头).{0,8}数量|camera count',
+    'downstream_port_count': r'(?:下游端口.{0,5}(?:有几个|数量|几个|数)|(?:有几个|几个).{0,5}下游端口)',
+    'physical_usb_port': r'USB.{0,8}(?:接口|物理)|物理接口',
+    'wireless_version': r'蓝牙|BLE|Wi[- ]?Fi|无线通信',
     'accuracy': r'精度|accuracy',
     'resolution': r'分辨率(?!版本)|resolution(?!\s*variant)',
     'frame_rate': r'帧率|\bfps\b', 'bandwidth': r'带宽|bandwidth',
@@ -182,7 +186,8 @@ def extract_context_hints(excerpts) -> dict:
 
 
 def prepare_turn(message: str, *, previous=None, updates=None, topic_switch=None,
-                 attachment_source_ids=(), image_source_ids=(), context_hints=None) -> TurnPlan:
+                 attachment_source_ids=(), image_source_ids=(), context_hints=None,
+                 grounded_targets=None) -> TurnPlan:
     """Prepare a turn without mutating prior state or granting facts/permissions.
 
     Pass the returned context into the next turn/checkpoint, tool_context() to the
@@ -237,10 +242,18 @@ def prepare_turn(message: str, *, previous=None, updates=None, topic_switch=None
         raise ValueError('daq_context_hints_invalid')
     hinted_conditions = {key: value for key, value in hints.items()
                          if key != 'equipment' and key not in values}
+    grounded = copy.deepcopy(grounded_targets or {})
+    if (not isinstance(grounded, dict) or set(grounded) - {'entities', 'conditions'} or
+            not isinstance(grounded.get('entities', []), list) or
+            not all(isinstance(value, str) and value for value in grounded.get('entities', [])) or
+            not isinstance(grounded.get('conditions', {}), dict)):
+        raise ValueError('daq_grounded_targets_invalid')
+    grounded_conditions = {key: value for key, value in grounded.get('conditions', {}).items()
+                           if key not in values and key not in hinted_conditions}
     used_hints = bool(hinted_conditions or ('equipment' in hints and 'equipment' not in values))
     scope = {'topic_id': topic_id,
-             'entities': context.get('equipment', hints.get('equipment', [])),
-             'conditions': {**hinted_conditions,
+             'entities': context.get('equipment', hints.get('equipment', grounded.get('entities', []))),
+             'conditions': {**grounded_conditions, **hinted_conditions,
                             **{key: value.value for key, value in values.items() if key != 'equipment'}}}
     requirements = []
     fields = [name for name, pattern in _SPEC_FIELDS.items() if re.search(pattern, message, re.I)]

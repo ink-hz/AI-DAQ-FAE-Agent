@@ -141,6 +141,48 @@ def test_user_declaration_overrides_platform_excerpt_for_evidence_scope():
     assert all(item['conditions_authority'] == 'user_supplied' for item in plan.requirements)
 
 
+def test_source_checked_question_target_scopes_requirements_without_rewriting_user_memory():
+    plan = prepare_turn('EGO 双目 1600×1200 变体的 RGB 分辨率是多少？',
+                        grounded_targets={'entities': ['entity:ego-1600'],
+                                          'conditions': {'resolution_variant': '1600x1200'}})
+    assert plan.context.get('equipment') is None
+    assert all(item['entities'] == ['entity:ego-1600'] for item in plan.requirements)
+    assert all(item['conditions']['resolution_variant'] == '1600x1200'
+               for item in plan.requirements)
+
+
+def test_camera_count_question_plans_a_typed_spec_requirement():
+    plan = prepare_turn('EGO Pro 有几路 RGB 相机？',
+                        grounded_targets={'entities': ['entity:ego-pro'], 'conditions': {}})
+    spec = [item for item in plan.requirements if item['capability'] == 'lookup_spec']
+    assert len(spec) == 1
+    assert spec[0]['field'] == 'camera_count'
+
+
+def test_wireless_hardware_version_does_not_become_software_support():
+    plan = prepare_turn('EG-DB 的 RGB 相机数量和蓝牙版本是多少？')
+    assert 'lookup_spec' in plan.planned_capabilities
+    assert 'check_software_support' not in plan.planned_capabilities
+    assert {item['field'] for item in plan.requirements
+            if item['capability'] == 'lookup_spec'} == {'camera_count', 'wireless_version'}
+
+
+def test_physical_usb_interface_is_a_spec_not_software_support():
+    plan = prepare_turn('EGO 1600×1200 变体的 USB 物理接口是什么？')
+    assert 'lookup_spec' in plan.planned_capabilities
+    assert 'check_software_support' not in plan.planned_capabilities
+    assert [item['field'] for item in plan.requirements
+            if item['capability'] == 'lookup_spec'] == ['physical_usb_port']
+
+
+def test_hub_downstream_port_count_is_a_spec_not_topology():
+    plan = prepare_turn('数采 HUB 的下游端口有几个？',
+                        grounded_targets={'entities': ['entity:hub'], 'conditions': {}})
+    assert plan.planned_capabilities == ('lookup_spec',)
+    assert [item['field'] for item in plan.requirements
+            if item['capability'] == 'lookup_spec'] == ['downstream_port_count']
+
+
 @pytest.mark.parametrize('question', [
     'HUB 和主机怎么选？',
     '采集组合应该如何选？',

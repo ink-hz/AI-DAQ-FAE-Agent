@@ -76,6 +76,22 @@ def test_evidence_requires_real_source_and_all_planned_requirements():
     assert session.evaluate(AnswerSubmission(outcome="resolved", conclusion="可用")).action == "reject"
 
 
+def test_dev_source_checked_evidence_only_counts_in_explicit_dev_policy():
+    result = ToolResult(
+        status="ok", content={"matched_requirement_ids": ["spec"]},
+        sources=[{"source_id": "claim:dev", "type": "daq_dev_source_checked_claim",
+                  "verification_status": "source_checked", "release_id": "candidate-dev-example"}],
+    )
+    requirements = {"requirements": [{"id": "spec", "capability": "lookup_spec"}]}
+    ordinary = DaqEvidencePolicy().begin(requirements)
+    ordinary.observe("lookup_spec", result)
+    assert ordinary.snapshot().requirement_status["spec"] == "unknown"
+    dev = DaqEvidencePolicy(allow_dev_source_check=True).begin(requirements)
+    dev.observe("lookup_spec", result)
+    assert dev.snapshot().requirement_status["spec"] == "satisfied"
+    assert dev.evaluate(AnswerSubmission(outcome="resolved", conclusion="1600×1200")).action == "allow"
+
+
 def test_tool_error_is_protocol_failure_not_missing_knowledge():
     session = DaqEvidencePolicy().begin(question_requirements("怎么连接？"))
     session.observe("search_knowledge", ToolResult(status="tool_error", content={"error": "timeout"}))
