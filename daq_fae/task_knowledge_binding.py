@@ -86,6 +86,25 @@ class TaskKnowledgeBindings:
             raise TaskKnowledgeAccessError('task_role_changed')
         return role
 
+    def assert_ready(self) -> None:
+        """Refuse startup if an old queue task has no governed binding."""
+        try:
+            with self._connect(self.database_url) as connection:
+                connection.execute('set transaction isolation level repeatable read read only')
+                self._verify_database(connection)
+                unbound = connection.execute(
+                    """select exists (
+                           select 1 from platform_tasks as task
+                           left join daq_task_knowledge_bindings as binding
+                             on binding.platform_task_id = task.platform_task_id
+                           where binding.platform_task_id is null
+                       )"""
+                ).fetchone()[0]
+                if unbound:
+                    raise TaskKnowledgeAccessError('task_binding_missing')
+        except psycopg.Error:
+            raise TaskKnowledgeAccessError('task_binding_unavailable') from None
+
     def may_create(self, platform_task_id: UUID, requester_id: UUID) -> str:
         """Signed token preflight: unbound IDs are allowed only before task creation."""
         role = self._current(requester_id)

@@ -129,13 +129,16 @@ def test_task_empty_release_uses_same_visible_multi_capability_abstention_as_cha
     assert sessions.get(session.session_id).messages[-1]['content'] == done['answer']
 
 
-def _signed_token(private_key, agent_id):
+def _signed_token(private_key, agent_id, *, task_id=None, requester_id=None, deadline=None):
     now = datetime.now(UTC)
+    task_id = task_id or uuid4()
+    requester_id = requester_id or uuid4()
+    deadline = deadline or now + timedelta(minutes=10)
     claims = {
-        'iss': 'orbbec-agent-platform', 'aud': agent_id, 'sub': str(uuid4()),
-        'agent_id': agent_id, 'agent_task_id': str(uuid4()), 'capability_version': 2,
+        'iss': 'orbbec-agent-platform', 'aud': agent_id, 'sub': str(requester_id),
+        'agent_id': agent_id, 'agent_task_id': str(task_id), 'capability_version': 2,
         'authorized_scopes': ['fae.answer'],
-        'task_deadline_at': (now + timedelta(minutes=10)).isoformat().replace('+00:00', 'Z'),
+        'task_deadline_at': deadline.isoformat().replace('+00:00', 'Z'),
         'iat': int(now.timestamp()), 'exp': int((now + timedelta(minutes=1)).timestamp()),
         'request_id': str(uuid4()),
     }
@@ -145,6 +148,141 @@ def _signed_token(private_key, agent_id):
     prefix = segment({'alg': 'EdDSA', 'kid': 'daq-key', 'typ': 'JWT'}) + '.' + segment(claims)
     signature = base64.urlsafe_b64encode(private_key.sign(prefix.encode())).rstrip(b'=').decode()
     return prefix + '.' + signature
+
+
+def test_signed_reviewed_task_create_and_replay_recheck_role(
+    tmp_path, pg_database, monkeypatch,
+):
+    import psycopg
+    from fastapi import FastAPI
+    from daq_fae.platform_tasks import configure_platform_tasks
+    from scripts.migrate_daq_pg import migrate_connection
+    from test_section_tools import make_view
+
+    with psycopg.connect(pg_database, autocommit=True) as connection:
+        migrate_connection(connection, isolated_schema=True)
+    view = make_view(tmp_path / 'release')
+    active = {'id': view.release_id}
+    monkeypatch.setattr('daq_fae.platform_tasks.read_active_release',
+                        lambda _root: {'release_id': active['id']})
+    requester = uuid4()
+
+    class Entitlements:
+        role = 'internal_fae'
+
+        def role_for(self, subject):
+            assert subject.subject_id == requester
+            return self.role
+
+    entitlements = Entitlements()
+    private_key = Ed25519PrivateKey.generate()
+    public_file = tmp_path / 'task.pub'
+    public_file.write_bytes(private_key.public_key().public_bytes_raw())
+    task_keyring = tmp_path / 'task-keys.json'
+    task_keyring.write_text(json.dumps({'active_version': 1,
+                                        'keys': {'1': base64.b64encode(b'e' * 32).decode()}}))
+    task_keyring.chmod(0o600)
+    env = {
+        'DAQ_PLATFORM_TASK_ENABLED': 'true',
+        'DAQ_PLATFORM_IDENTITY_ENABLED': 'true',
+        'DAQ_DATABASE_URL': 'postgresql://daq_user@db.invalid/daq_db?options=-csearch_path%3Ddaq_fae',
+        'DAQ_PLATFORM_TASK_PUBLIC_KEY_PATHS_JSON': json.dumps({'daq-key': str(public_file)}),
+        'DAQ_PLATFORM_TASK_CONTENT_KEYRING_FILE': str(task_keyring),
+    }
+    app = FastAPI()
+    app.state.session_store = SessionStore(ttl_seconds=3600)
+    app.state.trace_recorder = None
+    class Worker:
+        def start(self): pass
+        def stop(self): pass
+    configure_platform_tasks(
+        app, adapter=OfflineAdapter(), environ=env,
+        task_store=InMemoryPlatformTaskStore(codec=TaskContentCodec(
+            active_key_version=1, keys={1: b'e' * 32})), task_worker=Worker(),
+        knowledge=view, entitlements=entitlements, release_root=tmp_path / 'release',
+        task_binding_connect=lambda _: psycopg.connect(
+            pg_database, options='-csearch_path=daq_fae'),
+    )
+    client = TestClient(app)
+    task_id = uuid4()
+    deadline = datetime.now(UTC) + timedelta(minutes=10)
+    token = _signed_token(private_key, 'ai-daq-fae-agent', task_id=task_id,
+                          requester_id=requester, deadline=deadline)
+    headers = {'Authorization': 'Bearer ' + token,
+               'X-Orbbec-Task-Contract': 'orbbec-http-task/v1'}
+    body = {
+        'contract_version': 'orbbec-http-task/v1', 'platform_task_id': str(task_id),
+        'conversation_ref': 'daq-test', 'turn_ref': 'turn-1', 'objective': 'EGO 规格',
+        'context_excerpt': [], 'constraints': [], 'attachment_refs': [],
+        'expected_output': '有据回答', 'capability_version': 2,
+        'idempotency_key': str(uuid4()),
+        'deadline_at': deadline.isoformat().replace('+00:00', 'Z'),
+        'authorized_scopes': ['fae.answer'],
+    }
+    created = client.post('/internal/platform/v1/tasks', json=body, headers=headers)
+    assert created.status_code == 202, created.text
+    downstream_id = created.json()['downstream_task_id']
+    events = f'/internal/platform/v1/tasks/{downstream_id}/events'
+    assert client.get(events, headers=headers).status_code == 200
+    entitlements.role = 'channel'
+    assert client.get(events, headers=headers).status_code == 403
+    entitlements.role = 'internal_fae'
+    active['id'] = 'b' * 64
+    assert client.get(events, headers=headers).status_code == 403
+
+
+def test_reviewed_task_answer_uses_role_visible_evidence_and_blocks_revoked_delivery(
+    tmp_path, monkeypatch,
+):
+    from test_section_tools import make_view
+    from daq_fae.task_knowledge_binding import TaskKnowledgeAccessError
+
+    view = make_view(tmp_path / 'release')
+    requester = uuid4()
+    task_id = uuid4()
+    current = {'role': 'internal_fae'}
+
+    class Bindings:
+        def require_current(self, platform_task_id, requester_id):
+            assert (platform_task_id, requester_id) == (task_id, requester)
+            if current['role'] != 'internal_fae':
+                raise TaskKnowledgeAccessError('task_role_changed')
+            return current['role']
+
+    def run(runtime, *args, **kwargs):
+        result = runtime.toolbox.dispatch('read_doc', {'section_id': 'section:recording'})
+        yield {'type': 'done', 'answer': '已核实采集流程' if result.status == 'ok' else '缺少资料',
+               'outcome': 'answered' if result.status == 'ok' else 'safe_abstained',
+               'sources': result.sources, 'capability_coverage': {}}
+
+    monkeypatch.setattr('daq_fae.platform_tasks.LoopRuntime.run', run)
+    sessions = SessionStore(ttl_seconds=3600)
+    spec = type('Spec', (), {'attachment_refs': (), 'platform_task_id': task_id,
+                            'requester_internal_user_id': requester,
+                            'context_excerpt': ()})()
+    orchestrator = DaqTaskOrchestrator(
+        adapter=OfflineAdapter(), session_store=sessions, knowledge=view,
+        task_bindings=Bindings(), runtime_release='runtime-test',
+    )
+    session = sessions.create(channel='fae')
+    events = list(orchestrator.handle_platform_task(
+        spec=spec, session_id=session.session_id,
+        prompt='录制后怎么检查存储？', planning_message='录制后怎么检查存储？',
+        continuation_guard=lambda: None,
+    ))
+    done = events[-1].data
+    assert done['answer'] == '已核实采集流程'
+    assert done['knowledge_release'] == view.release_id
+    assert done['runtime_release'] == 'runtime-test'
+    assert done['sources'][0]['source_id'] == 'section:recording'
+    current['role'] = 'channel'
+    session = sessions.create(channel='fae')
+    with pytest.raises(TaskKnowledgeAccessError, match='task_role_changed'):
+        list(orchestrator.handle_platform_task(
+            spec=spec, session_id=session.session_id,
+            prompt='录制后怎么检查存储？', planning_message='录制后怎么检查存储？',
+            continuation_guard=lambda: None,
+        ))
 
 
 def test_http_task_route_advertises_daq_identity_and_rejects_camera_token(tmp_path, monkeypatch):

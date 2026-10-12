@@ -201,8 +201,12 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
             entitlements = KnowledgeEntitlements(Path(entitlement_path))
         except PlatformIdentityError:
             raise ValueError("daq_knowledge_role_contract_invalid") from None
-        if task_flag == "true":
-            raise ValueError("daq_knowledge_task_role_replay_contract_missing")
+        if task_flag == 'true' and any(knowledge.manifest.get(key)
+                                       for key in ('sources', 'records', 'sections')):
+            review = knowledge.manifest.get('review', {})
+            runtime = (review.get('operator_release') or review.get('readiness') or {}).get('runtime', {})
+            if runtime.get('tasks_enabled') is not True:
+                raise ValueError('daq_knowledge_task_release_not_enabled')
     knowledge_release = knowledge.release_id if knowledge is not None else EMPTY_KNOWLEDGE_RELEASE
 
     mode = provider_mode or os.getenv("DAQ_PROVIDER_MODE", "offline")
@@ -730,6 +734,8 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
         configure_platform_tasks(
             app, adapter=adapter, task_store=task_store,
             task_verifier=task_verifier, task_worker=task_worker,
+            knowledge=knowledge, entitlements=entitlements, release_root=release_root,
+            runtime_release=runtime_release,
         )
         mount_authenticated_webui(app, dist=webui_dist or _ROOT / "webui" / "dist")
     else:

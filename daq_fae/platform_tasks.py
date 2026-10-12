@@ -30,17 +30,27 @@ from daq_fae.empty_knowledge_synthesis import (EMPTY_KNOWLEDGE_RELEASE,
 from daq_fae.platform_identity import AGENT_ID
 from daq_fae.provider_errors import anthropic_failure
 from daq_fae.task_context import extract_context_hints, prepare_turn
+from daq_fae.task_knowledge_binding import BoundTaskStore, DaqTaskVerifier, TaskKnowledgeBindings
+from daq_fae.knowledge.releases import read_active_release
 
 
 class DaqTaskOrchestrator:
     composition_mode = "loop"
 
     def __init__(self, *, adapter, session_store, trace_recorder=None,
-                 prompt_path: Path | None = None):
+                 prompt_path: Path | None = None, knowledge=None,
+                 task_bindings=None, runtime_release: str | None = None):
         self._adapter = adapter
         self._sessions = session_store
         self._trace_recorder = trace_recorder
-        self._prompt_path = prompt_path or Path(__file__).resolve().parents[1] / "prompts" / "empty_knowledge_system.md"
+        if knowledge is not None and task_bindings is None:
+            raise ValueError('daq_task_knowledge_binding_required')
+        self._knowledge = knowledge
+        self._task_bindings = task_bindings
+        self._runtime_release = runtime_release
+        prompt_name = ('reviewed_knowledge_system.md' if knowledge is not None
+                       else 'empty_knowledge_system.md')
+        self._prompt_path = prompt_path or Path(__file__).resolve().parents[1] / 'prompts' / prompt_name
         self._contexts = {}
 
     def handle_stream(self, *, session_id, user_message,
@@ -48,13 +58,15 @@ class DaqTaskOrchestrator:
                       context_hints=None,
                       required_attachment_source_ids=None,
                       required_image_source_ids=None,
-                      continuation_guard=None):
+                      continuation_guard=None, knowledge_role=None):
         if required_attachment_source_ids or required_image_source_ids:
             raise ValueError("daq_task_attachments_not_available")
         session = self._sessions.get(session_id)
         if session is None:
             raise ValueError("daq_task_session_not_found")
         guard = continuation_guard or (lambda: None)
+        if self._knowledge is not None and not knowledge_role:
+            raise ValueError('daq_task_knowledge_role_required')
         guard()
         trace = (self._trace_recorder.start_trace("daq_platform_task", {
             "agent_id": AGENT_ID, "session_id": session_id,
@@ -64,7 +76,10 @@ class DaqTaskOrchestrator:
             yield StreamEvent("stage", {"stage": "daq_loop", "status": "running"})
             plan = prepare_turn(planning_message or user_message,
                                 previous=self._contexts.get(session_id),
-                                context_hints=context_hints)
+                                context_hints=context_hints,
+                                grounded_targets=(self._knowledge.ground_question(
+                                    planning_message or user_message, role=knowledge_role)
+                                    if self._knowledge is not None else None))
             refusal = categorize_refusal(planning_message or user_message)
             if refusal:
                 category, answer = refusal
@@ -73,7 +88,10 @@ class DaqTaskOrchestrator:
                         "capability_coverage": {}, "refusal_category": category}
             else:
                 runtime = LoopRuntime(
-                    adapter=self._adapter, toolbox=DaqToolBox(context=plan.context.tool_context()),
+                    adapter=self._adapter,
+                    toolbox=DaqToolBox(context=plan.context.tool_context(),
+                                       knowledge=self._knowledge, role=knowledge_role,
+                                       requirements=plan.requirements, access_guard=guard),
                     system_prompt_path=self._prompt_path, evidence_policy=DaqEvidencePolicy(),
                 )
                 done = None
@@ -118,13 +136,17 @@ class DaqTaskOrchestrator:
                 done.setdefault("fallback_reason", None)
             done.setdefault("planned_capabilities", list(plan.planned_capabilities))
             done.update({"agent_id": AGENT_ID,
-                         "knowledge_release": EMPTY_KNOWLEDGE_RELEASE,
+                         "knowledge_release": (self._knowledge.release_id if self._knowledge
+                                               is not None else EMPTY_KNOWLEDGE_RELEASE),
                          "session_id": session_id,
                          "trace_id": trace.trace_id if trace is not None else None})
-            refine_empty_release_answer(
-                done, planned_capabilities=done["planned_capabilities"],
-                knowledge_release=EMPTY_KNOWLEDGE_RELEASE,
-            )
+            if self._runtime_release is not None:
+                done['runtime_release'] = self._runtime_release
+            if self._knowledge is None:
+                refine_empty_release_answer(
+                    done, planned_capabilities=done["planned_capabilities"],
+                    knowledge_release=EMPTY_KNOWLEDGE_RELEASE,
+                )
             self._contexts[session_id] = plan.context
             session.append_message("user", user_message)
             session.append_message("assistant", done["answer"])
@@ -151,11 +173,21 @@ class DaqTaskOrchestrator:
                              attachment_refs=()):
         if spec.attachment_refs or attachment_refs:
             raise TaskStoreError("task_attachment_refs_not_supported")
+        knowledge_role = None
+        guard = continuation_guard
+        if self._task_bindings is not None:
+            knowledge_role = self._task_bindings.require_current(
+                spec.platform_task_id, spec.requester_internal_user_id)
+
+            def guard():
+                self._task_bindings.require_current(
+                    spec.platform_task_id, spec.requester_internal_user_id)
+                continuation_guard()
         return self.handle_stream(
             session_id=session_id, user_message=prompt,
             planning_message=planning_message,
             context_hints=extract_context_hints(getattr(spec, 'context_excerpt', ())),
-            continuation_guard=continuation_guard,
+            continuation_guard=guard, knowledge_role=knowledge_role,
         )
 
 
@@ -177,7 +209,10 @@ def _verify_task_database(database_url: str) -> None:
 
 
 def configure_platform_tasks(app, *, adapter, environ=None, task_store=None,
-                             task_verifier=None, task_worker=None):
+                             task_verifier=None, task_worker=None, knowledge=None,
+                             entitlements=None, release_root=None,
+                             runtime_release: str | None = None,
+                             task_binding_connect=psycopg.connect):
     """Register only DAQ-audience HTTP tasks with a dedicated durable queue."""
     env = os.environ if environ is None else environ
     enabled = env.get("DAQ_PLATFORM_TASK_ENABLED", "false")
@@ -210,10 +245,24 @@ def configure_platform_tasks(app, *, adapter, environ=None, task_store=None,
     verifier = task_verifier if task_verifier is not None else TaskTokenVerifier.from_files(
         public_keys, audience=AGENT_ID,
     )
+    if knowledge is not None:
+        if entitlements is None or release_root is None:
+            raise ValueError('daq_knowledge_task_role_contract_missing')
+        bindings = TaskKnowledgeBindings(
+            database_url, entitlements=entitlements, release_id=knowledge.release_id,
+            active_release=lambda: (read_active_release(release_root) or {}).get('release_id'),
+            connect=task_binding_connect,
+        )
+        bindings.assert_ready()
+        store = BoundTaskStore(store, bindings)
+        verifier = DaqTaskVerifier(verifier, bindings)
+        app.state.daq_task_knowledge_bindings = bindings
     capabilities = PlatformTaskCapabilities.fae_v1(capability_version=version, agent_id=AGENT_ID)
     orchestrator = DaqTaskOrchestrator(
         adapter=adapter, session_store=app.state.session_store,
         trace_recorder=app.state.trace_recorder,
+        knowledge=knowledge, task_bindings=(bindings if knowledge is not None else None),
+        runtime_release=runtime_release,
     )
     worker = task_worker if task_worker is not None else PlatformTaskWorker(
         store=store, orchestrator=orchestrator, session_store=app.state.session_store,

@@ -81,6 +81,7 @@ def test_existing_unbound_task_is_not_treated_as_new(prepared_daq_db):
         active_release=lambda: 'a' * 64, connect=connect,
     )
     unknown_id = uuid4()
+    bindings.assert_ready()
     assert bindings.may_create(unknown_id, requester) == 'internal_fae'
     with psycopg.connect(pg_database, autocommit=True) as connection:
         connection.execute(
@@ -94,6 +95,8 @@ def test_existing_unbound_task_is_not_treated_as_new(prepared_daq_db):
         )
     with pytest.raises(TaskKnowledgeAccessError, match='task_binding_missing'):
         bindings.may_create(unknown_id, requester)
+    with pytest.raises(TaskKnowledgeAccessError, match='task_binding_missing'):
+        bindings.assert_ready()
 
 
 def test_task_store_and_token_verifier_block_replay_after_role_change(prepared_daq_db):

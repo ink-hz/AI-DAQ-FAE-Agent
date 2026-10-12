@@ -156,7 +156,7 @@ def test_tool_guard_rechecks_revoked_access_before_returning_evidence(tmp_path):
         box.with_request_context('录制').dispatch('read_doc', {'section_id': 'section:recording'})
 
 
-def test_nonempty_task_mode_rejects_missing_role_bound_result_contract(tmp_path, monkeypatch):
+def test_nonempty_task_mode_rejects_release_without_task_proof(tmp_path, monkeypatch):
     view = make_view(tmp_path / 'release')
     activate_release(tmp_path / 'release', view.release_id)
     path = tmp_path / 'roles.json'
@@ -167,7 +167,7 @@ def test_nonempty_task_mode_rejects_missing_role_bound_result_contract(tmp_path,
     monkeypatch.setenv('DAQ_AUTHENTICATED_CONTENT_KEYRING_FILE', str(tmp_path / 'unused'))
     monkeypatch.setenv('DAQ_KNOWLEDGE_ENTITLEMENTS_FILE', str(path))
     _, verifier = approve_fixture_for_app(tmp_path / 'release')
-    with pytest.raises(ValueError, match='daq_knowledge_task_role_replay_contract_missing'):
+    with pytest.raises(ValueError, match='daq_knowledge_task_release_not_enabled'):
         create_app(provider_mode='offline', knowledge_release_root=tmp_path / 'release', knowledge_approval_verifier=verifier)
 
 
