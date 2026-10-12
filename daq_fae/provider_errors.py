@@ -36,7 +36,12 @@ def vision_failure_reason(done: dict) -> str | None:
     for failure in done.get("attachment_failures") or []:
         if failure.get("error_code") != "vision_http_error":
             continue
-        status = (failure.get("vision_diagnostics") or {}).get("http_status")
+        diagnostics = failure.get("vision_diagnostics") or {}
+        status = diagnostics.get("http_status")
+        if diagnostics.get("gateway_error_code") in {
+            "model_not_found", "forced_tool_choice_unsupported",
+        }:
+            return "vision_provider_configuration_error"
         if status in {400, 401, 403, 404, 422}:
             return "vision_provider_configuration_error"
         if status == 429:
