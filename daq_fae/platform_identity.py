@@ -94,7 +94,7 @@ def _verify_identity_database(database_url: str) -> None:
             ).fetchone()
             constraint = connection.execute(
                 "select exists (select 1 from pg_constraint "
-                "where conrelid = to_regclass('public.fae_enterprise_sessions') "
+                "where conrelid = to_regclass('fae_enterprise_sessions') "
                 "and conname = 'daq_enterprise_sessions_agent_id_check')"
             ).fetchone()[0]
     except psycopg.Error:

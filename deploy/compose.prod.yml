@@ -1,0 +1,32 @@
+services:
+  ai-daq-fae-backend:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.prod
+    image: ai-daq-fae-agent:${DAQ_IMAGE_TAG:?DAQ_IMAGE_TAG is required}
+    container_name: ai-daq-fae-backend
+    restart: unless-stopped
+    env_file:
+      - ${DAQ_ENV_FILE:-/etc/ai-daq-fae-agent/env.production}
+    volumes:
+      - ${DAQ_DATA_DIR:-/opt/ai-daq-fae-agent/data}:/app/data
+      - ${DAQ_SECRETS_DIR:-/etc/ai-daq-fae-agent/secrets}:/run/daq-secrets:ro
+    ports:
+      - 127.0.0.1:8081:8081
+    networks:
+      camera-db:
+      platform-edge:
+        ipv4_address: 172.31.0.9
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8081/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+
+networks:
+  camera-db:
+    external: true
+    name: deploy_default
+  platform-edge:
+    external: true
+    name: orbbec-agent-platform-edge

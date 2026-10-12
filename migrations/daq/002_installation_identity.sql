@@ -11,7 +11,7 @@ begin
     if exists (select 1 from chat_sessions where external_session_id not like 'daq:%') then
         raise exception 'daq_installation_contains_foreign_sessions';
     end if;
-    if to_regclass('public.daq_installation_identity') is null
+    if to_regclass('daq_installation_identity') is null
        and exists (select 1 from platform_tasks) then
         raise exception 'daq_installation_contains_preexisting_tasks';
     end if;

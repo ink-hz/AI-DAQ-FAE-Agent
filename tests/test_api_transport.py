@@ -127,6 +127,13 @@ def test_local_dev_guard_rejects_non_loopback_and_exposes_no_platform_identity()
     assert health['session_persistence'] == 'local_sqlite_dev'
 
 
+def test_production_mode_requires_authenticated_service(monkeypatch):
+    monkeypatch.setenv('DAQ_ENVIRONMENT', 'production')
+    monkeypatch.setenv('DAQ_RUNTIME_RELEASE', 'daq-release-1')
+    with pytest.raises(ValueError, match='daq_production_requires_authenticated_mode'):
+        create_app(provider_mode='offline')
+
+
 def test_concurrent_requests_have_explicit_limits_and_no_duplicate_execution():
     entered = threading.Event()
     release = threading.Event()

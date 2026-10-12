@@ -94,10 +94,19 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                conversation_repository=None, feedback_store=None, review_store=None,
                durable_state=None, archive_repository=None,
                task_store=None, task_verifier=None, task_worker=None) -> FastAPI:
+    environment = os.getenv("DAQ_ENVIRONMENT", "development")
+    if environment not in {"development", "production"}:
+        raise ValueError("daq_environment_invalid")
+    runtime_release = os.getenv("DAQ_RUNTIME_RELEASE") or RUNTIME_RELEASE
+    if environment == "production" and (not os.getenv("DAQ_RUNTIME_RELEASE")
+                                         or runtime_release.endswith("-dev")):
+        raise ValueError("daq_production_runtime_release_invalid")
     identity_mode = os.getenv("DAQ_PLATFORM_IDENTITY_ENABLED", "false")
     if identity_mode not in {"true", "false"}:
         raise ValueError("daq_platform_identity_enabled_invalid")
     auth_mode = identity_mode == "true"
+    if environment == "production" and not auth_mode:
+        raise ValueError("daq_production_requires_authenticated_mode")
     task_flag = os.getenv("DAQ_PLATFORM_TASK_ENABLED", "false")
     if task_flag not in {"true", "false"}:
         raise ValueError("daq_platform_task_enabled_invalid")
@@ -148,12 +157,14 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
     else:
         knowledge = ReviewedKnowledge.load_active(
             release_root, verify_approval=knowledge_approval_verifier,
-            runtime_release=RUNTIME_RELEASE,
+            runtime_release=runtime_release,
             upstream_sha=json.loads((_ROOT / 'upstream-source.json').read_text())['revision'],
         )
     if knowledge is not None and not candidate_mode and any(knowledge.manifest.get(key)
                                      for key in ('sources', 'records', 'sections')) and not auth_mode:
         raise ValueError('daq_nonempty_knowledge_requires_authenticated_mode')
+    if environment == "production" and knowledge is None:
+        raise ValueError("daq_production_knowledge_release_missing")
     entitlements = None
     if auth_mode and knowledge is not None:
         entitlement_path = os.getenv("DAQ_KNOWLEDGE_ENTITLEMENTS_FILE")
@@ -170,10 +181,12 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
     mode = provider_mode or os.getenv("DAQ_PROVIDER_MODE", "offline")
     if mode not in {"offline", "anthropic"}:
         raise ValueError("DAQ_PROVIDER_MODE must be offline or anthropic")
+    if environment == "production" and mode != "anthropic":
+        raise ValueError("daq_production_provider_invalid")
     if adapter is None:
         adapter = OfflineAdapter() if mode == "offline" else _anthropic_dev_adapter()
 
-    app = FastAPI(title="AI DAQ FAE Agent Dev Bootstrap")
+    app = FastAPI(title="AI DAQ FAE Agent")
     app.state.daq_knowledge = knowledge
     app.state.daq_knowledge_entitlements = entitlements
 
@@ -181,7 +194,7 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
     app.state.chat_concurrency_gate = ChatConcurrencyGate(max_concurrent)
     app.state.trace_recorder = trace_recorder or build_recorder(TraceConfig(
         log_path=Path(os.getenv("DAQ_TRACE_LOG_PATH", str(_ROOT / "data" / "daq_traces.jsonl"))),
-        environment="development", release=RUNTIME_RELEASE,
+        environment=environment, release=runtime_release,
     ))
     app.state.local_state = None if auth_mode else LocalStateStore(
         state_db_path or Path(os.getenv("DAQ_DEV_STATE_DB", str(_ROOT / "data" / "daq_dev.sqlite3"))),
@@ -215,13 +228,17 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                 archive_health["ready"] = False
         return {
             "status": "ok",
-            "environment": "development",
+            "environment": environment,
             "agent_id": AGENT_ID,
             "knowledge_release": knowledge_release,
-            "knowledge_status": "candidate_dev_only" if candidate_mode else "reviewed_or_empty",
+            "knowledge_status": (
+                "candidate_dev_only" if candidate_mode else
+                "owner_source_checked_pilot" if knowledge is not None and
+                knowledge.manifest.get('review', {}).get('operator_release', {}).get('mode') ==
+                'owner_directed_source_checked_v1' else "reviewed_or_empty"),
             "source_checked_records": knowledge.manifest.get("source_checked_count", 0)
             if candidate_mode else 0,
-            "runtime_release": RUNTIME_RELEASE,
+            "runtime_release": runtime_release,
             "provider_mode": mode,
             "local_dev_only": not auth_mode,
             "attachment_capability": "session_bound_tools",
@@ -237,7 +254,8 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
             "platform_task_enabled": hasattr(app.state, "platform_task_capabilities"),
             "session_persistence": "postgres_daq_authenticated" if auth_mode else "local_sqlite_dev",
             "request_idempotency": "postgres_daq_ledger" if auth_mode else "local_sqlite_dev",
-            "trace_persistence": "configured_sink" if trace_recorder else "daq_jsonl_dev",
+            "trace_persistence": "configured_sink" if trace_recorder else (
+                "daq_jsonl_dev" if environment == "development" else "daq_jsonl"),
         }
 
     @app.get("/history")
@@ -305,7 +323,7 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                 heartbeat_interval_seconds=heartbeat_interval_seconds,
                 request_lease_renew_interval_seconds=request_lease_renew_interval_seconds,
                 root=_ROOT, agent_id=AGENT_ID,
-                knowledge_release=knowledge_release, runtime_release=RUNTIME_RELEASE,
+                knowledge_release=knowledge_release, runtime_release=runtime_release,
             )
         fingerprint = (request.message, request.session_id, request.channel, tuple(request.attachment_ids))
         with registry.lock:
@@ -527,7 +545,7 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
             done.update({
                 "agent_id": AGENT_ID,
                 "knowledge_release": knowledge_release,
-                "runtime_release": RUNTIME_RELEASE,
+                "runtime_release": runtime_release,
                 "trace_id": ctx.trace_id,
                 "session_id": session.session_id,
                 "client_request_id": request.client_request_id,
@@ -574,7 +592,7 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                           "provider_status_code": done.get("provider_status_code"),
                           "error_type": done.get("error_type")}, metadata={
                 "agent_id": AGENT_ID, "knowledge_release": knowledge_release,
-                "runtime_release": RUNTIME_RELEASE, "session_id": session.session_id,
+                "runtime_release": runtime_release, "session_id": session.session_id,
             })
             yield "text_delta", {"delta": done["answer"]}
             yield "sources", done["sources"]
@@ -616,7 +634,7 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
 
     if auth_mode:
         configure_authenticated_persistence(
-            app, runtime_release=RUNTIME_RELEASE, knowledge_release=knowledge_release,
+            app, runtime_release=runtime_release, knowledge_release=knowledge_release,
             conversation_repository=conversation_repository,
             feedback_store=feedback_store, review_store=review_store,
         )

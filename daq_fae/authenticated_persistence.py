@@ -261,16 +261,24 @@ class DaqAuthenticatedPersistence:
 
 def _validate_database(database_url, old_database_url):
     parsed = urlsplit(database_url)
+    query = parse_qsl(parsed.query, keep_blank_values=True)
+    keys = [key.lower() for key, _ in query]
     if (parsed.scheme not in {"postgres", "postgresql"} or not parsed.hostname
             or not parsed.username or parsed.path in {"", "/"}
-            or {key.lower() for key, _ in parse_qsl(parsed.query)} & {"user", "dbname", "database", "host", "hostaddr", "port"}):
+            or len(keys) != len(set(keys))
+            or set(keys) & {"user", "dbname", "database", "host", "hostaddr", "port"}):
+        raise ValueError("daq_database_identity_invalid")
+    schema_options = [value for key, value in query if key.lower() == "options"]
+    isolated_schema = schema_options == ["-csearch_path=daq_fae"]
+    if schema_options and (not isolated_schema or set(keys) != {"options"}):
         raise ValueError("daq_database_identity_invalid")
     if old_database_url:
         old = urlsplit(old_database_url)
-        # Host aliases and proxies may point at the same server; require a
-        # distinct database *and* role whenever the camera URL is configured.
-        if (unquote(parsed.username) == unquote(old.username or "")
-                or unquote(parsed.path) == unquote(old.path)):
+        # A shared logical database is allowed only when every DAQ connection
+        # resolves unqualified table names in its own schema, with no public
+        # fallback. The older dedicated database mode remains supported.
+        if not isolated_schema and (unquote(parsed.username) == unquote(old.username or "")
+                                    or unquote(parsed.path) == unquote(old.path)):
             raise ValueError("daq_database_identity_invalid")
 
 

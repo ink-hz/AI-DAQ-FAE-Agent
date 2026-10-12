@@ -57,6 +57,7 @@ _SPEC_FIELDS = {
     'power_output': r'供电输出|电源输出|\bpower output\b',
     'horizontal_fov': r'水平视场角|横向视场角|\bhfov\b',
     'vertical_fov': r'垂直视场角|纵向视场角|\bvfov\b',
+    'lens_type': r'鱼眼|fisheye|镜头类型|lens type',
 }
 
 

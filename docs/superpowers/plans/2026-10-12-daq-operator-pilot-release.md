@@ -1,0 +1,17 @@
+# DAQ internal pilot release implementation plan
+
+**Decision source:** The project owner accepted the 23-record narrow first release on 2026-10-12, waived separate fact/access sign-off and independent package approval, chose the existing local original archive, directed use of the camera FAE PostgreSQL database and Anthropic API key, and delegated measured pilot thresholds. These decisions supersede the earlier independent-database and signed-D3 requirements for this pilot. They do not authorize broader product claims or additional roles.
+
+**Goal:** Publish the 23 source-checked entity/spec records to an authenticated internal DAQ pilot at `/daq/` without changing the camera service's data or answers.
+
+**Architecture:** Keep the DAQ application, identity, knowledge pointer, encryption keys, and rollback separate. Use the existing PostgreSQL database with a dedicated `daq_fae` schema and an exact `search_path` so unqualified DAQ queries cannot fall through to camera tables. Use the camera Anthropic gateway credentials from its production environment as a deployment input, without copying secrets into Git. Replace the signed-D3 path for this owner-authorized pilot with an explicit operator release path that verifies all 276 local source hashes, exact record/source bindings, internal-only role scope, Dev replay results, runtime identity, and immutable release contents. Retain the existing signed-D3 path for older contracts.
+
+## Work sequence
+
+1. **Source and scope:** Reverify the local 276-file archive and build the narrow 23-record operator release from the existing source-checked proposal. Exclude candidate sections, software, links, topology, module projection, and every unresolved fact. Make release metadata state the owner-directed review waiver without claiming a human review occurred.
+2. **Release contract:** Add failing tests for unauthorized records, stale source hash, widened role, missing Dev replay, changed runtime, and tampered active manifest. Implement operator staging/loading/activation with exact content hashes and an explicit rollback target. Keep the signed-D3 behavior intact.
+3. **Shared database:** Add failing tests proving the same logical database with `daq_fae` search path is accepted, public/camera tables remain untouched, and a missing or widened search path is rejected. Adapt DAQ migrations and startup checks to the dedicated schema. Run real local PostgreSQL integration tests.
+4. **Production assembly:** Build a DAQ package and separate service using the existing camera PostgreSQL instance and Anthropic gateway key. Create distinct DAQ session/content keyrings and file roots. Keep Platform entry restricted to an internal allowlist and mount DAQ on loopback port 8081. Do not run model evaluations in production.
+5. **Dev quality and rollout:** Run the frozen 12-question narrow-scope suite against the real Dev model; have Codex independently inspect every answer, source, outcome and trace. Measure latency and concurrency against the camera baseline, then freeze pilot limits. Verify camera quality if shared runtime or camera resources change. Back up database and configs, deploy Platform migration and DAQ service in a controlled order, smoke test identity and both services, and rehearse rollback.
+
+**Release rule:** A code commit, pushed branch, local knowledge pointer, or healthy process alone is not a successful launch. The pilot is live only after authenticated DAQ access, scoped real answers, camera isolation, Platform route and grant, and rollback checks pass.

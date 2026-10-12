@@ -110,6 +110,27 @@ def test_database_user_and_domain_must_be_dedicated(tmp_path, database):
                                              runtime_release='runtime-1', knowledge_release='knowledge-1')
 
 
+def test_camera_database_can_be_reused_only_with_exact_daq_schema(tmp_path):
+    from daq_fae.authenticated_persistence import configure_authenticated_persistence
+    camera = 'postgresql://fae_user@localhost/fae_database'
+    env = {**environment(tmp_path), 'DATABASE_URL': camera,
+           'DAQ_DATABASE_URL': camera + '?options=-csearch_path%3Ddaq_fae'}
+    adapter = configure_authenticated_persistence(
+        FastAPI(), environ=env, runtime_release='runtime-1',
+        knowledge_release='knowledge-1', conversation_repository=Conversations(),
+        feedback_store=Feedback(), review_store=object())
+    assert adapter is not None
+    for suffix in ('', '?options=-csearch_path%3Dpublic',
+                   '?options=-csearch_path%3Ddaq_fae%2Cpublic',
+                   '?options=-csearch_path%3Ddaq_fae&options=-csearch_path%3Dpublic'):
+        env['DAQ_DATABASE_URL'] = camera + suffix
+        with pytest.raises(ValueError, match='daq_database_identity_invalid'):
+            configure_authenticated_persistence(
+                FastAPI(), environ=env, runtime_release='runtime-1',
+                knowledge_release='knowledge-1', conversation_repository=Conversations(),
+                feedback_store=Feedback(), review_store=object())
+
+
 def test_content_keyring_cannot_reuse_browser_keyring(tmp_path):
     from daq_fae.authenticated_persistence import configure_authenticated_persistence
     env = environment(tmp_path)

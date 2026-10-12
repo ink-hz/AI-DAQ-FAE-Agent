@@ -171,7 +171,8 @@ def _checked(root, rid, verify, *, require_current_links=True):
 
 def _observation(observe, rid, manifest):
     observation = observe(rid)
-    runtime = manifest['review']['readiness']['runtime']['release']
+    release_evidence = manifest['review'].get('readiness') or manifest['review'].get('operator_release')
+    runtime = release_evidence['runtime']['release']
     for name in ('health', 'trace'):
         row = observation.get(name, {})
         if row.get('agent_id') != 'ai-daq-fae-agent' or row.get('knowledge_release') != rid \

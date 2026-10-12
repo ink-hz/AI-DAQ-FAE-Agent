@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from pathlib import Path
 import re
+import unicodedata
 
 from daq_fae.knowledge.records import (KINDS, ROLES, STATUSES,
                                        access_fingerprint, record_fingerprint, link_review_valid)
@@ -61,6 +62,80 @@ class ReviewedKnowledge:
         self._records = tuple(deepcopy(manifest["records"]))
         self._sections = tuple(deepcopy(manifest.get("sections", [])))
 
+    @staticmethod
+    def _identity_text(value: str) -> str:
+        return re.sub(r'\s+', '', unicodedata.normalize('NFKC', value).casefold().replace('×', 'x'))
+
+    def ground_question(self, question: str, *, role: str) -> dict:
+        """Ground only role-visible exact entities and required variant selectors."""
+        text = self._identity_text(question)
+        matches = []
+        for row in self.records_for(role):
+            if row['kind'] != 'entity' or self._identity_text(row['data']['name']) not in text:
+                continue
+            scope = row['scope']
+            if any(self._identity_text(str(scope[key])) not in text
+                   for key in scope.get('required_selectors', [])):
+                continue
+            matches.append(row)
+        if matches:
+            names = {self._identity_text(row['data']['name']) for row in matches}
+            retained = []
+            for row in matches:
+                name = self._identity_text(row['data']['name'])
+                longer = [other for other in names if len(other) > len(name) and name in other]
+                residual = text
+                for other in longer:
+                    residual = residual.replace(other, '')
+                if not longer or name in residual:
+                    retained.append(row)
+            matches = retained
+        if len(matches) != 1:
+            return {}
+        row = matches[0]
+        return {'entities': [row['id']], 'conditions': {
+            key: row['scope'][key] for key in row['scope'].get('required_selectors', [])}}
+
+    def resolve_field(self, field: str, entity_id: str | None = None) -> str | None:
+        evidence = self.manifest.get('review', {}).get('operator_release', {})
+        normalized = self._identity_text(field)
+        scoped = evidence.get('scoped_field_aliases', {}).get(entity_id, {})
+        for alias, canonical in scoped.items():
+            if self._identity_text(alias) == normalized:
+                return canonical
+        for canonical, aliases in evidence.get('field_aliases', {}).items():
+            if normalized in {self._identity_text(item) for item in [canonical, *aliases]}:
+                return canonical
+        for row in self._records:
+            if row['kind'] == 'claim' and self._identity_text(row['data']['field']) == normalized:
+                return row['data']['field']
+        return None
+
+    def verified_variant_scopes(self, entity: str, field: str, *, role: str) -> dict[str, list[str]]:
+        """Expose role-visible selector choices without releasing their values."""
+        query = self._identity_text(entity)
+        rows = self.records_for(role)
+        names = {row['id']: self._identity_text(row['data']['name'])
+                 for row in rows if row['kind'] == 'entity'}
+        matching = [name for name in names.values() if name and name in query]
+        if not matching:
+            return {}
+        longest = max(map(len, matching))
+        entity_ids = {rid for rid, name in names.items()
+                      if len(name) == longest and name in query}
+        scopes: dict[str, set[str]] = {}
+        for row in rows:
+            if row['kind'] != 'claim' or row['data']['entity_id'] not in entity_ids:
+                continue
+            if row['data']['field'] not in {field, self.resolve_field(field, row['data']['entity_id'])}:
+                continue
+            scope = row['scope']
+            for selector in scope.get('required_selectors', []):
+                value = str(scope[selector])
+                if self._identity_text(value) not in query:
+                    scopes.setdefault(selector, set()).add(value)
+        return {key: sorted(values) for key, values in sorted(scopes.items())}
+
     @classmethod
     def load_active(cls, root: Path, *, verify_approval=None, runtime_release=None, upstream_sha=None) -> "ReviewedKnowledge | None":
         if root.is_symlink():
@@ -69,12 +144,18 @@ class ReviewedKnowledge:
         if active is None:
             return None
         if any(active['manifest'].get(key) for key in ('sources', 'records', 'sections')):
-            from .release_readiness import _checked
-            manifest = _checked(root, active['release_id'], verify_approval, require_current_links=False)
-            runtime = manifest['review']['readiness']['runtime']
-            if runtime_release is None or upstream_sha is None or runtime['release'] != runtime_release \
-                    or runtime['upstream_sha'] != upstream_sha:
-                raise ValueError('release readiness runtime identity mismatch')
+            if active['manifest'].get('review', {}).get('operator_release', {}).get('mode') == \
+                    'owner_directed_source_checked_v1':
+                from .operator_release import _checked_operator
+                _checked_operator(root, active['release_id'], runtime_release=runtime_release,
+                                  upstream_sha=upstream_sha)
+            else:
+                from .release_readiness import _checked
+                manifest = _checked(root, active['release_id'], verify_approval, require_current_links=False)
+                runtime = manifest['review']['readiness']['runtime']
+                if runtime_release is None or upstream_sha is None or runtime['release'] != runtime_release \
+                        or runtime['upstream_sha'] != upstream_sha:
+                    raise ValueError('release readiness runtime identity mismatch')
         return cls.from_manifest(active["release_id"], active["manifest"])
 
     @classmethod

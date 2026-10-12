@@ -76,6 +76,20 @@ def test_evidence_requires_real_source_and_all_planned_requirements():
     assert session.evaluate(AnswerSubmission(outcome="resolved", conclusion="可用")).action == "reject"
 
 
+def test_unselected_variant_asks_for_safe_conditional_answer_before_contract_failure():
+    session = DaqEvidencePolicy().begin({"requirements": [
+        {"id": "spec", "capability": "lookup_spec", "critical": True},
+    ]})
+    session.observe("lookup_spec", ToolResult(
+        status="not_found", content={"reason": "variant_selector_required",
+                                     "matched_requirement_ids": ["spec"]},
+    ))
+    decision = session.evaluate(AnswerSubmission(
+        outcome="resolved", conclusion="EGO 水平视场角为 165°或 149°"))
+    assert decision.action == "request_evidence"
+    assert "safe_abstained" in decision.notice
+
+
 def test_dev_source_checked_evidence_only_counts_in_explicit_dev_policy():
     result = ToolResult(
         status="ok", content={"matched_requirement_ids": ["spec"]},
@@ -134,3 +148,31 @@ def test_attachment_source_is_tracked_separately_from_governed_claims():
         "product": "missing", "user_log": "satisfied",
     }
     assert session.evaluate(AnswerSubmission(outcome="resolved", conclusion="设备支持")).action == "reject"
+
+
+def test_answer_must_keep_internal_provenance_out_of_prose():
+    session = DaqEvidencePolicy().begin({"requirements": [
+        {"id": "spec", "capability": "lookup_spec"},
+    ]})
+    session.observe("lookup_spec", ToolResult(
+        status="ok", content={"matched_requirement_ids": ["spec"], "matches": [
+            {"id": "claim:ego-1600-horizontal-fov", "data": {"field": "horizontal_fov", "value": 165}},
+        ]}, sources=[{"source_id": "claim:ego-1600-horizontal-fov",
+                     "type": "daq_governed_claim", "verification_status": "verified",
+                     "release_id": "reviewed-v1", "source_refs": [
+                         {"path": "规格书/EGO.pdf", "sha256": "a" * 64,
+                          "locator": {"kind": "page", "page": 3}},
+                     ]}],
+    ))
+    assert session.snapshot().requirement_status["spec"] == "satisfied"
+    for basis in ("依据 claim:ego-1600-horizontal-fov", "字段 horizontal_fov",
+                  "查不到 depth_accuracy", "工具返回 not_found",
+                  "source_id: claim:ego-1600-horizontal-fov", "见规格书/EGO.pdf"):
+        decision = session.evaluate(AnswerSubmission(
+            outcome="resolved", conclusion="EGO 1600 的水平视场角为 165°", basis=basis))
+        assert decision.action == "request_evidence"
+        assert decision.reason_code == "daq_internal_provenance_in_answer"
+    assert session.evaluate(AnswerSubmission(
+        outcome="resolved", conclusion="EGO 1600 的水平视场角为 165°",
+        basis="按 1600×1200 版本的已发布规格核对。",
+    )).action == "allow"

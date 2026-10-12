@@ -100,6 +100,13 @@ def test_distinct_procedures_and_software_surfaces_have_distinct_requirements():
     assert {item['software'] for item in requirements} == {'viewer', 'firmware'}
 
 
+def test_optical_qualifier_requires_its_own_governed_claim():
+    plan = prepare_turn('UMI Finger 的鱼眼 RGB 分辨率是多少？')
+    fields = {row.get('field') for row in plan.requirements
+              if row['capability'] == 'lookup_spec'}
+    assert {'rgb_resolution', 'lens_type'} <= fields
+
+
 def test_prior_state_is_not_mutated_and_removal_does_not_retain_stale_version():
     first = prepare_turn('SDK 使用', updates={'equipment': ['device-a'], 'sdk_version': '1.0'})
     checkpoint = first.context.to_checkpoint()

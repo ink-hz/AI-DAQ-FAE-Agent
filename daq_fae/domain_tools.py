@@ -117,9 +117,11 @@ class DaqToolBox:
                 "claim_status": "unknown", "matches": [],
             })
         scope_normalized = False
-        if name == "lookup_spec" and getattr(self.knowledge, "is_candidate_preview", False):
+        if name == "lookup_spec" and hasattr(self.knowledge, "ground_question"):
             arguments = dict(arguments)
-            target = self.knowledge.ground_question(self.question)
+            target = (self.knowledge.ground_question(self.question)
+                      if getattr(self.knowledge, "is_candidate_preview", False)
+                      else self.knowledge.ground_question(self.question, role=self.role))
             entities = target.get("entities", [])
             field = arguments.get("field")
             if isinstance(field, str):
@@ -168,6 +170,27 @@ class DaqToolBox:
                             conditions[selector] = value
                             scope_normalized = True
                     arguments["conditions"] = conditions
+            else:
+                # A family phrase can identify a reviewed variant only when
+                # the caller supplies every selector explicitly. This lets a
+                # user compare known variants without treating the family as
+                # one product or guessing a selector.
+                requested = arguments.get('entity')
+                conditions = arguments.get('conditions')
+                if isinstance(requested, str) and isinstance(conditions, dict):
+                    query = _identity_text(requested)
+                    candidates = [row for row in self.knowledge.records_for(self.role)
+                                  if row['kind'] == 'entity' and
+                                  _identity_text(row['data']['name']) in query]
+                    if candidates:
+                        longest = max(len(_identity_text(row['data']['name']))
+                                      for row in candidates)
+                        candidates = [row for row in candidates if
+                                      len(_identity_text(row['data']['name'])) == longest and
+                                      self._scope_selectors_match(row['scope'], conditions)]
+                        if len(candidates) == 1:
+                            arguments['entity'] = candidates[0]['id']
+                            scope_normalized = True
             if any(
                 requirement.get("capability") == "lookup_spec"
                 and _field_intent_matches(str(requirement.get("field") or ""),
@@ -251,14 +274,44 @@ class DaqToolBox:
                 "reason": "reviewed_conflict_notice", "claim_status": "conflict",
                 "matches": [], "matched_requirement_ids": attempted,
             })
-        if not matches and name == "lookup_spec" and getattr(
-                self.knowledge, "is_candidate_preview", False):
-            choices = self.knowledge.source_checked_variant_scopes(
+        if not matches and name == 'lookup_spec':
+            supplied = arguments.get('conditions') or {}
+            if isinstance(supplied, dict):
+                field = str(arguments.get('field') or '').casefold()
+                entity = str(arguments.get('entity') or '').casefold()
+                candidates = [row for row in rows if row['kind'] == 'claim'
+                              and row['data']['field'].casefold() == field
+                              and entity in self._entity_names(row, entities, topologies)
+                              and self._scope_selectors_match(row['scope'], supplied)
+                              and all({**row['scope'], **row['data']['conditions']}.get(key) == value
+                                      for key, value in supplied.items())]
+                missing = {}
+                for row in candidates:
+                    for key, value in row['data']['conditions'].items():
+                        if key not in supplied:
+                            missing.setdefault(key, {})[
+                                json.dumps(value, ensure_ascii=False, sort_keys=True)] = value
+                if missing:
+                    return ToolResult(status='not_found', content={
+                        'reason': 'claim_conditions_required', 'claim_status': 'unknown',
+                        'available_claim_conditions': {
+                            key: [value for _, value in sorted(values.items())]
+                            for key, values in sorted(missing.items())},
+                        'matches': [], 'matched_requirement_ids': attempted,
+                    })
+        if not matches and name == "lookup_spec" and hasattr(self.knowledge, "ground_question"):
+            choices = (self.knowledge.source_checked_variant_scopes(
                 str(arguments.get("entity") or ""), str(arguments.get("field") or ""))
+                if getattr(self.knowledge, "is_candidate_preview", False)
+                else self.knowledge.verified_variant_scopes(
+                    str(arguments.get("entity") or ""), str(arguments.get("field") or ""),
+                    role=self.role))
             if choices:
                 return ToolResult(status="not_found", content={
                     "reason": "variant_selector_required", "claim_status": "unknown",
-                    "source_checked_variant_scopes": choices,
+                    ("source_checked_variant_scopes" if getattr(
+                        self.knowledge, "is_candidate_preview", False)
+                     else "verified_variant_scopes"): choices,
                     "variant_scopes_exhaustive": False,
                     "matches": [], "matched_requirement_ids": attempted,
                 })

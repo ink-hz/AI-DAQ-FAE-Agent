@@ -168,7 +168,9 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
                 texts = [item.source_id for item in visible if item.kind != "image"]
                 previous = checkpoint.state.task_context if checkpoint is not None else None
                 plan = prepare_turn(body.message, previous=previous,
-                                    attachment_source_ids=texts, image_source_ids=images)
+                                    attachment_source_ids=texts, image_source_ids=images,
+                                    grounded_targets=(knowledge.ground_question(
+                                        body.message, role=binding['role']) if binding else None))
                 assert_current_access()
                 toolbox = DaqToolBox(context=plan.context.tool_context(), knowledge=knowledge,
                                      role=binding["role"] if binding else None,
