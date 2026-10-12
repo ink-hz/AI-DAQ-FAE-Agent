@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def migration_files() -> tuple[Path, ...]:
     shared = tuple(sorted((ROOT / "migrations" / "shared").glob("0*.sql")))
     daq = tuple(sorted((ROOT / "migrations" / "daq").glob("0*.sql")))
-    if len(shared) != 10 or len(daq) != 3:
+    if len(shared) != 10 or len(daq) != 4:
         raise RuntimeError("daq_migration_manifest_incomplete")
     return (*shared, *daq)
 
