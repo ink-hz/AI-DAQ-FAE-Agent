@@ -38,13 +38,20 @@ stale or unauthorized review yields the ordinary evidence gap. Contradictory
 software result rows likewise produce a generic gap, not an unreviewed conflict
 notice. This v1 does not publish software conflict notices.
 
-Platform Tasks have a trusted requester identity, but the reused result/event
-routes do not bind persisted outputs to current document entitlements. Therefore
-nonempty knowledge plus Task enablement fails startup with
-`daq_knowledge_task_role_replay_contract_missing`. Empty-knowledge Tasks are
-unchanged. A future Task contract must bind role/release at submission, execution
-and result replay before enabling this combination. This is not production or
-pilot authorization, and does not activate real candidate knowledge.
+Platform Tasks use the signed requester identity and a DAQ-only immutable
+`platform_task_id` to requester, role and knowledge-release binding. Task creation
+checks the active release and current entitlement before queue insertion. The
+worker checks the binding before each request load and output write; every task
+status and event replay checks it again before returning stored content. An old
+unbound queue row or a missing binding migration fails closed. Task attachments
+remain unsupported until their DAQ byte ownership contract is implemented.
+
+Nonempty knowledge with Tasks enabled also requires the active release to carry
+`tasks_enabled=true`, `daq-task-role-release-v1` and an independently reviewed
+Dev task batch proving an answerable question, an evidence gap, role revocation
+and release change. The operator release records the batch and report hashes.
+This contract does not itself activate Tasks or promote candidate knowledge;
+deployment must apply the DAQ migration and activate a separately staged release.
 
 ## Revocation during execution or delivery
 

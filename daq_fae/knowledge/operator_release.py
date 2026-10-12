@@ -20,6 +20,8 @@ from .release_readiness import _lock, _switch
 
 
 MODE = 'owner_directed_source_checked_v1'
+TASK_BINDING_CONTRACT = 'daq-task-role-release-v1'
+TASK_HTTP_CONTRACT = 'orbbec-http-task/v1'
 EXCLUDED = {'software', 'links', 'module_projection', 'topology',
             'procedure', 'candidate_sections'}
 _SHA = re.compile(r'^[0-9a-f]{64}$')
@@ -60,9 +62,67 @@ def _check_dev_batch(batch, report):
                      and item.get('fallback_used') is False for item in cases), 'dev_cases')
 
 
-def _operator_evidence(bundle, report):
+def _task_release_input(bundle):
+    return digest({key: bundle[key] for key in ('snapshot', 'records', 'scope', 'runtime')})
+
+
+def _check_task_dev_batch(bundle, report):
+    batch = bundle.get('task_dev_batch')
+    _require(isinstance(batch, dict) and batch.get('environment') == 'dev'
+             and batch.get('frozen') is True and isinstance(batch.get('id'), str)
+             and bool(batch['id'].strip()) and batch.get('contract') == TASK_HTTP_CONTRACT
+             and batch.get('release_input_sha256') == _task_release_input(bundle),
+             'task_dev_batch')
+    questions = batch.get('questions')
+    required = {'answerable', 'missing_evidence', 'role_revoked', 'release_changed'}
+    _require(isinstance(questions, list) and len(questions) == len(required)
+             and all(isinstance(item, dict) and isinstance(item.get('id'), str)
+                     and item['id'].strip() and isinstance(item.get('question'), str)
+                     and item['question'].strip() for item in questions)
+             and {item.get('kind') for item in questions} == required
+             and len({item['id'] for item in questions}) == len(questions),
+             'task_dev_questions')
+    _require(isinstance(report, dict) and report.get('environment') == 'dev'
+             and report.get('batch_id') == batch['id']
+             and report.get('contract') == TASK_HTTP_CONTRACT
+             and report.get('release_input_sha256') == batch['release_input_sha256']
+             and report.get('review_method') in {'codex', 'human_fae'},
+             'task_dev_report')
+    cases = report.get('cases')
+    _require(isinstance(cases, list) and len(cases) == len(questions)
+             and {item.get('id') for item in cases if isinstance(item, dict)}
+             == {item['id'] for item in questions}, 'task_dev_cases')
+    kinds = {item['id']: item['kind'] for item in questions}
+    expected_outcomes = {'answerable': 'resolved', 'missing_evidence': 'safe_abstained',
+                         'role_revoked': 'scope_denied', 'release_changed': 'scope_denied'}
+    for case in cases:
+        kind = kinds[case['id']]
+        try:
+            from uuid import UUID
+            UUID(case['platform_task_id'])
+            UUID(case['request_id'])
+        except (KeyError, TypeError, ValueError):
+            raise ValueError('operator release rejected: task_dev_cases') from None
+        _require(case.get('passed') is True and case.get('outcome') == expected_outcomes[kind]
+                 and case.get('fallback_used') is False and isinstance(case.get('sources'), list),
+                 'task_dev_cases')
+        if kind == 'answerable':
+            _require(case.get('http_status') == 200 and isinstance(case.get('answer'), str)
+                     and bool(case['answer'].strip()) and bool(case['sources'])
+                     and isinstance(case.get('trace_id'), str) and bool(case['trace_id'].strip()),
+                     'task_dev_cases')
+        elif kind == 'missing_evidence':
+            _require(case.get('http_status') == 200 and case['sources'] == []
+                     and isinstance(case.get('trace_id'), str) and bool(case['trace_id'].strip()),
+                     'task_dev_cases')
+        else:
+            _require(case.get('http_status') == 403 and case['sources'] == []
+                     and not case.get('answer'), 'task_dev_cases')
+
+
+def _operator_evidence(bundle, report, task_dev_report=None):
     snapshot, records = bundle['snapshot'], bundle['records']
-    return {
+    evidence = {
         'mode': MODE, 'authorization_ref': 'project-owner-direction-2026-10-12',
         'archive_manifest_sha256': snapshot['archive_manifest_sha256'],
         'source_inventory_sha256': digest(_inventory(snapshot['sources'])),
@@ -74,10 +134,18 @@ def _operator_evidence(bundle, report):
         'dev_batch_id': bundle['dev_batch']['id'], 'dev_report_sha256': digest(report),
         'previous_release': bundle['previous_release'],
     }
+    if bundle['runtime'].get('tasks_enabled') is True:
+        evidence.update(task_binding_contract=TASK_BINDING_CONTRACT,
+                        task_dev_batch_id=bundle['task_dev_batch']['id'],
+                        task_dev_batch_sha256=digest(bundle['task_dev_batch']),
+                        task_dev_report_sha256=digest(task_dev_report),
+                        task_release_input_sha256=_task_release_input(bundle))
+    return evidence
 
 
 def stage_operator_release(root: Path, bundle: dict, archive: Path, dev_report: dict, *,
-                           runtime_release: str, upstream_sha: str) -> str:
+                           runtime_release: str, upstream_sha: str,
+                           task_dev_report: dict | None = None) -> str:
     """Stage an immutable narrow release after checking actual local originals."""
     b = deepcopy(bundle)
     _require(isinstance(b, dict) and all(key in b for key in
@@ -117,16 +185,20 @@ def stage_operator_release(root: Path, bundle: dict, archive: Path, dev_report: 
     runtime = b['runtime']
     _require(runtime.get('release') == runtime_release
              and runtime.get('upstream_sha') == upstream_sha
-             and runtime.get('tasks_enabled') is False
+             and type(runtime.get('tasks_enabled')) is bool
              and runtime.get('generic_trace_enabled') is False,
              'runtime_identity')
+    if runtime['tasks_enabled']:
+        _require(runtime.get('task_binding_contract') == TASK_BINDING_CONTRACT,
+                 'task_binding_contract')
+        _check_task_dev_batch(b, task_dev_report)
     _check_dev_batch(b['dev_batch'], dev_report)
     active = releases.read_active_release(root)
     _require(b['previous_release'] == (active['release_id'] if active else None),
              'previous_release')
     review = {'reviewer': 'operator-source-check', 'reviewed_at': date.today().isoformat(),
               'dev_batch': b['dev_batch']['id'],
-              'operator_release': _operator_evidence(b, dev_report)}
+              'operator_release': _operator_evidence(b, dev_report, task_dev_report)}
     return releases._publish_release(root, snapshot, b['records'], b['previous_release'],
                                      review, sections=[], bodies={})
 
@@ -157,9 +229,19 @@ def verify_operator_manifest(manifest: dict, *, runtime_release: str, upstream_s
                      for row in manifest['records']), 'manifest_scope')
     _require(runtime.get('release') == runtime_release
              and runtime.get('upstream_sha') == upstream_sha
-             and runtime.get('tasks_enabled') is False
+             and type(runtime.get('tasks_enabled')) is bool
              and runtime.get('generic_trace_enabled') is False,
              'runtime_identity')
+    if runtime['tasks_enabled']:
+        _require(runtime.get('task_binding_contract') == TASK_BINDING_CONTRACT
+                 and evidence.get('task_binding_contract') == TASK_BINDING_CONTRACT
+                 and isinstance(evidence.get('task_dev_batch_id'), str)
+                 and bool(evidence['task_dev_batch_id'].strip())
+                 and all(isinstance(evidence.get(key), str)
+                         and _SHA.fullmatch(evidence[key]) is not None
+                         for key in ('task_dev_batch_sha256', 'task_dev_report_sha256',
+                                     'task_release_input_sha256')),
+                 'task_dev_evidence')
 
 
 def _checked_operator(root: Path, release_id: str, *, runtime_release: str,

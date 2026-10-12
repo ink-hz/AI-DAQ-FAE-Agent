@@ -3,6 +3,7 @@ from copy import deepcopy
 import hashlib
 import json
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
@@ -132,6 +133,86 @@ def test_operator_release_rolls_back_only_to_its_recorded_predecessor(tmp_path):
     assert read_active_release(root)['release_id'] == second
     rollback_operator_release(root, observe=observe)
     assert read_active_release(root)['release_id'] == first
+
+
+def test_task_enabled_operator_release_requires_independently_reviewed_dev_task_batch(tmp_path):
+    from daq_fae.knowledge.adjudication import digest
+    from daq_fae.knowledge.operator_release import stage_operator_release, verify_operator_manifest
+    from daq_fae.knowledge.releases import _read_release
+
+    archive, bundle, report = fixture(tmp_path)
+    bundle['runtime']['tasks_enabled'] = True
+    bundle['runtime']['task_binding_contract'] = 'daq-task-role-release-v1'
+    binding = digest({key: bundle[key] for key in ('snapshot', 'records', 'scope', 'runtime')})
+    cases = [
+        ('answerable', 'resolved'),
+        ('missing_evidence', 'safe_abstained'),
+        ('role_revoked', 'scope_denied'),
+        ('release_changed', 'scope_denied'),
+    ]
+    bundle['task_dev_batch'] = {
+        'id': 'task-pilot-1', 'environment': 'dev', 'frozen': True,
+        'contract': 'orbbec-http-task/v1', 'release_input_sha256': binding,
+        'questions': [{'id': kind, 'kind': kind, 'question': 'EGO 1600 规格？'}
+                      for kind, _ in cases],
+    }
+    task_report = {
+        'environment': 'dev', 'batch_id': 'task-pilot-1',
+        'contract': 'orbbec-http-task/v1', 'release_input_sha256': binding,
+        'review_method': 'codex',
+        'cases': [{'id': kind, 'passed': True, 'outcome': outcome,
+                   'answer': '有据回答' if kind == 'answerable' else '',
+                   'trace_id': f'trace-{kind}' if kind in {'answerable', 'missing_evidence'} else None,
+                   'request_id': str(uuid4()), 'platform_task_id': str(uuid4()),
+                   'http_status': 403 if kind in {'role_revoked', 'release_changed'} else 200,
+                   'sources': [{'source_id': 'claim:verified'}] if kind == 'answerable' else [],
+                   'fallback_used': False} for kind, outcome in cases],
+    }
+    root = tmp_path / 'published'
+    with pytest.raises(ValueError, match='task_dev_report'):
+        stage_operator_release(root, bundle, archive, report,
+                               runtime_release='fae-runtime-1', upstream_sha='a' * 40)
+    release_id = stage_operator_release(
+        root, bundle, archive, report, task_dev_report=task_report,
+        runtime_release='fae-runtime-1', upstream_sha='a' * 40,
+    )
+    manifest, _ = _read_release(root, release_id)
+    verify_operator_manifest(manifest, runtime_release='fae-runtime-1', upstream_sha='a' * 40)
+    assert manifest['review']['operator_release']['task_dev_batch_id'] == 'task-pilot-1'
+    task_report['cases'][2]['passed'] = False
+    with pytest.raises(ValueError, match='task_dev_cases'):
+        stage_operator_release(tmp_path / 'rejected', bundle, archive, report,
+                               task_dev_report=task_report,
+                               runtime_release='fae-runtime-1', upstream_sha='a' * 40)
+    malformed = deepcopy(bundle)
+    malformed['task_dev_batch']['questions'][0].pop('kind')
+    with pytest.raises(ValueError, match='task_dev_questions'):
+        stage_operator_release(tmp_path / 'malformed', malformed, archive, report,
+                               task_dev_report=task_report,
+                               runtime_release='fae-runtime-1', upstream_sha='a' * 40)
+
+
+def test_operator_stage_cli_routes_task_report_to_task_gate(tmp_path, monkeypatch):
+    from scripts.stage_operator_pilot import main
+
+    archive, bundle, report = fixture(tmp_path)
+    proposal = tmp_path / 'proposal.json'
+    proposal.write_text(json.dumps(bundle))
+    aliases = tmp_path / 'aliases.json'
+    aliases.write_text(json.dumps({'field_aliases': bundle['field_aliases'],
+                                   'scoped_field_aliases': bundle['scoped_field_aliases']}))
+    browser_report = tmp_path / 'browser-report.json'
+    browser_report.write_text(json.dumps({**report, 'batch': bundle['dev_batch']}))
+    task_report = tmp_path / 'task-report.json'
+    task_report.write_text(json.dumps({'batch': {'id': 'task-pilot-1'}}))
+    monkeypatch.setattr('sys.argv', [
+        'stage_operator_pilot', '--proposal', str(proposal), '--archive', str(archive),
+        '--aliases', str(aliases), '--dev-report', str(browser_report),
+        '--task-dev-report', str(task_report), '--release-root', str(tmp_path / 'published'),
+        '--runtime-release', 'fae-runtime-1', '--upstream-sha', 'a' * 40,
+    ])
+    with pytest.raises(ValueError, match='task_dev_batch'):
+        main()
 
 
 @pytest.mark.parametrize('change', ['source', 'role', 'scope', 'dev', 'runtime', 'section'])

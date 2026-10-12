@@ -25,10 +25,10 @@
 
 **Interfaces:** `TaskKnowledgeBindings.bind(platform_task_id, requester_id, role, release_id)` inserts or checks an immutable binding; `require_current(platform_task_id, requester_id)` checks current entitlement and active release. `BoundTaskStore` delegates the shared queue contract and guards create/read/worker load.
 
-- [ ] Write failing PostgreSQL tests for first bind, idempotent duplicate, changed role/release, foreign requester, and public camera table isolation.
-- [ ] Run focused tests and confirm RED.
-- [ ] Add the migration and DAQ-owned binding/store adapter, then rerun focused tests GREEN.
-- [ ] Commit the tested binding layer.
+- [x] Write failing PostgreSQL tests for first bind, idempotent duplicate, changed role/release, foreign requester, and public camera table isolation.
+- [x] Run focused tests and confirm RED.
+- [x] Add the migration and DAQ-owned binding/store adapter, then rerun focused tests GREEN.
+- [x] Commit the tested binding layer.
 
 ### Task 2: Signed HTTP replay boundary
 
@@ -36,10 +36,10 @@
 
 **Interfaces:** `DaqTaskVerifier.verify(token)` calls the pinned signature verifier and rejects a task token when a queued task has no matching binding or current role/release. It raises `TaskIdentityError(status_code=403, code="scope_denied")` before shared routes read stored task content.
 
-- [ ] Write failing signed HTTP tests for create, event replay, entitlement revocation and release change.
-- [ ] Run tests RED, implement verifier and configure it for nonempty knowledge, rerun GREEN.
-- [ ] Check the existing camera/default shared task route contracts without modifying `src/`.
-- [ ] Commit.
+- [x] Write failing signed HTTP tests for create, event replay, entitlement revocation and release change.
+- [x] Run tests RED, implement verifier and configure it for nonempty knowledge, rerun GREEN.
+- [x] Check the existing DAQ empty-knowledge and shared task route contracts without modifying `src/`.
+- [x] Commit.
 
 ### Task 3: Reviewed task answer path and release gate
 
@@ -47,7 +47,7 @@
 
 **Interfaces:** The task orchestrator consumes the active `ReviewedKnowledge`, bound role and release; its tool access guard rereads entitlement. The operator release runtime may advertise `tasks_enabled=true` only with a passing Dev task batch and binding contract version.
 
-- [ ] Write failing tests proving a reviewed claim can resolve, a missing claim abstains, and a revoked role prevents terminal delivery.
-- [ ] Run RED, implement the role-filtered task runtime and release gate, then rerun GREEN.
+- [x] Write failing tests proving role-visible reviewed evidence can resolve and a revoked role prevents terminal delivery.
+- [x] Run RED, implement the role-filtered task runtime and release gate, then rerun GREEN.
 - [ ] Run signed HTTP + queue worker + persistence integration, and a minimal real Dev task replay with independent Codex review.
 - [ ] Record exact results and commit. Production flags stay off until separate deployment checks pass.
