@@ -14,7 +14,7 @@
 
 拟定同域入口为 `https://agent.orbbec.com.cn/daq/`，浏览器 API 前缀为 `/daq/api/`。DAQ WebUI 已挂载 `/daq/`，客户端以 `/daq/api/chat` 等路径调用；网关须将 `/daq/api/*` 去掉 `/daq/api` 前缀后转发到独立 DAQ 后端的根 API，并将 `/daq/*` 转发到该后端的 WebUI。当前生产网关尚无 `/daq` 路由，内部 DAQ 后端端口与生产部署配置也未定，因此该地址仅为注册与路由目标，尚不可访问。
 
-Platform 当前 `registry.yaml`、Agent Catalog 均无 `ai-daq-fae-agent`。现有 `/api/v1/agents/{agent_id}/launch` 服务只允许 `ai-fae-agent`；其数据库签发、交换和绑定校验函数也固定相机身份。仅添加注册表或目录卡片，会公开一个不能完成 DAQ 身份绑定的入口，因此本轮未发布失效入口。正式接入需要独立的 DAQ 服务地址、数据库/密钥文件和 Platform 身份配置，并以双 Agent 身份及跨域拒绝合同验证新的签发链路。
+Platform `master` 的 `9f72e905` 已合入 DAQ 企业成员专属 launch、数据库迁移 113、受授权过滤的 Agent Catalog 卡片、`/daq` 网关配置和登录返回路径；相机身份合同及跨 Agent 数据库测试通过。代码未建立任何数采授权，公开 `registry.yaml` 也尚无 DAQ 项。该提交尚未部署到生产，数据库迁移、网关配置和 DAQ 服务均未在生产启用；仅有代码入口不能计为注册上线。正式接入仍需要独立的 DAQ 服务地址、数据库/密钥文件和 Platform 身份配置，并做两服务身份与数据隔离联调。
 
 数采仓只有本机 `.env.example`，没有 DAQ 生产环境配置或部署包；正式知识与身份配置缺失时应用按设计拒绝启动。上游共享源码的本机精确快照校验已通过，但受保护、持久 Git ref 和相机旧域质量门的正式证明尚未取得。代码合入与远端主线提交均不计为部署或试点验收。
 
@@ -22,6 +22,6 @@ Platform 当前 `registry.yaml`、Agent Catalog 均无 `ai-daq-fae-agent`。现�
 
 1. 对最小 23 条提案提供独立原件存储/复取证明、逐项事实和内部角色权限审核，以及可信控制面的整包批准；补齐运行时/身份审查和影响义务。
 2. 冻结覆盖正式发布范围的十类 Dev 题批，在真实 Dev 环境回放，由独立 Codex/FAE 逐题审查；随后用受信审批器执行 D3 stage、activate 和 rollback 健康/trace 观察。
-3. 扩展 Platform Catalog、授权数据库和 Agent launch 身份签发链路；配置独立 DAQ 服务与路由，先做 Dev 身份/数据隔离联调，再部署和做只读生产健康及入口检查。
+3. 将已合入的 Platform Catalog、授权数据库迁移、Agent launch 和网关配置与独立 DAQ 服务做 Dev 身份/数据隔离联调；正式部署时按迁移、服务、授权和路由次序激活，最后做只读生产健康及入口检查。
 
 所有模型评测只在 Dev；本轮没有生产模型评测，也没有修改相机 FAE 服务。
