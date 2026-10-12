@@ -10,14 +10,14 @@ _BLOCKED = ("assets/", "api/", "enterprise/", "attachments/", "health", "review/
 
 
 def mount_local_webui(app: FastAPI, *, dist: Path) -> bool:
-    return _mount_webui(app, dist=dist, prefix="/app")
+    return _mount_webui(app, dist=dist, prefix="/app", api_base="")
 
 
 def mount_authenticated_webui(app: FastAPI, *, dist: Path) -> bool:
-    return _mount_webui(app, dist=dist, prefix="/daq")
+    return _mount_webui(app, dist=dist, prefix="/daq", api_base="/daq/api")
 
 
-def _mount_webui(app: FastAPI, *, dist: Path, prefix: str) -> bool:
+def _mount_webui(app: FastAPI, *, dist: Path, prefix: str, api_base: str) -> bool:
     index = dist / "index.html"
     if not index.is_file():
         return False
@@ -25,7 +25,7 @@ def _mount_webui(app: FastAPI, *, dist: Path, prefix: str) -> bool:
         "<head>",
         f'<head><base href="{prefix}/">'
         f'<meta name="fae-browser-base" content="{prefix}">'
-        '<meta name="fae-api-base" content="">',
+        f'<meta name="fae-api-base" content="{api_base}">',
         1,
     )
     assets = dist / "assets"

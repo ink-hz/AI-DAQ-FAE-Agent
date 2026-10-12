@@ -112,7 +112,7 @@ def test_authenticated_navigation_and_review_are_scoped(tmp_path, monkeypatch):
     assert client.get('/review/sessions').status_code == 403
 
 
-def test_authenticated_browser_uses_daq_entry_and_root_api(tmp_path, monkeypatch):
+def test_authenticated_browser_uses_daq_entry_and_proxied_api(tmp_path, monkeypatch):
     env = {**identity_environment(tmp_path), **persistence_environment(tmp_path)}
     for key, value in env.items():
         monkeypatch.setenv(key, value)
@@ -128,6 +128,6 @@ def test_authenticated_browser_uses_daq_entry_and_root_api(tmp_path, monkeypatch
     html = client.get('/daq/').text
     assert 'DAQ workspace' in html
     assert 'content="/daq"' in html
-    assert 'name="fae-api-base" content=""' in html
+    assert 'name="fae-api-base" content="/daq/api"' in html
     assert client.get('/daq/conversations/example').status_code == 200
     assert client.get('/app/').status_code == 404

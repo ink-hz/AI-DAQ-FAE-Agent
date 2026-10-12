@@ -13,7 +13,7 @@ def test_built_daq_ui_mounts_local_workspace_without_camera_workspace(tmp_path):
     assert response.status_code == 200
     assert "AI DAQ FAE Agent" in response.text
     assert 'content="/app"' in response.text
-    assert 'content=""' in response.text
+    assert 'name="fae-api-base" content=""' in response.text
     assert client.get("/app/conversations/test-session").status_code == 200
     assert client.get("/app/assets/missing.js").status_code == 404
     assert client.get("/fae/").status_code == 404
