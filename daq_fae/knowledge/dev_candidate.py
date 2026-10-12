@@ -164,6 +164,29 @@ class DevCandidateKnowledge:
     def resolve_field(self, field: str) -> str | None:
         return self._field_aliases.get(_identity_text(field))
 
+    def source_checked_variant_scopes(self, entity: str, field: str) -> dict[str, list[str]]:
+        """Expose only the selector choices behind a generic Dev spec question."""
+        query = _identity_text(entity)
+        names = {row["id"]: _identity_text(row["data"]["name"])
+                 for row in self._records if row["kind"] == "entity"}
+        matching = [name for name in names.values() if name and name in query]
+        if not matching:
+            return {}
+        longest = max(map(len, matching))
+        entity_ids = {rid for rid, name in names.items()
+                      if len(name) == longest and name in query}
+        scopes: dict[str, set[str]] = {}
+        for row in self._records:
+            if row["kind"] != "claim" or row["data"]["field"] != field or \
+                    row["data"]["entity_id"] not in entity_ids:
+                continue
+            scope = row["scope"]
+            for selector in scope.get("required_selectors", []):
+                value = str(scope[selector])
+                if _identity_text(value) not in query:
+                    scopes.setdefault(selector, set()).add(value)
+        return {key: sorted(values) for key, values in sorted(scopes.items())}
+
     def ground_question(self, question: str) -> dict:
         text = _identity_text(question)
         matches = []

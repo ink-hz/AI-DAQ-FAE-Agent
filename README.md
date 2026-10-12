@@ -18,7 +18,7 @@
 | Platform 身份、Postgres 会话/反馈、review、HTTP Task | 已装配可选内部认证模式；数采 Agent ID、任务签名 audience、会话和资料隔离；真实 Platform 联调未完成 |
 | 数采事实、关系、权限和知识发布 | 默认及正式活动指针仍为空知识；本机 Dev 已显式加载真实原件候选章节和 15 条逐项来源核对记录，支持窄范围正向答复。认证角色、软件、链接与组合结论未发布 |
 
-本机候选预览的实现与真实模型结果见[Dev 来源核对与回放](docs/reviews/2026-10-12-daq-real-dev-candidate-knowledge.md)。默认启动仍是空知识；正式活动指针没有变化。
+本机候选预览的实现与首轮结果见[Dev 来源核对与回放](docs/reviews/2026-10-12-daq-real-dev-candidate-knowledge.md)；最终 17 轮真实回放、自动硬门和 Codex 逐题语义判断见[相机 FAE 式复审](docs/reviews/2026-10-12-daq-camera-style-semantic-review.md)。默认启动仍是空知识；正式活动指针没有变化。
 
 **尚不能宣布完整能力等价或试点可发布。** 共享源码虽已推送远端集成分支，受保护依赖 pin 尚未核实；真实 Opus 网关有一次 476 秒传输失败，相机 Dev 回归有一个硬失败和一个答案矛盾；数采认证知识、Platform 实例联调和部署回滚仍未验收。原始数采资料已有本机受限归档和逐文件哈希；当前仅供本机 Dev 显式预览。[接管门禁核查](docs/reviews/2026-10-08-daq-takeover-gate-audit.md)、[迁移计划](docs/superpowers/plans/2026-10-08-full-runtime-parity-migration.md)与[完整设计](docs/2026-10-08-数采FAE完整设计.md)记录发布门。
 

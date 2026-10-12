@@ -9,7 +9,7 @@
     "vertical_fov": ["垂直视场角", "纵向视场角", "VFOV"],
     "rgb_camera_count": ["RGB 相机数量", "彩色相机数量", "相机数量", "camera_count"],
     "rgb_resolution": ["RGB 分辨率", "彩色相机分辨率", "鱼眼 RGB 分辨率"],
-    "stereo_mono_baseline": ["双目 Mono 基线", "Mono 双目基线", "单色双目基线"],
+    "stereo_mono_baseline": ["双目 Mono 基线", "Mono 双目基线", "单色双目基线", "mono_stereo_baseline", "mono_baseline", "stereo_baseline", "baseline"],
     "downstream_port_count": ["下游端口数量", "下游接口数量", "下游端口数"]
   },
   "records": {

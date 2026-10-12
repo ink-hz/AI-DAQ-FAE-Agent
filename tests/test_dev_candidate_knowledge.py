@@ -1,5 +1,6 @@
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
@@ -176,3 +177,70 @@ def test_candidate_preview_rejects_authenticated_mode_and_active_pointer(monkeyp
     (releases / "active.json").write_text("{}")
     with pytest.raises(ValueError, match="cannot_shadow_active_release"):
         create_app(provider_mode="offline", knowledge_release_root=releases)
+
+
+def test_generic_variant_spec_reports_checked_scopes_without_answering():
+    ref = {"path": "guide.md", "sha256": "a" * 64,
+           "locator": {"kind": "lines", "start": 1, "end": 1}}
+    rows = []
+    for variant, value in (("1600x1200", 165), ("1920x1200", 149)):
+        entity_id = "entity:ego-" + variant[:4]
+        scope = {"product": "ego", "required_selectors": ["resolution_variant"],
+                 "resolution_variant": variant}
+        rows.extend([
+            {"id": entity_id, "kind": "entity", "status": "verified",
+             "scope": scope, "data": {"name": "EGO", "entity_type": "variant"},
+             "source_refs": [ref]},
+            {"id": "claim:ego-" + variant[:4] + "-horizontal-fov", "kind": "claim",
+             "status": "verified", "scope": scope, "source_refs": [ref],
+             "data": {"entity_id": entity_id, "field": "horizontal_fov",
+                      "value": value, "unit": "deg", "conditions": {}}},
+        ])
+    knowledge = DevCandidateKnowledge("candidate-dev-" + "a" * 64, [], rows,
+                                      {"水平视场角": "horizontal_fov"})
+    question = "EGO 双目的水平视场角是多少？"
+    plan = prepare_turn(question, grounded_targets=knowledge.ground_question(question))
+    toolbox = DaqToolBox(question=question, knowledge=knowledge, role="internal_fae",
+                         requirements=plan.requirements)
+    result = toolbox.dispatch("lookup_spec", {"entity": "EGO 双目", "field": "horizontal_fov"})
+    assert result.status == "not_found"
+    assert result.content["reason"] == "variant_selector_required"
+    assert result.content["source_checked_variant_scopes"] == {
+        "resolution_variant": ["1600x1200", "1920x1200"]}
+    assert result.content["matches"] == []
+    assert result.sources == []
+
+
+@pytest.mark.parametrize("field", ["mono_stereo_baseline", "mono_baseline",
+                                     "stereo_baseline", "baseline"])
+def test_source_checked_mono_baseline_accepts_model_field_variants(field):
+    ref = {"path": "guide.md", "sha256": "a" * 64,
+           "locator": {"kind": "lines", "start": 1, "end": 1}}
+    entity = {"id": "entity:umi-finger", "kind": "entity", "status": "verified",
+              "scope": {"product": "umi-finger"},
+              "data": {"name": "UMI Finger", "entity_type": "device"},
+              "source_refs": [ref]}
+    claim = {"id": "claim:umi-finger-mono-baseline", "kind": "claim",
+             "status": "verified", "scope": entity["scope"], "source_refs": [ref],
+             "data": {"entity_id": entity["id"], "field": "stereo_mono_baseline",
+                      "value": 50, "unit": "mm", "conditions": {}}}
+    aliases = {alias: "stereo_mono_baseline" for alias in
+               ("mono_stereo_baseline", "mono_baseline", "stereo_baseline", "baseline")}
+    knowledge = DevCandidateKnowledge("candidate-dev-" + "a" * 64, [],
+                                      [entity, claim], aliases)
+    question = "UMI Finger 的双目 Mono 基线是多少？"
+    plan = prepare_turn(question, grounded_targets=knowledge.ground_question(question))
+    result = DaqToolBox(question=question, knowledge=knowledge, role="internal_fae",
+                        requirements=plan.requirements).dispatch(
+                            "lookup_spec", {"entity": "UMI Finger", "field": field})
+    assert result.status == "ok"
+    assert result.content["matches"][0]["data"]["value"] == 50
+    assert result.content["matched_requirement_ids"]
+
+
+def test_dev_source_check_ledger_declares_mono_baseline_model_aliases():
+    ledger = json.loads((Path(__file__).resolve().parents[1] /
+                         "review_recipes/dev_source_checked_v1.json").read_text())
+    aliases = set(ledger["field_aliases"]["stereo_mono_baseline"])
+    assert {"mono_stereo_baseline", "mono_baseline", "stereo_baseline",
+            "baseline"} <= aliases

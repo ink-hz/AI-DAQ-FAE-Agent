@@ -209,6 +209,17 @@ class DaqToolBox:
                 "reason": "reviewed_conflict_notice", "claim_status": "conflict",
                 "matches": [], "matched_requirement_ids": attempted,
             })
+        if not matches and name == "lookup_spec" and getattr(
+                self.knowledge, "is_candidate_preview", False):
+            choices = self.knowledge.source_checked_variant_scopes(
+                str(arguments.get("entity") or ""), str(arguments.get("field") or ""))
+            if choices:
+                return ToolResult(status="not_found", content={
+                    "reason": "variant_selector_required", "claim_status": "unknown",
+                    "source_checked_variant_scopes": choices,
+                    "variant_scopes_exhaustive": False,
+                    "matches": [], "matched_requirement_ids": attempted,
+                })
         if not matches:
             return ToolResult(status="not_found", content={
                 "reason": "reviewed_evidence_unavailable", "claim_status": "unknown",

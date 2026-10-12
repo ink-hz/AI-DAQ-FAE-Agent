@@ -6,7 +6,7 @@
 
 原件输入为本项目 Git 忽略的本机归档，清单 SHA-256 为 `e35fe11f6773bc157734d65a3b19c87a18fdf14bab3c5458d1b4d75b22387d56`，逐件核对 **276 文件、2,038,212,224 字节**。B3 图 SHA-256 为 `bcec15073b591e428bec2c83a1c614a42ad16f2279e0da52d7c18ece9f450506`。加载器逐文件核对原件、图、章节正文和来源定位；90/114 节只有 `internal_fae` 草案视图，仅供搜索和缺口判断，不满足正向证据门。
 
-精确来源账本 [dev_source_checked_v1.json](../../review_recipes/dev_source_checked_v1.json) SHA-256 为 `5b2402eb9306c56b7443ddffb78f9a11e2b59aec345b33f9ed4beeca50635226`。账本含 **6 个实体、9 个窄范围规格事实**；每条事实有原记录指纹，绑定来源哈希、页码、值、单位、条件和变体。加载后仍以 `source_checked` 标记，只有本机 Dev 的证据策略可据此 `resolved`；正式策略不接受该标记。当前 Dev release 为 `candidate-dev-81c99da169eebbabc21db828cf34c34bad6d774ba0ec5c12606ddbca591e71ee`，健康检查和逐题终态一致。
+本页初轮精确来源账本 SHA-256 为 `5b2402eb9306c56b7443ddffb78f9a11e2b59aec345b33f9ed4beeca50635226`。账本含 **6 个实体、9 个窄范围规格事实**；每条事实有原记录指纹，绑定来源哈希、页码、值、单位、条件和变体。加载后仍以 `source_checked` 标记，只有本机 Dev 的证据策略可据此 `resolved`；正式策略不接受该标记。初轮 Dev release 为 `candidate-dev-81c99da169eebbabc21db828cf34c34bad6d774ba0ec5c12606ddbca591e71ee`，健康检查和逐题终态一致。后续字段别名修复产生新版本，最终整批结果见[相机 FAE 式逐题语义复审](2026-10-12-daq-camera-style-semantic-review.md)。
 
 ## 逐页来源核对
 
