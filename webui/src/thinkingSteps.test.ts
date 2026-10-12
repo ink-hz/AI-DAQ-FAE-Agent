@@ -3,6 +3,20 @@ import { buildThinkingSteps } from './thinkingSteps';
 import type { ChatMessage } from './types';
 
 describe('buildThinkingSteps', () => {
+  it('uses the terminal event for one persisted stage id', () => {
+    const steps = buildThinkingSteps({
+      id: 'a-stage', role: 'assistant', content: '完成', createdAt: 2,
+      stages: [
+        { stage: 'loop', stage_id: 'loop-1', status: 'running' },
+        { stage: 'loop', stage_id: 'loop-1', status: 'completed', elapsed_ms: 8 },
+      ],
+      done: { outcome: 'resolved', fallback_used: false },
+    });
+    expect(steps.filter((step) => step.title === 'loop')).toHaveLength(1);
+    expect(steps.find((step) => step.title === 'loop')).toMatchObject({
+      status: 'done', elapsedMs: 8,
+    });
+  });
   it('returns a stable empty state without an active answer', () => {
     expect(buildThinkingSteps(undefined)).toEqual([
       {
@@ -38,7 +52,7 @@ describe('buildThinkingSteps', () => {
         id: 'stage-1',
         title: 'retrieval',
         detail: 'running',
-        status: 'done',
+        status: 'running',
       },
       {
         id: 'waiting',
@@ -47,6 +61,17 @@ describe('buildThinkingSteps', () => {
         status: 'running',
       },
     ]);
+  });
+
+  it('shows safe abstention as an answer outcome, not absence of fallback', () => {
+    const steps = buildThinkingSteps({
+      id: 'a2', role: 'assistant', content: '资料不足', createdAt: 2,
+      sources: [], stages: [],
+      done: { outcome: 'safe_abstained', fallback_used: false, trace_id: 'trace2' },
+    });
+    expect(steps.at(-1)).toMatchObject({
+      id: 'risk', status: 'warning', detail: '安全弃答 · 关键证据仍不足',
+    });
   });
 
   it('adds capability, source, coverage, and risk summaries from done data', () => {

@@ -47,6 +47,13 @@ function buildTurnMeta(message: ChatMessage): string {
   if (!message.done) {
     return 'thinking';
   }
+  if (message.done.outcome === 'safe_abstained') return 'safe abstained';
+  if (message.done.outcome && message.done.outcome !== 'resolved') {
+    return `failed · ${message.done.outcome}`;
+  }
   const sourceCount = message.sources?.length || 0;
+  if (sourceCount === 0 && message.done.request_kind === 'service') {
+    return 'answered · service contract';
+  }
   return sourceCount > 0 ? `answered · ${sourceCount} sources` : 'answered · no sources';
 }

@@ -1,0 +1,24 @@
+{"id":"S01","question":"介绍一下你自己","expected_kind":"service","expected_outcome":"resolved"}
+{"id":"S01a","question":"请说说你的身份和职责。","expected_kind":"service","expected_outcome":"resolved"}
+{"id":"S01b","question":"作为助手你主要帮我处理什么？","expected_kind":"service","expected_outcome":"resolved"}
+{"id":"S02","question":"你能做哪些数采工作？目前资料覆盖到哪里？","expected_kind":"service","expected_outcome":"resolved"}
+{"id":"S02a","question":"你的服务范围和当前知识范围分别是什么？","expected_kind":"service","expected_outcome":"resolved"}
+{"id":"S02b","question":"能帮我解决什么，以及现有资料涉及什么？","expected_kind":"service","expected_outcome":"resolved"}
+{"id":"S03","question":"Who are you and what can you help me with?","expected_kind":"service","expected_outcome":"resolved"}
+{"id":"S04","question":"你是相机 FAE 还是数采 FAE？","expected_kind":"service","expected_outcome":"resolved"}
+{"id":"M01","question":"介绍一下你自己，再说说 EGO 双目 1600×1200 版本的水平视场角。","expected_kind":"mixed","expected_outcome":"resolved"}
+{"id":"M01a","question":"你负责哪些工作？EGO 双目 1600×1200 的水平 FOV 是多少？","expected_kind":"mixed","expected_outcome":"resolved"}
+{"id":"M01b","question":"先介绍你的服务，再查 EGO 双目 1600×1200 版的水平视场。","expected_kind":"mixed","expected_outcome":"resolved"}
+{"id":"M02","question":"你是谁？EG-DB 整机深度精度是多少？","expected_kind":"mixed","expected_outcome":"safe_abstained"}
+{"id":"M02a","question":"介绍你的身份，并告诉我 EG-DB 整机的深度精度。","expected_kind":"mixed","expected_outcome":"safe_abstained"}
+{"id":"M02b","question":"What is your role, and what is the EG-DB system depth accuracy?","expected_kind":"mixed","expected_outcome":"safe_abstained"}
+{"id":"P01","question":"EGO 双目 1600×1200 版本的水平视场角是多少？","expected_kind":"product","expected_outcome":"resolved"}
+{"id":"P02","question":"EGO 双目的水平视场角是多少？","expected_kind":"product","expected_outcome":"safe_abstained"}
+{"id":"P03","question":"EG-DB 整机深度精度是多少？","expected_kind":"product","expected_outcome":"safe_abstained"}
+{"id":"K01","operation":"search_knowledge","arguments":{"query":"EGO"},"expected_status":"ok"}
+{"id":"C01","turns":["我用 EGO 双目 1600×1200 版本","它的水平视场角呢？"],"expected_kind":"product","expected_outcome":"resolved"}
+{"id":"C02","turns":["我用 EGO 双目 1600×1200 版本","换个问题，数采 HUB 有几个下游端口？"],"expected_kind":"product","expected_outcome":"resolved"}
+{"id":"A01","question":"这张图片里能看到什么？","fixture":"current_turn_image","expected_kind":"attachment"}
+{"id":"T01","fixture":"service_product_refusal_tool_error","expected":"sse_history_ui_stage_consistency"}
+{"id":"F01","fixture":"provider_400_429_5xx_tool_protocol","expected":"distinct_error_attribution"}
+{"id":"G01","fixture":"unauthorized_role_revoke_replay","expected":"no_cross_domain_leak"}

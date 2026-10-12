@@ -3,6 +3,61 @@ from src.agent.loop.tools import ToolResult
 
 from daq_fae.domain_evidence import DaqEvidencePolicy, question_requirements
 from daq_fae.domain_tools import DaqToolBox
+from daq_fae.service_contract import ServiceContract
+
+
+def test_service_contract_satisfies_only_service_goals():
+    contract = ServiceContract.for_release(None, role='internal_fae',
+                                           runtime_release='runtime-dev')
+    requirements = {'requirements': [
+        {'id': 'service', 'capability': 'service_identity',
+         'evidence_class': 'service_contract'},
+    ]}
+    session = DaqEvidencePolicy(service_contract=contract).begin(requirements)
+    assert session.snapshot().requirement_status == {'service': 'satisfied'}
+    assert session.evaluate(AnswerSubmission(
+        outcome='resolved', conclusion='我是内部数采 FAE 助手。')).action == 'allow'
+
+
+def test_english_answer_contract_retries_chinese_body_not_only_headings():
+    contract = ServiceContract.for_release(None, role='internal_fae',
+                                           runtime_release='runtime-dev')
+    session = DaqEvidencePolicy(service_contract=contract,
+                                answer_language='en').begin({'requirements': [
+        {'id': 'service', 'capability': 'service_identity',
+         'evidence_class': 'service_contract'},
+    ]})
+    mixed = session.evaluate(AnswerSubmission(
+        outcome='resolved', conclusion='I am the DAQ FAE assistant.',
+        basis='当前资料只覆盖产品规格。'))
+    assert mixed.action == 'request_evidence'
+    assert mixed.reason_code == 'daq_answer_language_mismatch'
+    assert session.evaluate(AnswerSubmission(
+        outcome='resolved', conclusion='I am the DAQ FAE assistant.',
+        basis='The current release covers products and specifications.')).action == 'allow'
+
+
+def test_mixed_service_and_product_cannot_resolve_on_service_contract_alone():
+    contract = ServiceContract.for_release(None, role='internal_fae',
+                                           runtime_release='runtime-dev')
+    session = DaqEvidencePolicy(service_contract=contract).begin({'requirements': [
+        {'id': 'service', 'capability': 'service_identity',
+         'evidence_class': 'service_contract'},
+        {'id': 'spec', 'capability': 'lookup_spec',
+         'evidence_class': 'governed_required'},
+    ]})
+    assert session.snapshot().requirement_status == {
+        'service': 'satisfied', 'spec': 'unknown',
+    }
+    assert session.evaluate(AnswerSubmission(
+        outcome='resolved', conclusion='我是数采助手，整机精度为 1 mm。')).action != 'allow'
+    session.observe('lookup_spec', ToolResult(
+        status='not_found', content={'matched_requirement_ids': ['spec']},
+    ))
+    assert session.snapshot().requirement_status['spec'] == 'missing'
+    assert session.evaluate(AnswerSubmission(
+        outcome='safe_abstained', basis='我是内部数采 FAE 助手。',
+        missing='该整机精度缺少已发布证据。')).action == 'allow'
 
 
 def test_empty_release_exposes_full_domain_tool_contract_without_camera_facts():
@@ -176,3 +231,21 @@ def test_answer_must_keep_internal_provenance_out_of_prose():
         outcome="resolved", conclusion="EGO 1600 的水平视场角为 165°",
         basis="按 1600×1200 版本的已发布规格核对。",
     )).action == "allow"
+
+
+def test_chinese_answer_contract_rewrites_an_english_body_for_chinese_question():
+    session = DaqEvidencePolicy(answer_language='zh').begin({"requirements": [
+        {"id": "service", "capability": "service_identity",
+         "evidence_class": "clarification_required"},
+    ]})
+    decision = session.evaluate(AnswerSubmission(
+        outcome='safe_abstained',
+        missing=('I am the internal data acquisition FAE assistant and I can help '
+                 'identify products, inspect specifications, explain connection '
+                 'questions, and review capture workflows using the published sources.'),
+    ))
+    assert decision.action == 'request_evidence'
+    assert decision.reason_code == 'daq_answer_language_mismatch'
+    assert session.evaluate(AnswerSubmission(
+        outcome='safe_abstained', missing='目前资料不足，暂时无法确认 EGO 的具体版本。',
+    )).action == 'allow'

@@ -10,6 +10,8 @@ from src.agent.loop.answer_contract import AnswerSubmission
 from src.agent.loop.evidence_policy import EvidenceDecision, EvidenceSnapshot
 from src.agent.loop.tools import ToolResult
 
+from daq_fae.service_contract import ServiceContract
+
 
 def question_requirements(_question: str) -> dict[str, object]:
     """Represent the universal governed-evidence need before a domain planner exists.
@@ -32,8 +34,16 @@ class _Requirement:
 
 
 class DaqEvidencePolicy:
-    def __init__(self, *, allow_dev_source_check: bool = False):
+    def __init__(self, *, allow_dev_source_check: bool = False,
+                 service_contract: ServiceContract | None = None,
+                 answer_language: str = 'zh',
+                 allowed_chinese_terms: tuple[str, ...] = ()):
+        if answer_language not in {'zh', 'en'}:
+            raise ValueError('daq_answer_language_invalid')
         self.allow_dev_source_check = allow_dev_source_check
+        self.service_contract = service_contract
+        self.answer_language = answer_language
+        self.allowed_chinese_terms = allowed_chinese_terms
 
     def begin(self, requirements: Mapping[str, object]) -> "DaqEvidenceSession":
         raw = requirements.get("requirements", [])
@@ -52,7 +62,8 @@ class DaqEvidencePolicy:
                 raise ValueError("daq_requirement_invalid")
             evidence_class = entry.get("evidence_class", "governed_required")
             source_ids = entry.get("source_ids", [])
-            if (evidence_class not in {"governed_required", "user_evidence_required"}
+            if (evidence_class not in {"governed_required", "user_evidence_required",
+                                       "service_contract", "clarification_required"}
                     or not isinstance(source_ids, list)
                     or any(not isinstance(value, str) or not value for value in source_ids)
                     or (evidence_class == "user_evidence_required" and not source_ids)):
@@ -64,14 +75,25 @@ class DaqEvidencePolicy:
             ))
         if not parsed:
             raise ValueError("daq_requirements_empty")
-        return DaqEvidenceSession(tuple(parsed), allow_dev_source_check=self.allow_dev_source_check)
+        return DaqEvidenceSession(tuple(parsed), allow_dev_source_check=self.allow_dev_source_check,
+                                  service_contract=self.service_contract,
+                                  answer_language=self.answer_language,
+                                  allowed_chinese_terms=self.allowed_chinese_terms)
 
 
 class DaqEvidenceSession:
     def __init__(self, requirements: tuple[_Requirement, ...], *,
-                 allow_dev_source_check: bool = False):
+                 allow_dev_source_check: bool = False,
+                 service_contract: ServiceContract | None = None,
+                 answer_language: str = 'zh',
+                 allowed_chinese_terms: tuple[str, ...] = ()):
         self.requirements = requirements
-        self.status = {item.id: "unknown" for item in requirements}
+        self.status = {
+            item.id: ('satisfied' if item.evidence_class == 'service_contract'
+                      and service_contract is not None
+                      and service_contract.supports(item.capability) else 'unknown')
+            for item in requirements
+        }
         self.actual: list[str] = []
         self.tool_failed = False
         self.attachment_failed = False
@@ -79,6 +101,8 @@ class DaqEvidenceSession:
         self._observed_user_sources = {item.id: set() for item in requirements}
         self._internal_provenance: set[str] = set()
         self.allow_dev_source_check = allow_dev_source_check
+        self.answer_language = answer_language
+        self.allowed_chinese_terms = allowed_chinese_terms
 
     def observe(self, tool_name: str, result: ToolResult) -> None:
         if tool_name not in self.actual:
@@ -119,6 +143,8 @@ class DaqEvidenceSession:
         ) else set()
         empty_release = content.get("reason") == "empty_knowledge_release"
         for item in self.requirements:
+            if item.evidence_class in {'service_contract', 'clarification_required'}:
+                continue
             if empty_release and result.status == "not_found" and item.evidence_class == "governed_required":
                 if self.status[item.id] != "satisfied":
                     self.status[item.id] = "missing"
@@ -153,6 +179,29 @@ class DaqEvidenceSession:
                 self.status[item.id] = "missing"
 
     def evaluate(self, submission: AnswerSubmission) -> EvidenceDecision:
+        fields = (submission.conclusion, submission.basis, submission.cautions,
+                  submission.next_steps, submission.missing,
+                  submission.pending_confirmation, submission.handoff_reason,
+                  submission.unresolved_constraints)
+        visible_text = '\n'.join(value for value in fields if value)
+        if self.answer_language == 'en':
+            for term in self.allowed_chinese_terms:
+                if isinstance(term, str) and term:
+                    visible_text = visible_text.replace(term, '')
+            if re.search(r'[\u3400-\u9fff]', visible_text):
+                return EvidenceDecision(
+                    'request_evidence', 'daq_answer_language_mismatch',
+                    'Rewrite every answer field in English, including the conclusion, '
+                    'basis, cautions, missing evidence and next steps. Preserve the '
+                    'same facts, evidence limits, outcome and product names.',
+                )
+        elif (len(re.findall(r'\b[A-Za-z]{2,}\b', visible_text)) >= 20
+              and len(re.findall(r'[\u3400-\u9fff]', visible_text)) < 8):
+            return EvidenceDecision(
+                'request_evidence', 'daq_answer_language_mismatch',
+                '请把结论、依据、注意、缺口和下一步都改用中文陈述；保留相同事实、'
+                '证据边界和终态，产品名、单位及 SDK 名称可保留原文。',
+            )
         prose = "\n".join(value for value in (
             submission.conclusion, submission.basis, submission.cautions,
             submission.next_steps, submission.missing, submission.pending_confirmation,

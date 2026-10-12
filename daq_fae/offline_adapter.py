@@ -7,6 +7,16 @@ class OfflineAdapter:
 
     def chat(self, messages: list[dict], tools: list[dict] | None = None,
              required_tool: str | None = None):
+        if required_tool == 'submit_daq_request_schema':
+            yield {
+                'type': 'tool_call', 'id': 'offline-schema',
+                'name': 'submit_daq_request_schema',
+                'arguments': {'confidence': 'low', 'goals': [
+                    {'kind': 'unknown', 'capability': 'clarify'},
+                ]},
+            }
+            yield {'type': 'stop', 'stop_reason': 'tool_use', 'usage': None}
+            return
         searched = any(message.get("role") == "tool" for message in messages)
         if not searched and required_tool is None:
             yield {

@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import json
+import copy
 import os
 import socket
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from pathlib import Path
 
 import httpx
@@ -29,7 +31,13 @@ from daq_fae.empty_knowledge_synthesis import (EMPTY_KNOWLEDGE_RELEASE,
                                                  refine_empty_release_answer)
 from daq_fae.platform_identity import AGENT_ID
 from daq_fae.provider_errors import anthropic_failure
+from daq_fae.provider_errors import provider_exception_done
 from daq_fae.task_context import extract_context_hints, prepare_turn
+from daq_fae.offline_adapter import OfflineAdapter
+from daq_fae.request_schema import SchemaExtractionError
+from daq_fae.workflow import (StageLedger, prepare_workflow, allowed_tools_for,
+                              context_clarification_done)
+from daq_fae.response_language import localize_answer
 from daq_fae.task_knowledge_binding import BoundTaskStore, DaqTaskVerifier, TaskKnowledgeBindings
 from daq_fae.knowledge.releases import read_active_release
 
@@ -72,46 +80,127 @@ class DaqTaskOrchestrator:
             "agent_id": AGENT_ID, "session_id": session_id,
             "message_length": len(user_message),
         }) if self._trace_recorder is not None else None)
+        stages = StageLedger(trace.trace_id if trace is not None else None)
         try:
-            yield StreamEvent("stage", {"stage": "daq_loop", "status": "running"})
-            plan = prepare_turn(planning_message or user_message,
-                                previous=self._contexts.get(session_id),
-                                context_hints=context_hints,
-                                grounded_targets=(self._knowledge.ground_question(
-                                    planning_message or user_message, role=knowledge_role)
-                                    if self._knowledge is not None else None))
+            prepared = None
+            yield StreamEvent('stage', stages.start('guardrail'))
             refusal = categorize_refusal(planning_message or user_message)
+            yield StreamEvent('stage', stages.finish('guardrail', refusal=bool(refusal)))
+            plan = None
             if refusal:
                 category, answer = refusal
                 done = {"answer": answer, "outcome": "safe_abstained", "sources": [],
                         "planned_capabilities": [], "actual_capabilities": [],
                         "capability_coverage": {}, "refusal_category": category}
             else:
+                yield StreamEvent('stage', stages.start('schema'))
+                question = planning_message or user_message
+                if isinstance(self._adapter, OfflineAdapter):
+                    plan = prepare_turn(question,
+                                        previous=self._contexts.get(session_id),
+                                        context_hints=context_hints,
+                                        grounded_targets=(self._knowledge.ground_question(
+                                            question, role=knowledge_role)
+                                            if self._knowledge is not None else None))
+                    prepared = None
+                else:
+                    try:
+                        prepared = prepare_workflow(
+                            question, adapter=self._adapter,
+                            runtime_release=self._runtime_release or 'runtime-dev',
+                            previous=self._contexts.get(session_id),
+                            context_hints=context_hints,
+                            knowledge=self._knowledge, role=knowledge_role or 'internal_fae',
+                            prior_user_context='\n'.join(
+                                item['content'] for item in session.messages[-8:]
+                                if item.get('role') == 'user' and isinstance(item.get('content'), str)),
+                            grounded_targets=(self._knowledge.ground_question(
+                                question, role=knowledge_role) if self._knowledge is not None else None),
+                        )
+                    except (SchemaExtractionError, AnthropicTransportError,
+                            httpx.HTTPStatusError, httpx.TransportError) as exc:
+                        done = (provider_exception_done(exc) if not isinstance(
+                            exc, SchemaExtractionError) else {
+                                'answer': '本轮请求理解失败，未生成可靠答案。',
+                                'outcome': 'schema_error', 'sources': [],
+                                'fallback_used': True, 'fallback_reason': str(exc),
+                            })
+                        yield StreamEvent('stage', stages.finish('schema', error=done['outcome']))
+                        guard()
+                        done.update({
+                            'agent_id': AGENT_ID,
+                            'knowledge_release': (self._knowledge.release_id if self._knowledge
+                                                  is not None else EMPTY_KNOWLEDGE_RELEASE),
+                            'runtime_release': self._runtime_release,
+                            'session_id': session_id,
+                            'trace_id': trace.trace_id if trace is not None else None,
+                            'planned_capabilities': [], 'actual_capabilities': [],
+                            'capability_coverage': {},
+                        })
+                        if trace is not None:
+                            trace.finalize({'outcome': done['outcome'],
+                                            'fallback_used': True,
+                                            'fallback_reason': done['fallback_reason']})
+                        yield StreamEvent('text_delta', {'delta': done['answer']})
+                        yield StreamEvent('sources', [])
+                        yield StreamEvent('done', done)
+                        return
+                    plan = prepared.plan
+                yield StreamEvent('stage', stages.finish(
+                    'schema', request_kind=prepared.schema.request_kind if prepared
+                    else 'offline_synthetic',
+                    **({'goal_ids': [goal.id for goal in prepared.schema.goals],
+                        'original_question': prepared.schema.original_question,
+                        'effective_question': prepared.schema.effective_question,
+                        'entity_scope': sorted({entity for goal in prepared.schema.goals
+                                                for entity in goal.entities}),
+                        'attachment_dependency': prepared.schema.attachment_dependency,
+                        'confidence': prepared.schema.confidence}
+                       if prepared else {})))
                 runtime = LoopRuntime(
                     adapter=self._adapter,
                     toolbox=DaqToolBox(context=plan.context.tool_context(),
                                        knowledge=self._knowledge, role=knowledge_role,
-                                       requirements=plan.requirements, access_guard=guard),
-                    system_prompt_path=self._prompt_path, evidence_policy=DaqEvidencePolicy(),
+                                       requirements=plan.requirements, access_guard=guard,
+                                       allowed_tools=allowed_tools_for(prepared.schema)
+                                       if prepared else None),
+                    system_prompt_path=self._prompt_path,
+                    evidence_policy=DaqEvidencePolicy(
+                        service_contract=prepared.service_contract if prepared else None,
+                        answer_language=prepared.schema.answer_language if prepared else 'zh',
+                        allowed_chinese_terms=tuple({entity for goal in prepared.schema.goals
+                                                     for entity in goal.entities
+                                                     if any('\u3400' <= char <= '\u9fff'
+                                                            for char in entity)})
+                        if prepared else ()),
                 )
                 done = None
+                clarification = context_clarification_done(prepared)
+                if clarification is not None:
+                    yield StreamEvent('stage', stages.observed(
+                        'clarification', reason='user_intent_missing'))
+                else:
+                    yield StreamEvent('stage', stages.start('loop'))
                 try:
-                    for event in runtime.run(
+                    events = iter((clarification,)) if clarification is not None else runtime.run(
                         user_message, history=list(session.messages), entity_note=plan.context_note,
                         evidence_requirements=plan.evidence_requirements(),
-                    ):
+                    )
+                    for event in events:
                         guard()
                         if event.get("type") == "tool_call":
-                            yield StreamEvent("stage", {
-                                "stage": "tool_call", "status": "running",
-                                "message": str(event.get("name") or "DAQ 正在取证"),
-                            })
+                            yield StreamEvent('stage', stages.observed(
+                                'tool_call', tool=event.get('tool') or event.get('name'),
+                                tool_status=event.get('status')))
                         elif event.get("type") == "done":
                             done = dict(event)
                     if done is None:
                         raise RuntimeError("daq_task_runtime_missing_terminal")
+                    if clarification is None:
+                        yield StreamEvent('stage', stages.finish('loop', outcome=done.get('outcome')))
                 except AnthropicTransportError as exc:
                     done = anthropic_failure(exc)
+                    yield StreamEvent('stage', stages.finish('loop', error=done['outcome']))
                 except httpx.HTTPStatusError as exc:
                     status = exc.response.status_code
                     outcome = ("provider_configuration_error" if status in {400, 401, 403, 404, 422}
@@ -120,10 +209,12 @@ class DaqTaskOrchestrator:
                     done = {"answer": "数采模型请求失败，未生成答案。", "outcome": outcome,
                             "sources": [], "fallback_used": True,
                             "fallback_reason": f"provider_http_{status}"}
+                    yield StreamEvent('stage', stages.finish('loop', error=outcome))
                 except httpx.TransportError as exc:
                     done = {"answer": "数采模型连接失败，未生成答案。", "outcome": "provider_unavailable",
                             "sources": [], "fallback_used": True,
                             "fallback_reason": type(exc).__name__}
+                    yield StreamEvent('stage', stages.finish('loop', error='provider_unavailable'))
             guard()
             runtime_failure = (done["outcome"] in RUNTIME_FAILURE_OUTCOMES
                                or done["outcome"].startswith("provider_")
@@ -134,7 +225,7 @@ class DaqTaskOrchestrator:
             else:
                 done.setdefault("fallback_used", False)
                 done.setdefault("fallback_reason", None)
-            done.setdefault("planned_capabilities", list(plan.planned_capabilities))
+            done.setdefault("planned_capabilities", list(plan.planned_capabilities) if plan else [])
             done.update({"agent_id": AGENT_ID,
                          "knowledge_release": (self._knowledge.release_id if self._knowledge
                                                is not None else EMPTY_KNOWLEDGE_RELEASE),
@@ -147,7 +238,24 @@ class DaqTaskOrchestrator:
                     done, planned_capabilities=done["planned_capabilities"],
                     knowledge_release=EMPTY_KNOWLEDGE_RELEASE,
                 )
-            self._contexts[session_id] = plan.context
+            if prepared is not None:
+                localize_answer(done, prepared.schema.answer_language)
+                done['request_kind'] = prepared.schema.request_kind
+                done['request_schema'] = asdict(prepared.schema)
+                done['evidence_requirements'] = copy.deepcopy(plan.requirements)
+                requirement_status = (done.get('evidence_policy') or {}).get(
+                    'requirement_status', {})
+                done['goal_status'] = {
+                    requirement['goal_id']: requirement_status.get(requirement['id'], 'unknown')
+                    for requirement in plan.requirements if 'goal_id' in requirement
+                }
+            yield StreamEvent('stage', stages.observed(
+                'coverage', requirement_status=(done.get('evidence_policy') or {}).get(
+                    'requirement_status', {}), goal_status=done.get('goal_status', {})))
+            yield StreamEvent('stage', stages.observed(
+                'outcome', outcome=done['outcome'], fallback_used=done['fallback_used']))
+            if plan is not None:
+                self._contexts[session_id] = plan.context
             session.append_message("user", user_message)
             session.append_message("assistant", done["answer"])
             yield StreamEvent("text_delta", {"delta": done["answer"]})

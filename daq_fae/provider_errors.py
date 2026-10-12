@@ -1,5 +1,7 @@
 """Map buffered Anthropic transport diagnostics to visible DAQ outcomes."""
 
+import httpx
+
 from src.agent.anthropic_transport import AnthropicTransportError
 
 
@@ -29,6 +31,24 @@ def anthropic_failure(exc: AnthropicTransportError) -> dict:
         "fallback_used": True,
         "fallback_reason": f"anthropic_transport_{reason}",
     }
+
+
+def provider_exception_done(exc: Exception) -> dict:
+    if isinstance(exc, AnthropicTransportError):
+        return anthropic_failure(exc)
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        outcome = ('provider_configuration_error' if status in {400, 401, 403, 404, 422}
+                   else 'provider_rate_limited' if status == 429
+                   else 'provider_unavailable' if status >= 500 else 'provider_error')
+        return {'answer': '数采模型请求失败，未生成答案。', 'outcome': outcome,
+                'sources': [], 'tool_calls': [], 'provider_status_code': status,
+                'fallback_used': True, 'fallback_reason': f'provider_http_{status}'}
+    if isinstance(exc, httpx.TransportError):
+        return {'answer': '数采模型连接失败，未生成答案。', 'outcome': 'provider_unavailable',
+                'sources': [], 'tool_calls': [], 'error_type': type(exc).__name__,
+                'fallback_used': True, 'fallback_reason': 'provider_transport_error'}
+    raise TypeError('unsupported_provider_exception')
 
 
 def vision_failure_reason(done: dict) -> str | None:

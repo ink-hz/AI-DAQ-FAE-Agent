@@ -3,6 +3,23 @@ import { buildTurnSummaries } from './sessionNav';
 import type { ChatMessage } from './types';
 
 describe('buildTurnSummaries', () => {
+  it('labels a source-free safe abstention by outcome', () => {
+    const messages: ChatMessage[] = [
+      { id: 'u-safe', role: 'user', content: '整机精度？', createdAt: 1 },
+      { id: 'a-safe', role: 'assistant', content: '暂无法确认', createdAt: 2,
+        sources: [], done: { outcome: 'safe_abstained', fallback_used: false } },
+    ];
+    expect(buildTurnSummaries(messages)[0]?.meta).toBe('safe abstained');
+  });
+  it('identifies a service-contract answer without product sources', () => {
+    const messages: ChatMessage[] = [
+      { id: 'u-service', role: 'user', content: '介绍一下你自己', createdAt: 1 },
+      { id: 'a-service', role: 'assistant', content: '我是数采 FAE', createdAt: 2,
+        sources: [], done: { outcome: 'resolved', request_kind: 'service',
+          fallback_used: false } },
+    ];
+    expect(buildTurnSummaries(messages)[0]?.meta).toBe('answered · service contract');
+  });
   it('uses the previous user message as the turn title', () => {
     const messages: ChatMessage[] = [
       {

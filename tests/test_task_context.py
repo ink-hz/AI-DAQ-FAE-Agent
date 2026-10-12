@@ -3,6 +3,74 @@ import pytest
 from daq_fae.task_context import extract_context_hints, prepare_turn
 
 
+def test_service_identity_is_not_planned_as_missing_product_evidence():
+    from daq_fae.request_schema import DaqRequestSchema
+    schema = DaqRequestSchema.from_candidate('介绍一下你自己', {
+        'confidence': 'high', 'goals': [{'kind': 'service', 'capability': 'service_identity'}],
+    })
+    plan = prepare_turn('介绍一下你自己', request_schema=schema)
+    assert plan.planned_capabilities == ('service_identity',)
+    assert len(plan.requirements) == 1
+    assert plan.requirements[0]['evidence_class'] == 'service_contract'
+
+
+def test_service_and_product_request_keeps_two_independent_goals():
+    from daq_fae.request_schema import DaqRequestSchema
+    question = '介绍一下你自己，再说说 EGO 双目 1600×1200 版本的水平视场角。'
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [
+            {'kind': 'service', 'capability': 'service_identity'},
+            {'kind': 'product', 'capability': 'lookup_spec', 'entities': ['EGO'],
+             'field': 'horizontal_fov', 'conditions': {'resolution_variant': '1600x1200'}},
+        ],
+    })
+    plan = prepare_turn(question, request_schema=schema)
+    assert 'service_identity' in plan.planned_capabilities
+    assert 'lookup_spec' in plan.planned_capabilities
+    assert {requirement['evidence_class'] for requirement in plan.requirements} == {
+        'service_contract', 'governed_required',
+    }
+
+
+def test_reviewed_entity_scope_survives_followup_and_clears_on_topic_switch():
+    from daq_fae.request_schema import DaqRequestSchema
+    first_question = '我用 EGO 双目 1600×1200 版本'
+    first_schema = DaqRequestSchema.from_candidate(first_question, {
+        'confidence': 'high', 'goals': [{
+            'kind': 'product', 'capability': 'resolve_entity', 'entities': ['EGO'],
+            'conditions': {'resolution_variant': '1600x1200'},
+        }],
+    })
+    first = prepare_turn(first_question, request_schema=first_schema,
+                         grounded_targets={'entities': ['entity:ego-1600'],
+                                           'conditions': {'resolution_variant': '1600x1200'}})
+    followup_question = '它的水平视场角呢？'
+    followup_schema = DaqRequestSchema.from_candidate(followup_question, {
+        'confidence': 'high', 'goals': [{
+            'kind': 'product', 'capability': 'lookup_spec', 'entities': ['EGO'],
+            'field': 'horizontal_fov',
+        }],
+        'effective_question': 'EGO 双目 1600×1200 版本的水平视场角是多少？',
+    }, prior_user_context=first_question)
+    second = prepare_turn(followup_question, previous=first.context.to_checkpoint(),
+                          request_schema=followup_schema)
+    spec = next(row for row in second.requirements if row['capability'] == 'lookup_spec')
+    assert spec['entities'] == ['entity:ego-1600']
+    assert spec['conditions']['resolution_variant'] == '1600x1200'
+    switched_question = '换个问题，数采 HUB 有几个下游端口？'
+    switched_schema = DaqRequestSchema.from_candidate(switched_question, {
+        'confidence': 'high', 'topic_switch': True, 'goals': [{
+            'kind': 'product', 'capability': 'lookup_spec', 'entities': ['数采 HUB'],
+            'field': 'downstream_port_count',
+        }],
+    })
+    third = prepare_turn(switched_question, previous=second.context.to_checkpoint(),
+                         request_schema=switched_schema,
+                         grounded_targets={'entities': ['entity:hub'], 'conditions': {}})
+    assert third.requirements[0]['entities'] == ['entity:hub']
+    assert 'resolution_variant' not in third.requirements[0]['conditions']
+
+
 def test_context_inherits_setup_versions_and_attempted_steps_for_short_followup():
     first = prepare_turn('录制失败，SDK 报错', updates={
         'equipment': ['unit-a', 'wrist-b', 'hub-c'], 'variant': 'revision-2',
@@ -88,6 +156,52 @@ def test_attachment_requirements_remain_separate_user_evidence():
     assert image[0]['evidence_class'] == 'user_evidence_required'
     assert '"image_source_ids": ["image-src-test"]' in plan.context_note
     assert '"text_source_ids": ["att-src-test"]' in plan.context_note
+
+
+def test_model_attachment_goal_has_one_traceable_requirement_and_no_product_source():
+    from daq_fae.request_schema import DaqRequestSchema
+    schema = DaqRequestSchema.from_candidate('这张图片里能看到什么？', {
+        'confidence': 'high', 'goals': [
+            {'kind': 'attachment', 'capability': 'analyze_image'},
+        ],
+    }, attachment_present=True, image_present=True)
+    plan = prepare_turn('这张图片里能看到什么？', request_schema=schema,
+                        image_source_ids=['att-src-image'])
+    assert len(plan.requirements) == 1
+    requirement = plan.requirements[0]
+    assert requirement['goal_id'] == schema.goals[0].id
+    assert requirement['capability'] == 'analyze_image'
+    assert requirement['source_ids'] == ['att-src-image']
+    assert requirement['evidence_class'] == 'user_evidence_required'
+    assert plan.planned_capabilities == ('analyze_image',)
+
+    without_image = prepare_turn('这张图片里能看到什么？', request_schema=schema)
+    assert len(without_image.requirements) == 1
+    assert without_image.requirements[0]['goal_id'] == schema.goals[0].id
+    assert without_image.requirements[0]['evidence_class'] == 'clarification_required'
+
+
+def test_context_statement_survives_checkpoint_as_user_words_and_clears_on_topic_switch():
+    from daq_fae.request_schema import DaqRequestSchema
+    setup = '我使用一台 EGO、两台 WristCam 和 HUB 接 PC 采集。'
+    schema = DaqRequestSchema.from_candidate(setup, {
+        'confidence': 'medium', 'goals': [
+            {'kind': 'product', 'capability': 'resolve_entity',
+             'entities': ['EGO', 'WristCam', 'HUB']},
+            {'kind': 'unknown', 'capability': 'clarify'},
+        ],
+    })
+    first = prepare_turn(setup, request_schema=schema)
+    checkpoint = first.context.to_checkpoint()
+    assert checkpoint['setup_statement'] == {
+        'value': setup, 'origin_turn': 1, 'certainty': 'asserted',
+        'authority': 'user_supplied',
+    }
+    followup = prepare_turn('接下来怎么落盘？', previous=checkpoint)
+    assert followup.context.setup_statement.value == setup
+    switched = prepare_turn('换个问题，HUB 有几个下游端口？',
+                            previous=followup.context.to_checkpoint())
+    assert switched.context.setup_statement is None
 
 
 def test_distinct_procedures_and_software_surfaces_have_distinct_requirements():
@@ -226,6 +340,29 @@ def test_rgb_and_mono_resolution_require_distinct_evidence():
     assert [item['field'] for item in mono.requirements if item['capability'] == 'lookup_spec'] == ['mono_resolution']
     assert [item['field'] for item in both.requirements if item['capability'] == 'lookup_spec'] == [
         'rgb_resolution', 'mono_resolution']
+
+
+def test_reviewed_entity_grounding_controls_product_requirement_after_followup():
+    from daq_fae.request_schema import DaqRequestSchema
+    schema = DaqRequestSchema.from_candidate('它的水平视场角呢？', {
+        'confidence': 'high', 'effective_question': 'EGO 双目 1600×1200 版本的水平视场角是多少？',
+        'goals': [{'kind': 'product', 'capability': 'lookup_spec',
+                   'entities': ['EGO 双目'], 'field': 'horizontal_fov',
+                   'conditions': {'resolution_variant': '1600x1200'}}],
+    }, prior_user_context='我用 EGO 双目 1600×1200 版本')
+    plan = prepare_turn('它的水平视场角呢？', request_schema=schema,
+                        previous={'version': 2, 'topic_id': 'topic_1', 'turn': 1,
+                                  'values': {'equipment': {'value': ['EGO 双目'],
+                                                          'origin_turn': 1,
+                                                          'certainty': 'asserted',
+                                                          'authority': 'user_supplied'}},
+                                  'attempted_steps': [], 'active_capabilities': [],
+                                  'grounded_scope': {'entities': ['entity:ego-1600'],
+                                                     'conditions': {'resolution_variant': '1600x1200'}}},
+                        grounded_targets={'entities': ['entity:ego-1600'],
+                                          'conditions': {'resolution_variant': '1600x1200'}})
+    requirement = next(item for item in plan.requirements if item['capability'] == 'lookup_spec')
+    assert requirement['entities'] == ['entity:ego-1600']
 
 
 def test_rgb_frame_rate_requires_rgb_evidence():

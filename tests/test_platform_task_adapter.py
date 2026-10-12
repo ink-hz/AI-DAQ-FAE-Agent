@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
+import httpx
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 
@@ -24,6 +25,90 @@ from tests.test_platform_identity import FakePlatform, environment as identity_e
 from src.platform_identity.service import InMemoryAuthenticatedSessionRepository
 
 pytest_plugins = ('tests.test_durable_state',)
+
+
+def test_platform_task_semantic_service_goal_uses_service_contract():
+    class ServiceAdapter:
+        model = 'scripted-dev'
+        tool_choice_strategy = 'submit_only_auto'
+
+        def chat(self, messages, tools=None, required_tool=None):
+            if required_tool == 'submit_daq_request_schema':
+                yield {'type': 'tool_call', 'id': 'schema', 'name': required_tool,
+                       'arguments': {'confidence': 'high', 'goals': [
+                           {'kind': 'service', 'capability': 'service_identity'}]}}
+            else:
+                yield {'type': 'tool_call', 'id': 'answer', 'name': 'submit_answer',
+                       'arguments': {'outcome': 'resolved',
+                                     'conclusion': '我是奥比中光内部数采 FAE 助手。'}}
+            yield {'type': 'stop', 'stop_reason': 'tool_use', 'usage': None}
+
+    sessions = SessionStore(ttl_seconds=3600)
+    session = sessions.create(channel='fae')
+    orchestrator = DaqTaskOrchestrator(adapter=ServiceAdapter(), session_store=sessions,
+                                       runtime_release='runtime-dev')
+    events = list(orchestrator.handle_stream(session_id=session.session_id,
+                                             user_message='介绍一下你自己'))
+    assert events[-1].kind == 'done'
+    assert events[-1].data['outcome'] == 'resolved'
+    assert events[-1].data['planned_capabilities'] == ['service_identity']
+    stages = [item.data for item in events if item.kind == 'stage']
+    assert {item['stage'] for item in stages if item.get('status') == 'running'} <= {
+        item['stage'] for item in stages if item.get('status') in {'completed', 'error'}}
+
+
+def test_platform_setup_statement_uses_the_same_no_loop_clarification():
+    class ContextAdapter:
+        model = 'scripted-dev'
+        tool_choice_strategy = 'submit_only_auto'
+
+        def chat(self, messages, tools=None, required_tool=None):
+            assert required_tool == 'submit_daq_request_schema'
+            yield {'type': 'tool_call', 'id': 'schema', 'name': required_tool,
+                   'arguments': {'confidence': 'medium', 'goals': [
+                       {'kind': 'product', 'capability': 'resolve_entity',
+                        'entities': ['EGO']},
+                       {'kind': 'unknown', 'capability': 'clarify'},
+                   ]}}
+
+    sessions = SessionStore(ttl_seconds=3600)
+    session = sessions.create(channel='fae')
+    orchestrator = DaqTaskOrchestrator(
+        adapter=ContextAdapter(), session_store=sessions,
+        runtime_release='runtime-dev')
+    events = list(orchestrator.handle_stream(
+        session_id=session.session_id,
+        user_message='我用 EGO 双目 1600×1200 版本'))
+    done = events[-1].data
+    assert done['outcome'] == 'safe_abstained'
+    assert done['synthesis_mode'] == 'context_clarification'
+    stages = [event.data['stage'] for event in events if event.kind == 'stage']
+    assert 'clarification' in stages and 'loop' not in stages
+    assert orchestrator._contexts[session.session_id].setup_statement.value == \
+        '我用 EGO 双目 1600×1200 版本'
+
+
+def test_platform_schema_provider_400_keeps_configuration_failure_distinct():
+    class BadSchemaAdapter:
+        model = 'scripted-dev'
+        tool_choice_strategy = 'submit_only_auto'
+
+        def chat(self, messages, tools=None, required_tool=None):
+            assert required_tool == 'submit_daq_request_schema'
+            request = httpx.Request('POST', 'https://gateway.invalid/messages')
+            response = httpx.Response(400, request=request)
+            raise httpx.HTTPStatusError('bad request', request=request, response=response)
+            yield  # pragma: no cover
+
+    sessions = SessionStore(ttl_seconds=3600)
+    session = sessions.create(channel='fae')
+    events = list(DaqTaskOrchestrator(
+        adapter=BadSchemaAdapter(), session_store=sessions,
+        runtime_release='runtime-dev').handle_stream(
+            session_id=session.session_id, user_message='介绍你的服务'))
+    assert events[-1].kind == 'done'
+    assert events[-1].data['outcome'] == 'provider_configuration_error'
+    assert all(item.data.get('stage') != 'loop' for item in events if item.kind == 'stage')
 
 
 def test_task_orchestrator_uses_daq_loop_and_preserves_followup_context():

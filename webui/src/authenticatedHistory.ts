@@ -1,6 +1,7 @@
 import type {
   AuthenticatedConversationAttachment,
   AuthenticatedConversationDetail,
+  AuthenticatedConversationTurn,
   ChatMessage,
   Role,
 } from './types';
@@ -29,10 +30,8 @@ function readRole(value: unknown): Role {
 /**
  * Turn one owned conversation into renderable messages.
  *
- * The server persists only `{role, content}`, so the render metadata here is
- * deliberately synthetic and empty: no source evidence, no stages, no trace or
- * turn id and no bearer attachment id is invented. Message order is preserved
- * 1:1 with the server list so feedback keeps addressing turns by index.
+ * Match optional owner-scoped persisted turns to the sealed message sequence.
+ * Older turns without a projection retain empty, synthetic render metadata.
  */
 export function normalizeRestoredConversation(
   payload: unknown,
@@ -43,11 +42,30 @@ export function normalizeRestoredConversation(
   if (typeof sessionId !== 'string' || !sessionId) invalid();
   if (detail.channel !== 'fae') invalid();
   if (!Array.isArray(detail.messages)) invalid();
+  const turns = detail.turns ?? [];
+  if (!Array.isArray(turns)) invalid();
+  const byIndex = new Map<number, AuthenticatedConversationTurn>();
+  for (const turn of turns) {
+    if (turn === null || typeof turn !== 'object'
+        || !Number.isInteger(turn.turn_index) || turn.turn_index < 0
+        || typeof turn.turn_id !== 'string' || typeof turn.trace_id !== 'string'
+        || typeof turn.question !== 'string' || typeof turn.answer !== 'string'
+        || typeof turn.outcome !== 'string'
+        || !Array.isArray(turn.sources) || !Array.isArray(turn.stages)
+        || turn.done === null || typeof turn.done !== 'object' || Array.isArray(turn.done)
+        || byIndex.has(turn.turn_index)) invalid();
+    byIndex.set(turn.turn_index, turn);
+  }
+  let assistantIndex = 0;
+  let previousUser: string | undefined;
   const messages = detail.messages.map((message, index): ChatMessage => {
     if (message === null || typeof message !== 'object') invalid();
     const role = readRole((message as { role?: unknown }).role);
     const content = (message as { content?: unknown }).content;
     if (typeof content !== 'string') invalid();
+    if (role === 'user') previousUser = content;
+    const turn = role === 'assistant' ? byIndex.get(assistantIndex++) : undefined;
+    if (turn && (turn.question !== previousUser || turn.answer !== content)) invalid();
     return {
       id: `history-${sessionId}-${index}`,
       role,
@@ -55,10 +73,13 @@ export function normalizeRestoredConversation(
       // Synthetic monotonic order, not a clock reading: the server keeps no
       // per-message timestamp and the UI must not imply one.
       createdAt: index,
-      restored: true,
-      sources: [],
-      stages: [],
-      ...(role === 'assistant' ? { done: { session_id: sessionId } } : {}),
+      restored: !turn,
+      sources: turn?.sources ?? [],
+      stages: turn?.stages ?? [],
+      ...(role === 'assistant' ? { done: turn
+        ? { ...turn.done, outcome: turn.outcome, trace_id: turn.trace_id,
+            turn_id: turn.turn_id, session_id: sessionId }
+        : { session_id: sessionId } } : {}),
     };
   });
   const attachments = detail.attachments;

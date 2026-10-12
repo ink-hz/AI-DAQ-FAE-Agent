@@ -12,6 +12,9 @@ from pathlib import Path
 from urllib.parse import parse_qsl, unquote, urlsplit
 from uuid import UUID, uuid4
 
+import psycopg
+from psycopg.rows import dict_row
+
 from src.agent.session import Session
 from src.api.routes import (
     _redact_attachment_done,
@@ -95,14 +98,46 @@ class _FailClosedFeedbackWriter:
         raise ConversationStoreError("daq_feedback_storage_unavailable")
 
 
+class DaqTurnHistoryReader:
+    """Read only DAQ turns from the same owner-bound Postgres schema."""
+
+    def __init__(self, database_url: str):
+        self.database_url = database_url
+
+    def list_for_subject(self, session_id: str, subject_id: UUID) -> list[dict]:
+        try:
+            with psycopg.connect(self.database_url, row_factory=dict_row) as connection:
+                rows = connection.execute(
+                    """select turn.id, turn.turn_index, turn.trace_id, turn.question,
+                              turn.answer, turn.sources, turn.stages, turn.done, turn.outcome
+                       from chat_turns turn
+                       join chat_sessions session on session.id = turn.session_id
+                       where session.external_session_id = %s
+                         and session.owner_subject_id = %s
+                         and turn.metadata->>'agent_id' = %s
+                       order by turn.turn_index""",
+                    (session_id, str(subject_id), AGENT_ID),
+                ).fetchall()
+        except psycopg.Error:
+            raise ConversationStoreError('daq_turn_history_unavailable') from None
+        return [{
+            'turn_index': row['turn_index'], 'turn_id': str(row['id']),
+            'trace_id': row['trace_id'], 'question': row['question'],
+            'answer': row['answer'], 'sources': row['sources'],
+            'stages': row['stages'], 'done': row['done'], 'outcome': row['outcome'],
+        } for row in rows]
+
+
 class DaqAuthenticatedPersistence:
     def __init__(self, *, conversation_repository, feedback_store, review_store,
-                 runtime_release, knowledge_release, reviewer_subject_ids):
+                 runtime_release, knowledge_release, reviewer_subject_ids,
+                 turn_history_reader=None):
         self.knowledge_access = None
         self.conversations = conversation_repository
         self.feedback = feedback_store
         self._review = review_store
         self._reviewers = reviewer_subject_ids
+        self.turn_history_reader = turn_history_reader
         self._versions = {"agent_id": AGENT_ID, "runtime_release": runtime_release,
                           "knowledge_release": knowledge_release}
 
@@ -156,6 +191,10 @@ class DaqAuthenticatedPersistence:
             raise ConversationStoreError("daq_conversation_storage_unavailable") from None
         result["attachments"] = [{**asdict(item), "created_at": item.created_at.isoformat()}
                                  for item in attachments]
+        result['turns'] = (self.turn_history_reader.list_for_subject(session_id, subject.subject_id)
+                           if self.turn_history_reader is not None else [])
+        # A role change during the projection must invalidate the whole response.
+        self.load_session(subject, session_id)
         return result
 
     def list_conversations(self, subject, *, cursor=None, limit=30):
@@ -327,6 +366,8 @@ def configure_authenticated_persistence(
     adapter = DaqAuthenticatedPersistence(
         conversation_repository=repository, feedback_store=feedback, review_store=review,
         runtime_release=runtime_release, knowledge_release=knowledge_release, reviewer_subject_ids=reviewers,
+        turn_history_reader=(DaqTurnHistoryReader(repository._database_url)
+                             if isinstance(repository, AuthenticatedConversationRepository) else None),
     )
     app.state.daq_authenticated_persistence = adapter
     app.state.authenticated_conversation_repository = repository

@@ -60,6 +60,13 @@ def test_authenticated_archive_has_daq_manifest_and_owner_history(tmp_path, monk
         assert done['outcome'] == 'safe_abstained'
         sid = done['session_id']
         detail = client.get(f'/authenticated/conversations/{sid}').json()
+        assert detail['turns'][0]['outcome'] == done['outcome']
+        assert detail['turns'][0]['trace_id'] == done['trace_id']
+        assert detail['turns'][0]['stages']
+        assert {item['stage'] for item in detail['turns'][0]['stages']
+                if item['status'] == 'running'} <= {
+            item['stage'] for item in detail['turns'][0]['stages']
+            if item['status'] in {'completed', 'error'}}
         assert detail['attachments'][0]['source_id']
         assert detail['attachments'][0]['status'] == 'pending'
 

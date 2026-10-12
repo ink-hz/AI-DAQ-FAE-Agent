@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import json
+import copy
+from dataclasses import asdict
 from pathlib import Path
 import time
 from typing import Literal
@@ -41,6 +43,10 @@ from daq_fae.platform_identity import configure_platform_identity
 from daq_fae.platform_tasks import configure_platform_tasks
 from daq_fae.webui import mount_authenticated_webui, mount_local_webui
 from daq_fae.offline_adapter import OfflineAdapter
+from daq_fae.workflow import (StageLedger, prepare_workflow, allowed_tools_for,
+                              context_clarification_done)
+from daq_fae.request_schema import SchemaExtractionError
+from daq_fae.response_language import localize_answer
 from daq_fae.api_transport import ChatRequest, LocalRequestRegistry, RequestRecord, is_local_peer
 from src.agent.session import SessionStore
 from src.api.stream import StreamHeartbeat, iter_with_heartbeat, sse_event
@@ -451,10 +457,15 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
         def runtime_events():
             progress = []
             plan = None
+            prepared = None
+            stages = StageLedger(ctx.trace_id)
             try:
                 with install_trace_ctx(ctx):
                     done = None
+                    clarification = None
+                    yield 'stage', stages.start('guardrail')
                     refusal = categorize_refusal(request.message)
+                    yield 'stage', stages.finish('guardrail', refusal=bool(refusal))
                     if refusal:
                         category, answer = refusal
                         events = iter(({"type": "done", "answer": answer,
@@ -463,6 +474,7 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                                         "actual_capabilities": [], "capability_coverage": {},
                                         "refusal_category": category},))
                     else:
+                        yield 'stage', stages.start('schema')
                         visible_attachments = session.visible_attachments()
                         image_source_ids = [
                             item.source_id for item in visible_attachments if item.kind == "image"
@@ -470,18 +482,47 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                         text_source_ids = [
                             item.source_id for item in visible_attachments if item.kind != "image"
                         ]
-                        plan = prepare_turn(
-                            request.message,
-                            previous=app.state.local_state.load_context(session.session_id),
-                            attachment_source_ids=text_source_ids,
-                            image_source_ids=image_source_ids,
-                            grounded_targets=(knowledge.ground_question(request.message)
-                                              if candidate_mode else None),
-                        )
+                        previous = app.state.local_state.load_context(session.session_id)
+                        if isinstance(adapter, OfflineAdapter):
+                            # The offline smoke adapter has no semantic model.
+                            plan = prepare_turn(
+                                request.message, previous=previous,
+                                attachment_source_ids=text_source_ids,
+                                image_source_ids=image_source_ids,
+                                grounded_targets=(knowledge.ground_question(request.message)
+                                                  if candidate_mode else None),
+                            )
+                            prepared = None
+                        else:
+                            prepared = prepare_workflow(
+                                request.message, adapter=adapter, previous=previous,
+                                knowledge=knowledge, role='internal_fae',
+                                runtime_release=runtime_release,
+                                prior_user_context='\n'.join(
+                                    item['content'] for item in prior_history[-8:]
+                                    if item.get('role') == 'user' and isinstance(item.get('content'), str)),
+                                attachment_source_ids=text_source_ids,
+                                image_source_ids=image_source_ids,
+                                grounded_targets=(knowledge.ground_question(request.message)
+                                                  if candidate_mode else None),
+                            )
+                            plan = prepared.plan
+                        yield 'stage', stages.finish(
+                            'schema', request_kind=(prepared.schema.request_kind
+                                                    if prepared else 'offline_synthetic'),
+                            **({'goal_ids': [goal.id for goal in prepared.schema.goals],
+                                'original_question': prepared.schema.original_question,
+                                'effective_question': prepared.schema.effective_question,
+                                'entity_scope': sorted({entity for goal in prepared.schema.goals
+                                                        for entity in goal.entities}),
+                                'attachment_dependency': prepared.schema.attachment_dependency,
+                                'confidence': prepared.schema.confidence}
+                               if prepared else {}))
                         base_toolbox = DaqToolBox(
                             context=plan.context.tool_context(), knowledge=knowledge,
                             role="internal_fae" if candidate_mode else None,
                             requirements=plan.requirements,
+                            allowed_tools=allowed_tools_for(prepared.schema) if prepared else None,
                         )
                         toolbox = (
                             extend_with_attachments(
@@ -497,28 +538,49 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                                 "reviewed_knowledge_system.md" if knowledge is not None
                                 else "empty_knowledge_system.md"
                             ),
-                            evidence_policy=DaqEvidencePolicy(allow_dev_source_check=candidate_mode),
+                            evidence_policy=DaqEvidencePolicy(
+                                allow_dev_source_check=candidate_mode,
+                                service_contract=prepared.service_contract if prepared else None,
+                                answer_language=prepared.schema.answer_language if prepared else 'zh',
+                                allowed_chinese_terms=tuple({entity for goal in prepared.schema.goals
+                                                             for entity in goal.entities
+                                                             if any('\u3400' <= char <= '\u9fff'
+                                                                    for char in entity)})
+                                if prepared else ()),
                         )
                         events = runtime.run(
-                            request.message, history=prior_history,
+                            prepared.loop_question if prepared else request.message,
+                            history=prior_history,
                             entity_note=plan.context_note,
                             evidence_requirements=plan.evidence_requirements(),
                             required_attachment_source_ids=(
                                 list(toolbox.attachment_source_ids) if request.attachment_ids else None
                             ),
                             required_image_source_ids=image_source_ids,
-                            attachment_dependency=(
-                                "required_for_answer" if request.attachment_ids else "unknown"
-                            ),
+                            attachment_dependency=(prepared.schema.attachment_dependency
+                                                   if prepared else
+                                                   "required_for_answer" if request.attachment_ids
+                                                   else "unknown"),
                         )
+                        clarification = context_clarification_done(prepared)
+                        if clarification is not None:
+                            events = iter((clarification,))
+                            yield 'stage', stages.observed(
+                                'clarification', reason='user_intent_missing')
+                        else:
+                            yield 'stage', stages.start('loop')
                     for event in events:
                         if event.get("type") == "tool_call":
                             progress.append(event)
-                            yield "stage", {"stage": "tool_call", **event}
+                            yield 'stage', stages.observed('tool_call',
+                                                           tool=event.get('tool') or event.get('name'),
+                                                           tool_status=event.get('status'))
                         elif event.get("type") == "done":
                             done = dict(event)
                     if done is None:
                         raise RuntimeError("runtime_missing_terminal")
+                    if not refusal and clarification is None:
+                        yield 'stage', stages.finish('loop', outcome=done.get('outcome'))
             except AnthropicTransportError as exc:
                 done = anthropic_failure(exc)
             except httpx.HTTPStatusError as exc:
@@ -550,6 +612,12 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                     "fallback_used": True,
                     "fallback_reason": "provider_transport_error",
                 }
+            except SchemaExtractionError as exc:
+                done = {
+                    'type': 'done', 'answer': '本轮请求理解失败，未生成可靠答案。',
+                    'outcome': 'schema_error', 'sources': [], 'tool_calls': [],
+                    'fallback_used': True, 'fallback_reason': str(exc),
+                }
             except Exception as exc:
                 done = {
                     "type": "done",
@@ -561,6 +629,9 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                     "fallback_used": True,
                     "fallback_reason": "runtime_error",
                 }
+
+            for stage in stages.close_errors(done['outcome']):
+                yield 'stage', stage
 
             if done["outcome"] in RUNTIME_FAILURE_OUTCOMES:
                 done["fallback_used"] = True
@@ -600,12 +671,30 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                 "capability_coverage": coverage,
                 "coverage_status": coverage_status,
                 "duration_ms": int((time.monotonic() - started_at) * 1000),
+                "stages": stages.events,
             })
             done.pop("provenance", None)
             refine_empty_release_answer(
                 done, planned_capabilities=done["planned_capabilities"],
                 knowledge_release=knowledge_release,
             )
+            if prepared is not None:
+                localize_answer(done, prepared.schema.answer_language)
+                done['request_kind'] = prepared.schema.request_kind
+                done['request_schema'] = asdict(prepared.schema)
+                done['evidence_requirements'] = copy.deepcopy(plan.requirements)
+                requirement_status = (done.get('evidence_policy') or {}).get(
+                    'requirement_status', {})
+                done['goal_status'] = {
+                    requirement['goal_id']: requirement_status.get(requirement['id'], 'unknown')
+                    for requirement in plan.requirements if 'goal_id' in requirement
+                }
+            yield 'stage', stages.observed(
+                'coverage', requirement_status=(done.get('evidence_policy') or {}).get(
+                    'requirement_status', {}), goal_status=done.get('goal_status', {}))
+            outcome_stage = stages.observed(
+                'outcome', outcome=done['outcome'], fallback_used=done['fallback_used'])
+            yield 'stage', outcome_stage
             session.append_message("user", request.message)
             session.append_message("assistant", done["answer"])
             try:
@@ -650,7 +739,6 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                 def opening_events():
                     yield "session", {"session_id": session.session_id, "agent_id": AGENT_ID,
                                       "client_request_id": request.client_request_id}
-                    yield "stage", {"stage": "loop", "status": "running"}
                     yield from runtime_events()
 
                 for name, payload in opening_events():

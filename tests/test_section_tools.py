@@ -125,6 +125,30 @@ def test_typed_spec_still_works_in_section_release(tmp_path):
     assert result.content['matches'][0]['data']['value'] == '1600x1200'
 
 
+def test_hybrid_release_searches_uncovered_visible_records_as_well_as_sections(tmp_path):
+    view = make_view(tmp_path)
+    manifest = deepcopy(view.manifest)
+    extra = _entity()
+    extra['id'] = 'entity:hybrid-only'
+    extra['data']['name'] = 'HYBRID-ONLY'
+    extra = _reviewed(extra)
+    extra['answerable'] = True
+    manifest['records'].append(extra)
+    hybrid = ReviewedKnowledge(view.release_id, manifest)
+    box = DaqToolBox(knowledge=hybrid, role='internal_fae')
+    section = box.dispatch('search_knowledge', {'query': '演示设备'})
+    assert section.status == 'ok'
+    assert any(item.get('section_id') == 'section:product' for item in section.content['matches'])
+    record = box.dispatch('search_knowledge', {'query': 'HYBRID-ONLY'})
+    assert record.status == 'ok'
+    assert [item['id'] for item in record.content['matches']] == ['entity:hybrid-only']
+    assert record.content['matches'][0]['evidence_layer'] == 'reviewed_record'
+    assert record.content['matched_requirement_ids'] == []
+    assert record.sources[0]['release_id'] == view.release_id
+    assert DaqToolBox(knowledge=hybrid, role='channel').dispatch(
+        'search_knowledge', {'query': 'HYBRID-ONLY'}).status == 'not_found'
+
+
 @pytest.mark.parametrize('name,args', [
     ('read_doc', {}), ('read_doc', {'section_id': ['section:product']}),
     ('search_knowledge', {'query': 123}), ('search_knowledge', {'query': 'x' * 2001}),

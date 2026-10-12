@@ -25,7 +25,14 @@ export function buildThinkingSteps(activeAssistant?: ChatMessage): ThinkingStep[
   // it is not evidence about planning, grounding, coverage, or fallback.
   if (activeAssistant.restored) return [];
 
-  const steps = (activeAssistant.stages || []).map(stageToThinkingStep);
+  const stageEvents = activeAssistant.stages || [];
+  const lastById = new Map<string, number>();
+  stageEvents.forEach((stage, index) => {
+    if (stage.stage_id) lastById.set(stage.stage_id, index);
+  });
+  const steps = stageEvents
+    .filter((stage, index) => !stage.stage_id || lastById.get(stage.stage_id) === index)
+    .map(stageToThinkingStep);
   const capabilityStep = capabilityPlanStep(activeAssistant.done);
   if (capabilityStep) steps.push(capabilityStep);
 
@@ -79,7 +86,8 @@ function stageToThinkingStep(stage: StageEvent, index: number): ThinkingStep {
     id: `stage-${index}`,
     title: stage.agent || stage.stage || 'Agent',
     detail: stage.message || stage.status || 'running',
-    status: 'done',
+    status: stage.status === 'running' ? 'running'
+      : stage.status === 'error' ? 'warning' : 'done',
     elapsedMs: stage.elapsed_ms,
   };
 }
@@ -127,10 +135,22 @@ function riskStatusStep(done: DoneEvent): ThinkingStep {
       status: 'warning',
     };
   }
+  if (done.outcome === 'safe_abstained') {
+    return {
+      id: 'risk', title: '风险状态',
+      detail: '安全弃答 · 关键证据仍不足', status: 'warning',
+    };
+  }
+  if (done.outcome && done.outcome !== 'resolved') {
+    return {
+      id: 'risk', title: '风险状态',
+      detail: `请求未完成 · ${done.outcome}`, status: 'warning',
+    };
+  }
   return {
     id: 'risk',
     title: '风险状态',
-    detail: 'No fallback reported',
+    detail: '已完成',
     status: 'done',
   };
 }

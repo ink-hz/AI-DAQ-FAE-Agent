@@ -59,6 +59,14 @@ class UngroundedAdapter:
     tool_choice_strategy = "submit_only_auto"
 
     def chat(self, messages, tools, required_tool=None):
+        if required_tool == 'submit_daq_request_schema':
+            yield {'type': 'tool_call', 'id': 'schema', 'name': required_tool,
+                   'arguments': {'confidence': 'high', 'goals': [{
+                       'kind': 'product', 'capability': 'lookup_spec',
+                       'entities': ['EG-DB'], 'field': 'accuracy',
+                   }]}}
+            yield {'type': 'stop', 'stop_reason': 'tool_use', 'usage': None}
+            return
         yield {
             "type": "tool_call",
             "id": "unguarded-answer",
@@ -91,6 +99,14 @@ def test_ungrounded_escalation_cannot_deliver_a_claim_either():
         tool_choice_strategy = "submit_only_auto"
 
         def chat(self, messages, tools, required_tool=None):
+            if required_tool == 'submit_daq_request_schema':
+                yield {'type': 'tool_call', 'id': 'schema', 'name': required_tool,
+                       'arguments': {'confidence': 'high', 'goals': [{
+                           'kind': 'product', 'capability': 'lookup_spec',
+                           'entities': ['EG-DB'], 'field': 'accuracy',
+                       }]}}
+                yield {'type': 'stop', 'stop_reason': 'tool_use', 'usage': None}
+                return
             yield {
                 "type": "tool_call",
                 "id": "unguarded-escalation",

@@ -253,7 +253,7 @@ def test_task_context_checkpoint_round_trip_preserves_multiturn_user_provenance(
 
 
 @pytest.mark.parametrize('mutation', [
-    lambda raw: raw.update(version=2),
+    lambda raw: raw.update(version=4),
     lambda raw: raw.update(verified_facts={'frame_rate': 120}),
     lambda raw: raw['values']['equipment'].update(authority='official_fact'),
     lambda raw: raw.update(turn='1'),

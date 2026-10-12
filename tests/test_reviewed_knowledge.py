@@ -1,4 +1,5 @@
 from copy import deepcopy
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -6,13 +7,28 @@ from fastapi.testclient import TestClient
 from daq_fae.app import create_app
 from daq_fae.knowledge.records import access_fingerprint, record_fingerprint
 from daq_fae.knowledge.releases import _activate_release as activate_release, _publish_release as publish_release
+from daq_fae.knowledge.releases import read_active_release
 from synthetic_release_helpers import load_fixture_active, approve_fixture_for_app
 from daq_fae.knowledge.reviewed_view import ReviewedKnowledge
 from daq_fae.domain_tools import DaqToolBox
+from daq_fae.domain_tools import _field_intent_matches
 from daq_fae.task_context import prepare_turn
 
 
 SOURCE_SHA = "a" * 64
+
+
+def test_frame_rate_requirement_matches_the_verified_fps_field_without_crossing_modalities():
+    assert _field_intent_matches('rgb_max_frame_rate', 'rgb_max_fps')
+    assert _field_intent_matches('rgb_frame_rate', 'rgb_max_fps')
+    assert not _field_intent_matches('rgb_max_frame_rate', 'stereo_mono_max_fps')
+
+
+def test_context_only_toolbox_does_not_expose_unrequested_product_search():
+    box = DaqToolBox(allowed_tools=frozenset({'resolve_entity', 'session_state'}))
+    names = {item['function']['name'] for item in box.tool_schemas()}
+    assert names == {'resolve_entity', 'session_state'}
+    assert box.dispatch('lookup_spec', {'entity': 'EGO', 'field': 'horizontal_fov'}).status == 'tool_error'
 SOURCE_REF = {"path": "spec.md", "sha256": SOURCE_SHA,
               "locator": {"kind": "lines", "start": 1, "end": 2}}
 SNAPSHOT = {
@@ -24,6 +40,69 @@ SNAPSHOT = {
 }
 RELEASE_REVIEW = {"reviewer": "release-owner", "reviewed_at": "2026-10-09",
                   "dev_batch": "synthetic-k4"}
+
+
+def test_records_only_active_release_is_searchable_without_sections():
+    root = Path(__file__).resolve().parents[1] / 'data/knowledge/published'
+    active = read_active_release(root)
+    assert active is not None
+    assert active['manifest']['format_version'] == 2
+    assert len(active['manifest']['records']) == 23
+    assert active['manifest']['sections'] == []
+    view = ReviewedKnowledge.from_manifest(active['release_id'], active['manifest'])
+    result = DaqToolBox(knowledge=view, role='internal_fae').dispatch(
+        'search_knowledge', {'query': 'EGO'})
+    assert result.status == 'ok'
+    assert result.content['matches']
+    ids = {row['id'] for row in result.content['matches']}
+    assert {'entity:ego-1600', 'entity:ego-1920', 'entity:ego-pro'} <= ids
+    assert 'claim:ego-1600-horizontal-fov' not in ids
+    assert 'claim:ego-1920-horizontal-fov' not in ids
+    assert all(source['release_id'] == view.release_id for source in result.sources)
+
+
+def test_published_module_entity_proves_its_own_module_scope_but_not_system_scope():
+    root = Path(__file__).resolve().parents[1] / 'data/knowledge/published'
+    active = read_active_release(root)
+    view = ReviewedKnowledge.from_manifest(active['release_id'], active['manifest'])
+    requirements = [{
+        'id': 'module-mono', 'capability': 'lookup_spec',
+        'field': 'stereo_mono_resolution',
+        'entities': ['entity:umi-vision-module'], 'conditions': {'scope': 'module'},
+    }]
+    box = DaqToolBox(knowledge=view, role='internal_fae', requirements=requirements)
+    result = box.dispatch('lookup_spec', {
+        'entity': 'entity:umi-vision-module', 'field': 'stereo_mono_resolution',
+        'conditions': {'scope': 'module'},
+    })
+    assert result.status == 'ok'
+    assert result.content['matched_requirement_ids'] == ['module-mono']
+    assert result.content['matches'][0]['data']['value'] == '1280x960'
+    assert box.dispatch('lookup_spec', {
+        'entity': 'entity:umi-vision-module', 'field': 'stereo_mono_resolution',
+        'conditions': {'scope': 'whole_system'},
+    }).status == 'not_found'
+
+
+def test_resolve_entity_does_not_promote_a_distinct_prefix_product_to_a_variant():
+    root = Path(__file__).resolve().parents[1] / 'data/knowledge/published'
+    active = read_active_release(root)
+    view = ReviewedKnowledge.from_manifest(active['release_id'], active['manifest'])
+    box = DaqToolBox(knowledge=view, role='internal_fae')
+
+    def ids(text):
+        result = box.dispatch('resolve_entity', {'text': text})
+        assert result.status == 'ok'
+        return {row['id'] for row in result.content['matches']}
+
+    assert ids('EGO') == {'entity:ego-1600', 'entity:ego-1920'}
+    assert ids('EGO 双目') == {'entity:ego-1600', 'entity:ego-1920'}
+    assert ids('EGO 双目 1600×1200 版本') == {'entity:ego-1600'}
+    assert ids('EGO Pro') == {'entity:ego-pro'}
+    assert ids('HUB') == {'entity:hub'}
+    assert ids('HUB 接 PC') == {'entity:hub'}
+    assert box.dispatch('resolve_entity', {'text': 'EgoViewer'}).status == 'not_found'
+    assert box.dispatch('resolve_entity', {'text': 'EGOViewer'}).status == 'not_found'
 
 
 def _row(record_id, kind, data, *, view=("internal_fae",), forward=()):

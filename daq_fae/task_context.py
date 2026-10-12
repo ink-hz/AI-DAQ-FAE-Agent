@@ -10,7 +10,9 @@ import copy
 import hashlib
 import json
 import re
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
+
+from daq_fae.request_schema import DaqRequestSchema
 
 _FIELDS = frozenset({
     'equipment', 'variant', 'resolution_variant', 'topology', 'platform',
@@ -76,28 +78,52 @@ class DaqTaskContext:
     values: dict[str, UserAssertion] = field(default_factory=dict)
     attempted_steps: tuple[str, ...] = ()
     active_capabilities: tuple[str, ...] = ()
+    grounded_scope: dict = field(default_factory=dict)
+    setup_statement: UserAssertion | None = None
 
     def get(self, name, default=None):
         item = self.values.get(name)
         return copy.deepcopy(item.value) if item else default
 
     def to_checkpoint(self):
-        return {'version': 1, 'topic_id': self.topic_id, 'turn': self.turn,
+        return {'version': 3, 'topic_id': self.topic_id, 'turn': self.turn,
                 'values': {key: asdict(value) for key, value in self.values.items()},
                 'attempted_steps': list(self.attempted_steps),
-                'active_capabilities': list(self.active_capabilities)}
+                'active_capabilities': list(self.active_capabilities),
+                'grounded_scope': copy.deepcopy(self.grounded_scope),
+                'setup_statement': (asdict(self.setup_statement)
+                                    if self.setup_statement else None)}
 
     @classmethod
     def from_checkpoint(cls, checkpoint):
-        if checkpoint.get('version') != 1:
+        if checkpoint.get('version') not in {1, 2, 3}:
             raise ValueError('daq_context_version_invalid')
         values = {}
         for key, raw in checkpoint.get('values', {}).items():
             if key not in _FIELDS or raw.get('authority') != 'user_supplied':
                 raise ValueError('daq_context_authority_invalid')
             values[key] = UserAssertion(copy.deepcopy(raw['value']), int(raw['origin_turn']), _certainty(raw.get('certainty', 'asserted')))
+        grounded = copy.deepcopy(checkpoint.get('grounded_scope', {}))
+        if not isinstance(grounded, dict) or set(grounded) - {'entities', 'conditions'} or \
+                not isinstance(grounded.get('entities', []), list) or \
+                not all(isinstance(value, str) and value.startswith('entity:')
+                        for value in grounded.get('entities', [])) or \
+                not isinstance(grounded.get('conditions', {}), dict):
+            raise ValueError('daq_grounded_scope_invalid')
+        raw_setup = checkpoint.get('setup_statement')
+        if raw_setup is not None and (not isinstance(raw_setup, dict)
+                or raw_setup.get('authority') != 'user_supplied'
+                or not isinstance(raw_setup.get('value'), str)
+                or not 0 < len(raw_setup['value']) <= 1000
+                or not isinstance(raw_setup.get('origin_turn'), int)
+                or not 0 < raw_setup['origin_turn'] <= int(checkpoint['turn'])):
+            raise ValueError('daq_setup_statement_invalid')
+        setup = (UserAssertion(raw_setup['value'], raw_setup['origin_turn'],
+                               _certainty(raw_setup.get('certainty', 'asserted')))
+                 if raw_setup is not None else None)
         return cls(str(checkpoint['topic_id']), int(checkpoint['turn']), values,
-                   tuple(checkpoint.get('attempted_steps', [])), tuple(checkpoint.get('active_capabilities', [])))
+                   tuple(checkpoint.get('attempted_steps', [])),
+                   tuple(checkpoint.get('active_capabilities', [])), grounded, setup)
 
     def tool_context(self):
         return {'authority': 'user_supplied_only', **self.to_checkpoint()}
@@ -110,9 +136,14 @@ class TurnPlan:
     planned_capabilities: tuple[str, ...]
     planning_status: str
     context_note: str
+    request_schema: DaqRequestSchema | None = None
 
     def evidence_requirements(self):
         return {'requirements': copy.deepcopy(self.requirements)}
+
+
+def explicit_topic_switch(message: str) -> bool:
+    return bool(_SWITCH.search(message.strip()))
 
 
 def _certainty(value):
@@ -189,7 +220,7 @@ def extract_context_hints(excerpts) -> dict:
 
 def prepare_turn(message: str, *, previous=None, updates=None, topic_switch=None,
                  attachment_source_ids=(), image_source_ids=(), context_hints=None,
-                 grounded_targets=None) -> TurnPlan:
+                 grounded_targets=None, request_schema: DaqRequestSchema | None = None) -> TurnPlan:
     """Prepare a turn without mutating prior state or granting facts/permissions.
 
     Pass the returned context into the next turn/checkpoint, tool_context() to the
@@ -199,10 +230,14 @@ def prepare_turn(message: str, *, previous=None, updates=None, topic_switch=None
     """
     if not isinstance(message, str) or not message.strip():
         raise ValueError('daq_message_invalid')
+    if request_schema is not None and (not isinstance(request_schema, DaqRequestSchema)
+                                       or request_schema.original_question != message):
+        raise ValueError('daq_request_schema_invalid')
     old = DaqTaskContext.from_checkpoint(previous) if isinstance(previous, dict) else previous or DaqTaskContext()
     if not isinstance(old, DaqTaskContext):
         raise ValueError('daq_context_invalid')
-    switched = bool(_SWITCH.search(message.strip())) if topic_switch is None else topic_switch
+    switched = ((request_schema.topic_switch if request_schema is not None else False)
+                or explicit_topic_switch(message)) if topic_switch is None else topic_switch
     turn = old.turn + 1
     values = {} if switched else copy.deepcopy(old.values)
     steps = [] if switched else list(old.attempted_steps)
@@ -225,19 +260,30 @@ def prepare_turn(message: str, *, previous=None, updates=None, topic_switch=None
         if key == 'equipment' and (not isinstance(raw, list) or not all(isinstance(item, str) for item in raw)):
             raise ValueError('daq_equipment_invalid')
         values[key] = UserAssertion(copy.deepcopy(raw), turn, certainty)
-    capabilities = [name for name, pattern in _INTENTS.items() if re.search(pattern, message, re.I)]
-    if _DIAGNOSTIC.search(message):
-        capabilities += ['search_knowledge', 'lookup_procedure', 'check_software_support']
-    if not switched and len(message) <= 80 and _FOLLOWUP.search(message):
-        capabilities = [*old.active_capabilities, *capabilities]
-    if values.get('equipment') and 'resolve_entity' not in capabilities:
+    if request_schema is not None:
+        capabilities = [goal.capability for goal in request_schema.goals]
+    else:
+        capabilities = [name for name, pattern in _INTENTS.items() if re.search(pattern, message, re.I)]
+        if _DIAGNOSTIC.search(message):
+            capabilities += ['search_knowledge', 'lookup_procedure', 'check_software_support']
+        if not switched and len(message) <= 80 and _FOLLOWUP.search(message):
+            capabilities = [*old.active_capabilities, *capabilities]
+    if values.get('equipment') and 'resolve_entity' not in capabilities and request_schema is None:
         capabilities.insert(0, 'resolve_entity')
     status = 'partial' if capabilities else 'unknown'
-    if not capabilities:
+    if not capabilities and request_schema is None:
         capabilities = ['search_knowledge']
     capabilities = list(dict.fromkeys(capabilities))
     topic_id = f'topic_{turn}' if switched else old.topic_id
-    context = DaqTaskContext(topic_id, turn, values, tuple(steps), tuple(capabilities))
+    setup = None if switched else old.setup_statement
+    if not switched and request_schema is not None \
+            and any(goal.kind == 'unknown' for goal in request_schema.goals) \
+            and any(goal.kind == 'product' for goal in request_schema.goals):
+        setup = UserAssertion(message[:1000], turn,
+                              'hypothesis' if re.search(r'可能|猜测|\b(?:maybe|possibly)\b',
+                                                        message, re.I) else 'asserted')
+    context = DaqTaskContext(topic_id, turn, values, tuple(steps), tuple(capabilities),
+                             {} if switched else copy.deepcopy(old.grounded_scope), setup)
     hints = copy.deepcopy(dict(context_hints or {}))
     if set(hints) - {'equipment', 'variant', 'platform', 'viewer_version',
                      'sdk_version', 'firmware_version'}:
@@ -250,6 +296,10 @@ def prepare_turn(message: str, *, previous=None, updates=None, topic_switch=None
             not all(isinstance(value, str) and value for value in grounded.get('entities', [])) or
             not isinstance(grounded.get('conditions', {}), dict)):
         raise ValueError('daq_grounded_targets_invalid')
+    if grounded.get('entities'):
+        context = replace(context, grounded_scope=grounded)
+    elif context.grounded_scope:
+        grounded = copy.deepcopy(context.grounded_scope)
     grounded_conditions = {key: value for key, value in grounded.get('conditions', {}).items()
                            if key not in values and key not in hinted_conditions}
     used_hints = bool(hinted_conditions or ('equipment' in hints and 'equipment' not in values))
@@ -293,7 +343,7 @@ def prepare_turn(message: str, *, previous=None, updates=None, topic_switch=None
             fields[index:index + 1] = (["rgb_frame_rate"] if rgb else []) + (
                 ["mono_frame_rate"] if mono else [])
     software = [name for name, pattern in _SOFTWARE.items() if re.search(pattern, message, re.I)]
-    for capability in capabilities:
+    for capability in ([] if request_schema is not None else capabilities):
         dimensions = fields if capability == 'lookup_spec' and fields else (
             software if capability == 'check_software_support' and software else [None])
         for claim_field in dimensions:
@@ -308,11 +358,69 @@ def prepare_turn(message: str, *, previous=None, updates=None, topic_switch=None
             digest = hashlib.sha256(json.dumps(requirement, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
             requirement['id'] = f'req_{capability}_{digest}'
             requirements.append(requirement)
+    if request_schema is not None:
+        for goal in request_schema.goals:
+            if goal.kind == 'service':
+                requirements.append({
+                    'id': 'req_' + goal.id, 'goal_id': goal.id,
+                    'capability': goal.capability, 'critical': True,
+                    'status': 'unknown', 'evidence_class': 'service_contract',
+                })
+            elif goal.kind == 'unknown':
+                requirements.append({
+                    'id': 'req_' + goal.id, 'goal_id': goal.id,
+                    'capability': 'clarify', 'critical': True,
+                    'status': 'unknown', 'evidence_class': 'clarification_required',
+                })
+            elif goal.kind == 'attachment':
+                provided = (image_source_ids if goal.capability == 'analyze_image'
+                            else attachment_source_ids)
+                ids = sorted(set(provided))
+                if ids and not all(isinstance(item, str) and item for item in ids):
+                    raise ValueError('daq_attachment_sources_invalid')
+                requirements.append({
+                    'id': 'req_' + goal.id, 'goal_id': goal.id,
+                    'capability': goal.capability, 'critical': True,
+                    'status': 'unknown',
+                    'evidence_class': ('user_evidence_required' if ids
+                                       else 'clarification_required'),
+                    **({'source_ids': ids} if ids else {}),
+                })
+            elif goal.kind == 'product':
+                goal_scope = copy.deepcopy(scope)
+                if grounded_targets and grounded_targets.get('entities'):
+                    # This ID was resolved from the role-visible published
+                    # entity view; the model's surface name remains a user
+                    # assertion but does not become the evidence key.
+                    goal_scope['entities'] = list(grounded_targets['entities'])
+                elif goal.entities and not goal_scope['entities']:
+                    goal_scope['entities'] = list(goal.entities)
+                goal_scope['conditions'].update(goal.condition_map())
+                requirement = {
+                    'id': 'req_' + goal.id, 'goal_id': goal.id,
+                    'capability': goal.capability, 'critical': True,
+                    'status': 'unknown', 'evidence_class': 'governed_required',
+                    **goal_scope,
+                    'conditions_authority': ('platform_context_unverified' if used_hints
+                                             else 'user_supplied'),
+                    'entity_status': 'unresolved',
+                }
+                if goal.unmapped_condition_keys:
+                    requirement['reason'] = 'unmapped_condition_unverified'
+                    requirement['unmapped_condition_keys'] = list(goal.unmapped_condition_keys)
+                if goal.field:
+                    requirement['field'] = goal.field
+                requirements.append(requirement)
     for capability, provided in (
         ('search_attachments', attachment_source_ids),
         ('analyze_image', image_source_ids),
     ):
-        if provided:
+        if request_schema is not None and any(
+                goal.kind == 'attachment' and goal.capability == capability
+                for goal in request_schema.goals):
+            continue
+        if provided and (request_schema is None or request_schema.attachment_dependency in {
+                'relevant', 'required_for_answer'}):
             ids = sorted(set(provided))
             if not all(isinstance(item, str) and item for item in ids):
                 raise ValueError('daq_attachment_sources_invalid')
@@ -324,6 +432,13 @@ def prepare_turn(message: str, *, previous=None, updates=None, topic_switch=None
             })
     planned = tuple(dict.fromkeys(item['capability'] for item in requirements))
     note = 'DAQ session context: user declarations only; not verified product facts.\n' + json.dumps(context.tool_context(), ensure_ascii=False, sort_keys=True)
+    if request_schema is not None:
+        note += '\nValidated request goals: ' + json.dumps({
+            'original_question': request_schema.original_question,
+            'effective_question': request_schema.effective_question,
+            'request_kind': request_schema.request_kind,
+            'goals': [asdict(goal) for goal in request_schema.goals],
+        }, ensure_ascii=False, sort_keys=True)
     if attachment_source_ids or image_source_ids:
         note += ('\nAuthorized current-turn user attachment source_ids, not product facts. '
                  'Use only an exact image_source_id for analyze_image; never guess from a filename.\n'
@@ -337,4 +452,4 @@ def prepare_turn(message: str, *, previous=None, updates=None, topic_switch=None
                  'fine texture, noise or compression artifacts. For a visibility-only '
                  'question, lead with visible content; mention missing product attribution '
                  'only if it matters to the question.')
-    return TurnPlan(context, requirements, planned, status, note)
+    return TurnPlan(context, requirements, planned, status, note, request_schema)

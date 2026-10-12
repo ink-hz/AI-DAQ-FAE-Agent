@@ -33,6 +33,27 @@ const detail = {
 };
 
 describe('restored authenticated conversations', () => {
+  it('restores persisted DAQ outcome, sources and closed stages when the server provides a turn', () => {
+    const restored = normalizeRestoredConversation({
+      ...detail,
+      turns: [{
+        turn_index: 0, turn_id: 'turn-1', trace_id: 'trace-1',
+        question: detail.messages[0].content, answer: detail.messages[1].content,
+        outcome: 'safe_abstained', sources: [],
+        stages: [
+          { stage: 'loop', stage_id: 'loop-1', status: 'running', trace_id: 'trace-1' },
+          { stage: 'loop', stage_id: 'loop-1', status: 'completed', trace_id: 'trace-1' },
+        ],
+        done: { outcome: 'safe_abstained', fallback_used: false },
+      }],
+    });
+    const assistant = restored.messages[1];
+    expect(assistant.restored).toBe(false);
+    expect(assistant.stages).toHaveLength(2);
+    expect(assistant.done).toMatchObject({
+      outcome: 'safe_abstained', trace_id: 'trace-1', turn_id: 'turn-1',
+    });
+  });
   it('gives every restored message a stable client id and safe render metadata', () => {
     const first = normalizeRestoredConversation(detail);
     const second = normalizeRestoredConversation(detail);

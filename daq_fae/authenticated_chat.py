@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import time
 import threading
+from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from src.platform_identity.models import PlatformIdentityError
 from src.agent.anthropic_transport import AnthropicTransportError
 from src.agent.loop.runtime import LoopRuntime
 from src.agent.protocol import RUNTIME_FAILURE_OUTCOMES
+from src.agent.tracing import install_trace_ctx
 from src.api.stream import StreamHeartbeat, iter_with_heartbeat, sse_event
 from src.attachments.models import AttachmentDescriptor, AttachmentError
 from src.storage.authenticated_conversations import ConversationNotFound, ConversationStoreError
@@ -30,7 +32,12 @@ from daq_fae.durable_state import (
     RequestInterrupted, SessionBusy,
 )
 from daq_fae.task_context import prepare_turn
-from daq_fae.provider_errors import anthropic_failure, vision_failure_reason
+from daq_fae.provider_errors import anthropic_failure, provider_exception_done, vision_failure_reason
+from daq_fae.request_schema import SchemaExtractionError
+from daq_fae.workflow import (StageLedger, prepare_workflow, allowed_tools_for,
+                              context_clarification_done)
+from daq_fae.response_language import localize_answer
+from daq_fae.offline_adapter import OfflineAdapter
 
 
 def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
@@ -136,8 +143,10 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
     def produce():
         frames = []
         plan = None
+        prepared = None
         done = None
         calls = []
+        stages = StageLedger(trace.trace_id)
 
         def emit(name, payload):
             frame = sse_event(name, payload)
@@ -147,7 +156,6 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
         try:
             yield emit("session", {"session_id": session.session_id, "agent_id": agent_id,
                                    "client_request_id": body.client_request_id})
-            yield emit("stage", {"stage": "loop", "status": "running"})
             # Protect local bytes before model latency can outlive processing TTL.
             # The relation is committed with the turn only after the answer exists.
             attachment_relations = app.state.attachment_archive_service.prepare_turn(
@@ -155,7 +163,9 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
                 explicit_attachment_ids=body.attachment_ids,
                 answer_at=datetime.now(UTC),
             )
+            yield emit('stage', stages.start('guardrail'))
             refusal = categorize_refusal(body.message)
+            yield emit('stage', stages.finish('guardrail', refusal=bool(refusal)))
             if refusal:
                 category, answer = refusal
                 done = {"type": "done", "answer": answer, "outcome": "safe_abstained",
@@ -167,63 +177,116 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
                 images = [item.source_id for item in visible if item.kind == "image"]
                 texts = [item.source_id for item in visible if item.kind != "image"]
                 previous = checkpoint.state.task_context if checkpoint is not None else None
-                plan = prepare_turn(body.message, previous=previous,
-                                    attachment_source_ids=texts, image_source_ids=images,
-                                    grounded_targets=(knowledge.ground_question(
-                                        body.message, role=binding['role']) if binding else None))
-                assert_current_access()
-                toolbox = DaqToolBox(context=plan.context.tool_context(), knowledge=knowledge,
-                                     role=binding["role"] if binding else None,
-                                     requirements=plan.requirements, access_guard=assert_current_access)
-                if body.attachment_ids:
-                    toolbox = extend_with_attachments(
-                        toolbox, session=session, store=app.state.attachment_store,
-                        vision=vision_adapter,
-                    )
-                runtime = LoopRuntime(
-                    adapter=adapter, toolbox=toolbox,
-                    system_prompt_path=root / "prompts" / (
-                        "reviewed_knowledge_system.md" if knowledge is not None else "empty_knowledge_system.md"),
-                    evidence_policy=DaqEvidencePolicy(),
-                )
+                yield emit('stage', stages.start('schema'))
                 try:
-                    for event in runtime.run(
-                        body.message, history=prior_history, entity_note=plan.context_note,
-                        evidence_requirements=plan.evidence_requirements(),
-                        required_attachment_source_ids=(
-                            list(toolbox.attachment_source_ids) if body.attachment_ids else None
-                        ),
-                        required_image_source_ids=images,
-                        attachment_dependency=(
-                            "required_for_answer" if body.attachment_ids else "unknown"
-                        ),
-                    ):
-                        assert_current_access()
-                        if event.get("type") == "tool_call":
-                            calls.append(event)
-                            yield emit("stage", {"stage": "tool_call", **event})
-                        elif event.get("type") == "done":
-                            done = dict(event)
-                    if done is None:
-                        raise RuntimeError("runtime_missing_terminal")
-                except AnthropicTransportError as exc:
-                    done = anthropic_failure(exc)
-                except httpx.HTTPStatusError as exc:
-                    code = exc.response.status_code
-                    outcome = ("provider_configuration_error" if code in {400, 401, 403, 404, 422}
-                               else "provider_rate_limited" if code == 429
-                               else "provider_unavailable" if code >= 500 else "provider_error")
-                    done = {"answer": "数采模型请求失败，未生成答案。", "outcome": outcome,
-                            "sources": [], "tool_calls": [], "provider_status_code": code,
-                            "fallback_used": True, "fallback_reason": f"provider_http_{code}"}
-                except httpx.TransportError as exc:
-                    done = {"answer": "数采模型连接失败，未生成答案。", "outcome": "provider_unavailable",
-                            "sources": [], "tool_calls": [], "error_type": type(exc).__name__,
-                            "fallback_used": True, "fallback_reason": "provider_transport_error"}
-                except Exception as exc:
-                    done = {"answer": "数采服务运行失败，未生成答案。", "outcome": "internal_error",
-                            "sources": [], "tool_calls": [], "error_type": type(exc).__name__,
-                            "fallback_used": True, "fallback_reason": "runtime_error"}
+                    prepared = prepare_workflow(
+                        body.message, adapter=adapter, previous=previous,
+                        knowledge=knowledge, role=binding['role'] if binding else 'internal_fae',
+                        runtime_release=runtime_release,
+                        prior_user_context='\n'.join(
+                            item['content'] for item in prior_history[-8:]
+                            if item.get('role') == 'user' and isinstance(item.get('content'), str)),
+                        attachment_source_ids=texts, image_source_ids=images,
+                        grounded_targets=(knowledge.ground_question(
+                            body.message, role=binding['role']) if binding else None),
+                    )
+                except SchemaExtractionError as exc:
+                    yield emit('stage', stages.finish('schema', error=str(exc)))
+                    done = {'answer': '本轮请求理解失败，未生成可靠答案。',
+                            'outcome': 'schema_error', 'sources': [], 'tool_calls': [],
+                            'fallback_used': True, 'fallback_reason': str(exc)}
+                except (AnthropicTransportError, httpx.HTTPStatusError,
+                        httpx.TransportError) as exc:
+                    done = provider_exception_done(exc)
+                    yield emit('stage', stages.finish('schema', error=done['outcome']))
+                else:
+                    plan = prepared.plan
+                    yield emit('stage', stages.finish(
+                        'schema', request_kind=prepared.schema.request_kind,
+                        goal_ids=[goal.id for goal in prepared.schema.goals],
+                        original_question=prepared.schema.original_question,
+                        effective_question=prepared.schema.effective_question,
+                        entity_scope=sorted({entity for goal in prepared.schema.goals
+                                             for entity in goal.entities}),
+                        attachment_dependency=prepared.schema.attachment_dependency,
+                        confidence=prepared.schema.confidence))
+                if done is None and not isinstance(adapter, OfflineAdapter):
+                    done = context_clarification_done(prepared)
+                    if done is not None:
+                        yield emit('stage', stages.observed(
+                            'clarification', reason='user_intent_missing'))
+                if done is not None:
+                    pass
+                else:
+                    assert plan is not None
+                    assert_current_access()
+                    toolbox = DaqToolBox(context=plan.context.tool_context(), knowledge=knowledge,
+                                         role=binding["role"] if binding else None,
+                                         requirements=plan.requirements, access_guard=assert_current_access,
+                                         allowed_tools=(None if isinstance(adapter, OfflineAdapter)
+                                                        else allowed_tools_for(prepared.schema)))
+                    if body.attachment_ids:
+                        toolbox = extend_with_attachments(
+                            toolbox, session=session, store=app.state.attachment_store,
+                            vision=vision_adapter,
+                        )
+                    runtime = LoopRuntime(
+                        adapter=adapter, toolbox=toolbox,
+                        system_prompt_path=root / "prompts" / (
+                            "reviewed_knowledge_system.md" if knowledge is not None else "empty_knowledge_system.md"),
+                        evidence_policy=DaqEvidencePolicy(
+                            service_contract=prepared.service_contract,
+                            answer_language=prepared.schema.answer_language,
+                            allowed_chinese_terms=tuple({entity for goal in prepared.schema.goals
+                                                         for entity in goal.entities
+                                                         if any('\u3400' <= char <= '\u9fff'
+                                                                for char in entity)})),
+                    )
+                    yield emit('stage', stages.start('loop'))
+                    try:
+                        for event in runtime.run(
+                            prepared.loop_question, history=prior_history,
+                            entity_note=plan.context_note,
+                            evidence_requirements=plan.evidence_requirements(),
+                            required_attachment_source_ids=(
+                                list(toolbox.attachment_source_ids) if body.attachment_ids else None
+                            ),
+                            required_image_source_ids=images,
+                            attachment_dependency=prepared.schema.attachment_dependency,
+                        ):
+                            assert_current_access()
+                            if event.get("type") == "tool_call":
+                                calls.append(event)
+                                yield emit('stage', stages.observed(
+                                    'tool_call', tool=event.get('tool') or event.get('name'),
+                                    tool_status=event.get('status')))
+                            elif event.get("type") == "done":
+                                done = dict(event)
+                        if done is None:
+                            raise RuntimeError("runtime_missing_terminal")
+                        yield emit('stage', stages.finish('loop', outcome=done.get('outcome')))
+                    except AnthropicTransportError as exc:
+                        done = anthropic_failure(exc)
+                        yield emit('stage', stages.finish('loop', error=done['outcome']))
+                    except httpx.HTTPStatusError as exc:
+                        code = exc.response.status_code
+                        outcome = ("provider_configuration_error" if code in {400, 401, 403, 404, 422}
+                                   else "provider_rate_limited" if code == 429
+                                   else "provider_unavailable" if code >= 500 else "provider_error")
+                        done = {"answer": "数采模型请求失败，未生成答案。", "outcome": outcome,
+                                "sources": [], "tool_calls": [], "provider_status_code": code,
+                                "fallback_used": True, "fallback_reason": f"provider_http_{code}"}
+                        yield emit('stage', stages.finish('loop', error=outcome))
+                    except httpx.TransportError as exc:
+                        done = {"answer": "数采模型连接失败，未生成答案。", "outcome": "provider_unavailable",
+                                "sources": [], "tool_calls": [], "error_type": type(exc).__name__,
+                                "fallback_used": True, "fallback_reason": "provider_transport_error"}
+                        yield emit('stage', stages.finish('loop', error='provider_unavailable'))
+                    except Exception as exc:
+                        done = {"answer": "数采服务运行失败，未生成答案。", "outcome": "internal_error",
+                                "sources": [], "tool_calls": [], "error_type": type(exc).__name__,
+                                "fallback_used": True, "fallback_reason": "runtime_error"}
+                        yield emit('stage', stages.finish('loop', error='internal_error'))
 
             if done["outcome"] in RUNTIME_FAILURE_OUTCOMES:
                 done["fallback_used"] = True
@@ -256,6 +319,21 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
                 done, planned_capabilities=done["planned_capabilities"],
                 knowledge_release=knowledge_release,
             )
+            if prepared is not None and prepared.schema is not None:
+                localize_answer(done, prepared.schema.answer_language)
+                done['request_kind'] = prepared.schema.request_kind
+                done['request_schema'] = asdict(prepared.schema)
+                done['evidence_requirements'] = copy.deepcopy(plan.requirements)
+                done['goal_status'] = {
+                    requirement['goal_id']: (done.get('evidence_policy') or {}).get(
+                        'requirement_status', {}).get(requirement['id'], 'unknown')
+                    for requirement in plan.requirements if 'goal_id' in requirement
+                }
+            yield emit('stage', stages.observed(
+                'coverage', requirement_status=(done.get('evidence_policy') or {}).get(
+                    'requirement_status', {}), goal_status=done.get('goal_status', {})))
+            yield emit('stage', stages.observed(
+                'outcome', outcome=done['outcome'], fallback_used=done['fallback_used']))
             assert_current_access()
             if lease_lost.is_set():
                 raise RequestInterrupted("daq_execution_lease_lost")
@@ -266,7 +344,7 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
                 external_session_id=session.session_id, channel=session.channel,
                 question=body.message, answer=done["answer"], trace_id=trace.trace_id,
                 turn_index=sum(item["role"] == "user" for item in working_session.messages) - 1,
-                sources=done.get("sources", []), stages=calls, done=done,
+                sources=done.get("sources", []), stages=stages.events, done=done,
                 planned_capabilities=done["planned_capabilities"],
                 capability_coverage=coverage, fallback_used=done["fallback_used"],
                 fallback_reason=done["fallback_reason"], outcome=done["outcome"],
@@ -329,6 +407,9 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
                                 "agent_id": agent_id, "session_id": session.session_id,
                                 "runtime_release": runtime_release,
                                 "knowledge_release": knowledge_release,
+                                "stages": [{key: event[key] for key in
+                                            ('stage', 'stage_id', 'status', 'elapsed_ms')
+                                            if key in event} for event in stages.events],
                             })
             for frame in terminal_frames:
                 assert_current_access()
@@ -353,7 +434,11 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
         next_renewal = time.monotonic() + request_lease_renew_interval_seconds
         terminal_sent = False
         try:
-            for item in iter_with_heartbeat(produce(), heartbeat_interval_seconds=heartbeat_interval_seconds):
+            def traced_produce():
+                with install_trace_ctx(trace):
+                    yield from produce()
+
+            for item in iter_with_heartbeat(traced_produce(), heartbeat_interval_seconds=heartbeat_interval_seconds):
                 if time.monotonic() >= next_renewal:
                     try:
                         durable.renew(subject, reservation)

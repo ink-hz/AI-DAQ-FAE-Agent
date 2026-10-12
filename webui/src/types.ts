@@ -14,6 +14,7 @@ export interface SourceRef {
 
 export interface StageEvent {
   stage?: string;
+  stage_id?: string;
   status?: string;
   message?: string;
   agent?: string;
@@ -101,6 +102,19 @@ export interface AuthenticatedConversationDetail {
   messages: AuthenticatedConversationMessage[];
   current_schema: Record<string, unknown> | null;
   attachments: AuthenticatedConversationAttachment[];
+  turns?: AuthenticatedConversationTurn[];
+}
+
+export interface AuthenticatedConversationTurn {
+  turn_index: number;
+  turn_id: string;
+  trace_id: string;
+  question: string;
+  answer: string;
+  outcome: string;
+  sources: SourceRef[];
+  stages: StageEvent[];
+  done: DoneEvent;
 }
 
 export interface AssistantTurn {

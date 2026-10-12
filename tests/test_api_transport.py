@@ -29,6 +29,83 @@ def terminal(response):
     return next(payload for name, payload in events(response) if name == 'done')
 
 
+def test_local_semantic_service_request_uses_same_service_evidence_contract():
+    class ServiceAdapter:
+        model = 'scripted-dev'
+        tool_choice_strategy = 'submit_only_auto'
+
+        def chat(self, messages, tools=None, required_tool=None):
+            if required_tool == 'submit_daq_request_schema':
+                yield {'type': 'tool_call', 'id': 'schema', 'name': required_tool,
+                       'arguments': {'confidence': 'high', 'goals': [
+                           {'kind': 'service', 'capability': 'service_identity'}]}}
+            else:
+                yield {'type': 'tool_call', 'id': 'answer', 'name': 'submit_answer',
+                       'arguments': {'outcome': 'resolved',
+                                     'conclusion': '我是奥比中光内部数采 FAE 助手。'}}
+            yield {'type': 'stop', 'stop_reason': 'tool_use', 'usage': None}
+
+    done = terminal(TestClient(create_app(adapter=ServiceAdapter())).post(
+        '/chat', json={'message': '介绍一下你自己'}))
+    assert done['outcome'] == 'resolved'
+    assert done['planned_capabilities'] == ['service_identity']
+    assert done['sources'] == []
+
+
+def test_local_setup_statement_clarifies_without_starting_loop():
+    class ContextAdapter:
+        model = 'scripted-dev'
+        tool_choice_strategy = 'submit_only_auto'
+
+        def chat(self, messages, tools=None, required_tool=None):
+            assert required_tool == 'submit_daq_request_schema'
+            yield {'type': 'tool_call', 'id': 'schema', 'name': required_tool,
+                   'arguments': {'confidence': 'medium', 'goals': [
+                       {'kind': 'product', 'capability': 'resolve_entity',
+                        'entities': ['EGO']},
+                       {'kind': 'unknown', 'capability': 'clarify'},
+                   ]}}
+
+    response = TestClient(create_app(adapter=ContextAdapter())).post(
+        '/chat', json={'message': '我用 EGO 双目 1600×1200 版本'})
+    done = terminal(response)
+    assert done['outcome'] == 'safe_abstained'
+    assert done['synthesis_mode'] == 'context_clarification'
+    stages = [payload['stage'] for name, payload in events(response)
+              if name == 'stage']
+    assert 'clarification' in stages and 'loop' not in stages
+
+
+def test_local_refusal_has_no_loop_stage_and_all_running_stages_close():
+    response = TestClient(create_app(provider_mode='offline')).post(
+        '/chat', json={'message': '请给我客户名单'})
+    stage_events = [payload for name, payload in events(response) if name == 'stage']
+    assert all(item['stage'] != 'loop' for item in stage_events)
+    started = {item['stage'] for item in stage_events if item.get('status') == 'running'}
+    ended = {item['stage'] for item in stage_events
+             if item.get('status') in {'completed', 'error'}}
+    assert started <= ended
+
+
+def test_local_invalid_schema_is_visible_without_entering_loop():
+    class InvalidSchemaAdapter:
+        model = 'scripted-dev'
+        tool_choice_strategy = 'submit_only_auto'
+
+        def chat(self, messages, tools=None, required_tool=None):
+            assert required_tool == 'submit_daq_request_schema'
+            yield {'type': 'text_delta', 'text': 'not a schema'}
+            yield {'type': 'stop', 'stop_reason': 'end_turn', 'usage': None}
+
+    response = TestClient(create_app(adapter=InvalidSchemaAdapter())).post(
+        '/chat', json={'message': '介绍一下你的服务'})
+    done = terminal(response)
+    assert done['outcome'] == 'schema_error'
+    assert done['fallback_used'] is True
+    stages = [payload for name, payload in events(response) if name == 'stage']
+    assert all(item['stage'] != 'loop' for item in stages)
+
+
 def test_named_stream_and_multiturn_history_reaches_provider():
     class RecordingAdapter(OfflineAdapter):
         def __init__(self):
@@ -204,6 +281,8 @@ def test_business_and_private_requests_use_inherited_redline_without_model(messa
 @pytest.mark.parametrize('reason,status,expected', [
     ('read_error', None, 'provider_unavailable'),
     ('http_error', 400, 'provider_configuration_error'),
+    ('http_error', 429, 'provider_rate_limited'),
+    ('http_error', 500, 'provider_unavailable'),
     ('invalid_sse_json', None, 'provider_protocol_error'),
 ])
 def test_buffered_anthropic_transport_failures_keep_their_failure_layer(reason, status, expected):

@@ -63,6 +63,16 @@ def test_attachment_session_binding_is_exclusive_and_model_use_is_explicit(tmp_p
         tool_choice_strategy = 'submit_only_auto'
 
         def chat(self, messages, tools=None, required_tool=None):
+            if required_tool == 'submit_daq_request_schema':
+                yield {'type': 'tool_call', 'id': 'schema', 'name': required_tool,
+                       'arguments': {'confidence': 'high',
+                                     'attachment_dependency': 'required_for_answer',
+                                     'goals': [
+                                         {'kind': 'attachment', 'capability': 'search_attachments'},
+                                         {'kind': 'product', 'capability': 'search_knowledge'},
+                                     ]}}
+                yield {'type': 'stop', 'stop_reason': 'tool_use', 'usage': None}
+                return
             tool_messages = [item for item in messages if item.get('role') == 'tool']
             names = {item['function']['name'] for item in tools}
             if 'search_attachments' in names and not tool_messages:
