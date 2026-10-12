@@ -12,6 +12,8 @@
 
 ## Platform 注册与服务部署
 
+拟定同域入口为 `https://agent.orbbec.com.cn/daq/`，浏览器 API 前缀为 `/daq/api/`。DAQ WebUI 已挂载 `/daq/`，客户端以 `/daq/api/chat` 等路径调用；网关须将 `/daq/api/*` 去掉 `/daq/api` 前缀后转发到独立 DAQ 后端的根 API，并将 `/daq/*` 转发到该后端的 WebUI。当前生产网关尚无 `/daq` 路由，内部 DAQ 后端端口与生产部署配置也未定，因此该地址仅为注册与路由目标，尚不可访问。
+
 Platform 当前 `registry.yaml`、Agent Catalog 均无 `ai-daq-fae-agent`。现有 `/api/v1/agents/{agent_id}/launch` 服务只允许 `ai-fae-agent`；其数据库签发、交换和绑定校验函数也固定相机身份。仅添加注册表或目录卡片，会公开一个不能完成 DAQ 身份绑定的入口，因此本轮未发布失效入口。正式接入需要独立的 DAQ 服务地址、数据库/密钥文件和 Platform 身份配置，并以双 Agent 身份及跨域拒绝合同验证新的签发链路。
 
 数采仓只有本机 `.env.example`，没有 DAQ 生产环境配置或部署包；正式知识与身份配置缺失时应用按设计拒绝启动。上游共享源码的本机精确快照校验已通过，但受保护、持久 Git ref 和相机旧域质量门的正式证明尚未取得。代码合入与远端主线提交均不计为部署或试点验收。
