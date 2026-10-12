@@ -22,9 +22,9 @@ const mounted: Array<{ container: HTMLDivElement; root: Root }> = [];
 
 function baseFetch(input: string | URL | Request): Promise<Response> {
   const path = String(input);
-  if (path === '/health') {
+  if (path === '/attachments/capabilities') {
     return Promise.resolve(new Response(JSON.stringify({
-      attachments: { vision_enabled: true },
+      vision_enabled: true,
     })));
   }
   return Promise.reject(new Error(`Unexpected fetch: ${path}`));

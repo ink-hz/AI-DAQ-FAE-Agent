@@ -222,14 +222,15 @@ export async function fetchAttachmentCapabilities(): Promise<{
   visionEnabled: boolean;
   visionReason?: string;
 }> {
-  const response = await fetch(faeApiPath('/health'));
+  const response = await fetch(faeApiPath('/attachments/capabilities'));
   if (!response.ok) throw new Error(`能力状态读取失败：${response.status}`);
   const payload = await response.json() as {
-    attachments?: { vision_enabled?: boolean; vision_reason?: string };
+    vision_enabled?: boolean;
+    vision_reason?: string;
   };
   return {
-    visionEnabled: payload.attachments?.vision_enabled === true,
-    visionReason: payload.attachments?.vision_reason,
+    visionEnabled: payload.vision_enabled === true,
+    visionReason: payload.vision_reason,
   };
 }
 

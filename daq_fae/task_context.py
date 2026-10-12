@@ -324,4 +324,17 @@ def prepare_turn(message: str, *, previous=None, updates=None, topic_switch=None
             })
     planned = tuple(dict.fromkeys(item['capability'] for item in requirements))
     note = 'DAQ session context: user declarations only; not verified product facts.\n' + json.dumps(context.tool_context(), ensure_ascii=False, sort_keys=True)
+    if attachment_source_ids or image_source_ids:
+        note += ('\nAuthorized current-turn user attachment source_ids, not product facts. '
+                 'Use only an exact image_source_id for analyze_image; never guess from a filename.\n'
+                 + json.dumps({
+                     'image_source_ids': sorted(set(image_source_ids or [])),
+                     'text_source_ids': sorted(set(attachment_source_ids or [])),
+                 }, ensure_ascii=False, sort_keys=True))
+    if image_source_ids:
+        note += ('\nDescribe only what analyze_image actually observed. Visual observation is not '
+                 'a pixel measurement: do not estimate exact RGB/hex colors, dimensions, '
+                 'fine texture, noise or compression artifacts. For a visibility-only '
+                 'question, lead with visible content; mention missing product attribution '
+                 'only if it matters to the question.')
     return TurnPlan(context, requirements, planned, status, note)

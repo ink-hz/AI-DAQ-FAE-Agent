@@ -200,6 +200,9 @@ class AttachmentTools:
             failure_phase = exc.diagnostics.get("failure_phase")
             if isinstance(failure_phase, str) and failure_phase:
                 diagnostics["failure_phase"] = failure_phase
+            for key in ("http_status", "gateway_error_code", "gateway_request_id"):
+                if key in exc.diagnostics:
+                    diagnostics[key] = exc.diagnostics[key]
             exc.diagnostics = diagnostics
             raise
         region_label = observation.region_labels[0] if observation.region_labels else "image"

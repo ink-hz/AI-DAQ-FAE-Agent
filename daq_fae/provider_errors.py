@@ -29,3 +29,19 @@ def anthropic_failure(exc: AnthropicTransportError) -> dict:
         "fallback_used": True,
         "fallback_reason": f"anthropic_transport_{reason}",
     }
+
+
+def vision_failure_reason(done: dict) -> str | None:
+    """Classify a failed image provider call from safe trace diagnostics."""
+    for failure in done.get("attachment_failures") or []:
+        if failure.get("error_code") != "vision_http_error":
+            continue
+        status = (failure.get("vision_diagnostics") or {}).get("http_status")
+        if status in {400, 401, 403, 404, 422}:
+            return "vision_provider_configuration_error"
+        if status == 429:
+            return "vision_provider_rate_limited"
+        if isinstance(status, int) and status >= 500:
+            return "vision_provider_unavailable"
+        return "vision_provider_protocol_error"
+    return None

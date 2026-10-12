@@ -21,6 +21,8 @@ from src.agent.guardrails import categorize_refusal
 from daq_fae.api_attachments import configure_attachments
 from src.attachments.models import AttachmentDescriptor, AttachmentError, AttachmentLimits
 from src.attachments.archive_repository import AttachmentArchiveRepository
+from src.attachments.vision import build_vision_adapter
+from src.config import ResolvedVisionConfig
 from daq_fae.domain_evidence import DaqEvidencePolicy
 from daq_fae.domain_tools import DaqToolBox
 from daq_fae.empty_knowledge_synthesis import (EMPTY_KNOWLEDGE_RELEASE,
@@ -32,7 +34,7 @@ from daq_fae.knowledge.reviewed_view import ReviewedKnowledge
 from daq_fae.knowledge.dev_candidate import DevCandidateKnowledge
 from daq_fae.knowledge.entitlements import KnowledgeEntitlements
 from daq_fae.authenticated_chat import authenticated_chat
-from daq_fae.provider_errors import anthropic_failure
+from daq_fae.provider_errors import anthropic_failure, vision_failure_reason
 from daq_fae.authenticated_persistence import configure_authenticated_persistence
 from daq_fae.durable_state import configure_durable_state
 from daq_fae.platform_identity import configure_platform_identity
@@ -80,6 +82,31 @@ def _anthropic_dev_adapter() -> AnthropicAdapter:
         effort="high",
         tool_choice_strategy="submit_only_auto",
     )
+
+
+def _daq_vision_adapter():
+    base_url = os.getenv("DAQ_ANTHROPIC_BASE_URL", "").strip()
+    if not base_url:
+        raise ValueError("daq_vision_gateway_missing")
+    api_key = os.getenv("DAQ_ANTHROPIC_API_KEY", "")
+    auth_token = os.getenv("DAQ_ANTHROPIC_AUTH_TOKEN", "")
+    if not (api_key or auth_token):
+        raise ValueError("daq_vision_credentials_missing")
+    model = os.getenv("DAQ_ANTHROPIC_MODEL", "claude-opus-5-5").strip()
+    if not model:
+        raise ValueError("daq_vision_model_missing")
+    try:
+        timeout = int(os.getenv("DAQ_VISION_TIMEOUT_SECONDS", "60"))
+    except ValueError:
+        raise ValueError("daq_vision_timeout_invalid") from None
+    if not 1 <= timeout <= 120:
+        raise ValueError("daq_vision_timeout_invalid")
+    return build_vision_adapter(ResolvedVisionConfig(
+        enabled=True, mode="inherit", provider="anthropic",
+        api_key=api_key, auth_token=auth_token, base_url=base_url,
+        model=model, timeout_seconds=timeout,
+        tool_choice_strategy="submit_only_auto",
+    ))
 
 
 def create_app(*, provider_mode: str | None = None, adapter=None,
@@ -185,10 +212,25 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
         raise ValueError("daq_production_provider_invalid")
     if adapter is None:
         adapter = OfflineAdapter() if mode == "offline" else _anthropic_dev_adapter()
+    vision_flag = os.getenv("DAQ_VISION_ENABLED", "false")
+    if vision_flag not in {"true", "false"}:
+        raise ValueError("daq_vision_enabled_invalid")
+    if vision_flag == "true" and vision_adapter is None:
+        if mode != "anthropic":
+            raise ValueError("daq_vision_requires_anthropic_mode")
+        vision_adapter = _daq_vision_adapter()
 
     app = FastAPI(title="AI DAQ FAE Agent")
     app.state.daq_knowledge = knowledge
     app.state.daq_knowledge_entitlements = entitlements
+    app.state.vision_adapter = vision_adapter
+
+    @app.get("/attachments/capabilities")
+    def attachment_capabilities():
+        return JSONResponse({
+            "vision_enabled": vision_adapter is not None,
+            "vision_reason": "ready" if vision_adapter is not None else "disabled_by_config",
+        }, headers={"Cache-Control": "no-store"})
 
     app.state.session_store = SessionStore(ttl_seconds=3600)
     app.state.chat_concurrency_gate = ChatConcurrencyGate(max_concurrent)
@@ -528,7 +570,8 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                 done.setdefault("fallback_reason", None)
             if done.get("attachment_fallback_used"):
                 done["fallback_used"] = True
-                done["fallback_reason"] = done.get("attachment_fallback_reason")
+                done["fallback_reason"] = (vision_failure_reason(done)
+                                           or done.get("attachment_fallback_reason"))
             calls = done.get("tool_calls") or progress
             done.setdefault(
                 "planned_capabilities",

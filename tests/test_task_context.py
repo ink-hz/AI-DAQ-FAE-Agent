@@ -86,6 +86,8 @@ def test_attachment_requirements_remain_separate_user_evidence():
     image = [item for item in plan.requirements if item['capability'] == 'analyze_image']
     assert image[0]['source_ids'] == ['image-src-test']
     assert image[0]['evidence_class'] == 'user_evidence_required'
+    assert '"image_source_ids": ["image-src-test"]' in plan.context_note
+    assert '"text_source_ids": ["att-src-test"]' in plan.context_note
 
 
 def test_distinct_procedures_and_software_surfaces_have_distinct_requirements():

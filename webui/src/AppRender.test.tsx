@@ -37,9 +37,9 @@ function renderInteractiveAppAt(path: string) {
 
 function appFetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
   const path = String(input);
-  if (path === '/health') {
+  if (path === '/attachments/capabilities') {
     return Promise.resolve(new Response(JSON.stringify({
-      attachments: { vision_enabled: true },
+      vision_enabled: true,
     })));
   }
   if (path === '/identity/capabilities') {

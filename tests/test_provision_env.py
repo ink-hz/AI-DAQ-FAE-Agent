@@ -9,7 +9,7 @@ def test_production_env_reuses_camera_database_and_gateway_but_separates_daq_key
     camera.write_text('\n'.join([
         'POSTGRES_DB=ai_fae', 'POSTGRES_USER=ai_fae', 'POSTGRES_PASSWORD=test%password',
         'ANTHROPIC_AUTH_TOKEN=synthetic-secret', 'ANTHROPIC_BASE_URL=https://gateway.example',
-        'ANTHROPIC_MODEL_MAIN=claude-opus-5-5', 'NO_PROXY=localhost,127.0.0.1',
+        'ANTHROPIC_MODEL_MAIN=camera-other-model', 'NO_PROXY=localhost,127.0.0.1',
     ]) + '\n')
     output = tmp_path / 'daq'
     subject = 'b78b3205-2c86-424a-a217-775382c208bd'
@@ -27,7 +27,9 @@ def test_production_env_reuses_camera_database_and_gateway_but_separates_daq_key
         '?options=-csearch_path%3Ddaq_fae')
     assert env['DAQ_ANTHROPIC_AUTH_TOKEN'] == 'synthetic-secret'
     assert env['DAQ_ANTHROPIC_BASE_URL'] == 'https://gateway.example'
+    assert env['DAQ_ANTHROPIC_MODEL'] == 'claude-opus-5-5'
     assert env['DAQ_RUNTIME_RELEASE'] == 'daq-release-1'
+    assert env['DAQ_VISION_ENABLED'] == 'true'
     assert env['DAQ_PLATFORM_ALLOWED_SUBJECT_IDS'] == subject
     assert (output / 'env.production').stat().st_mode & 0o077 == 0
     session = json.loads((output / 'secrets/session-keyring.json').read_text())

@@ -30,7 +30,7 @@ from daq_fae.durable_state import (
     RequestInterrupted, SessionBusy,
 )
 from daq_fae.task_context import prepare_turn
-from daq_fae.provider_errors import anthropic_failure
+from daq_fae.provider_errors import anthropic_failure, vision_failure_reason
 
 
 def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
@@ -237,7 +237,8 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
                 done.setdefault("fallback_reason", None)
             if done.get("attachment_fallback_used"):
                 done["fallback_used"] = True
-                done["fallback_reason"] = done.get("attachment_fallback_reason")
+                done["fallback_reason"] = (vision_failure_reason(done)
+                                           or done.get("attachment_fallback_reason"))
             done.setdefault("planned_capabilities", list(plan.planned_capabilities) if plan else [])
             coverage = done.get("capability_coverage", {})
             done.update({"agent_id": agent_id, "knowledge_release": knowledge_release,

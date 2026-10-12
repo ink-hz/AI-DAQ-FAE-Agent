@@ -131,3 +131,28 @@ def test_authenticated_browser_uses_daq_entry_and_proxied_api(tmp_path, monkeypa
     assert 'name="fae-api-base" content="/daq/api"' in html
     assert client.get('/daq/conversations/example').status_code == 200
     assert client.get('/app/').status_code == 404
+
+
+def test_attachment_capability_is_available_only_after_daq_identity(tmp_path, monkeypatch):
+    env = {**identity_environment(tmp_path), **persistence_environment(tmp_path)}
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    repository = InMemoryAuthenticatedSessionRepository()
+    app = create_app(
+        provider_mode='offline', platform_client=FakePlatform(),
+        identity_repository=repository,
+        vision_adapter=object(),
+    )
+    client = TestClient(app, base_url=env['DAQ_PLATFORM_PUBLIC_ORIGIN'])
+    assert client.get('/attachments/capabilities').status_code == 401
+    launch = client.post('/enterprise/session', json={'code': CODE},
+                         headers={'Origin': env['DAQ_PLATFORM_PUBLIC_ORIGIN']})
+    assert launch.status_code == 201
+    capability = client.get('/attachments/capabilities')
+    assert capability.headers['cache-control'] == 'no-store'
+    assert capability.json() == {
+        'vision_enabled': True, 'vision_reason': 'ready',
+    }
+    record = next(iter(repository._records.values()))
+    record.agent_id = 'ai-fae-agent'
+    assert client.get('/attachments/capabilities').status_code == 401

@@ -252,14 +252,17 @@ describe('AI DAQ FAE WebUI API helpers', () => {
   });
 
   it('reads the server vision capability without exposing provider configuration', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
-      attachments: { vision_enabled: false, vision_reason: 'disabled_by_config' },
-    }))));
+    document.head.innerHTML = '<meta name="fae-api-base" content="/daq/api">';
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      vision_enabled: false, vision_reason: 'disabled_by_config',
+    })));
+    vi.stubGlobal('fetch', fetchMock);
 
     await expect(fetchAttachmentCapabilities()).resolves.toEqual({
       visionEnabled: false,
       visionReason: 'disabled_by_config',
     });
+    expect(fetchMock.mock.calls[0][0]).toBe('/daq/api/attachments/capabilities');
   });
 
   it('deletes an unsent ready attachment without exposing it elsewhere', async () => {
@@ -273,7 +276,7 @@ describe('AI DAQ FAE WebUI API helpers', () => {
     document.head.innerHTML = '<meta name="fae-api-base" content="">';
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({
-        attachments: { vision_enabled: true },
+        vision_enabled: true,
       })))
       .mockResolvedValueOnce(new Response(JSON.stringify({
         partner_login_available: true,
@@ -284,7 +287,7 @@ describe('AI DAQ FAE WebUI API helpers', () => {
     await fetchIdentityCapabilities();
 
     expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([
-      '/health',
+      '/attachments/capabilities',
       '/identity/capabilities',
     ]);
   });
