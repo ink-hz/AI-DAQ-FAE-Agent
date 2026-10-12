@@ -183,6 +183,75 @@ def test_hub_downstream_port_count_is_a_spec_not_topology():
             if item['capability'] == 'lookup_spec'] == ['downstream_port_count']
 
 
+def test_single_downstream_port_power_rating_requires_scoped_spec_evidence():
+    plan = prepare_turn('数采 HUB 单个下游端口的供电输出是多少？',
+                        grounded_targets={'entities': ['entity:hub'], 'conditions': {}})
+    specs = [item for item in plan.requirements
+             if item['capability'] == 'lookup_spec']
+    assert len(specs) == 1
+    assert specs[0]['field'] == 'power_output'
+    assert specs[0]['conditions']['per_port'] is True
+
+
+@pytest.mark.parametrize('question', [
+    'HUB 单个端口标称 5V/2A，四个下游端口同时供电输出是多少？',
+    'HUB 单个下游端口标称 5V/2A，四口同时供电输出是多少？',
+    'HUB 单个下游端口标称 5V/2A，4口同时供电输出是多少？',
+    'HUB 单个下游端口标称 5V/2A，多口同时供电输出是多少？',
+])
+def test_simultaneous_four_port_output_is_not_scoped_to_one_port(question):
+    plan = prepare_turn(question,
+                        grounded_targets={'entities': ['entity:hub'], 'conditions': {}})
+    spec = next(item for item in plan.requirements if item['capability'] == 'lookup_spec')
+    assert spec['conditions']['per_port'] is False
+
+
+def test_rgb_and_mono_resolution_require_distinct_evidence():
+    rgb = prepare_turn('UMI Finger 的 RGB 分辨率是多少？',
+                       grounded_targets={'entities': ['entity:umi-finger'], 'conditions': {}})
+    mono = prepare_turn('UMI Finger 的双目 Mono 分辨率是多少？',
+                        grounded_targets={'entities': ['entity:umi-finger'], 'conditions': {}})
+    both = prepare_turn('UMI Finger 的 RGB 和双目 Mono 分辨率分别是多少？',
+                        grounded_targets={'entities': ['entity:umi-finger'], 'conditions': {}})
+    assert [item['field'] for item in rgb.requirements if item['capability'] == 'lookup_spec'] == ['rgb_resolution']
+    assert [item['field'] for item in mono.requirements if item['capability'] == 'lookup_spec'] == ['mono_resolution']
+    assert [item['field'] for item in both.requirements if item['capability'] == 'lookup_spec'] == [
+        'rgb_resolution', 'mono_resolution']
+
+
+def test_rgb_frame_rate_requires_rgb_evidence():
+    plan = prepare_turn('EGO Pro 在 1600×1200 分辨率下 RGB 最高帧率是多少？',
+                        grounded_targets={'entities': ['entity:ego-pro'], 'conditions': {}})
+    assert [item['field'] for item in plan.requirements
+            if item['capability'] == 'lookup_spec'] == ['rgb_frame_rate']
+
+
+def test_resolution_condition_is_not_a_second_requested_spec():
+    plan = prepare_turn('EGO 双目 1600×1200 版本在 1600×1200 分辨率下的 RGB 最高帧率是多少？',
+                        grounded_targets={'entities': ['entity:ego-1600'],
+                                          'conditions': {'resolution_variant': '1600x1200'}})
+    assert [item['field'] for item in plan.requirements
+            if item['capability'] == 'lookup_spec'] == ['rgb_frame_rate']
+    assert next(item for item in plan.requirements
+                if item['capability'] == 'lookup_spec')['conditions']['resolution'] == '1600x1200'
+
+
+def test_resolution_measurement_condition_is_distinct_from_product_variant():
+    plan = prepare_turn('EGO Pro 在 1600×1200 分辨率下的 RGB 最高帧率是多少？',
+                        grounded_targets={'entities': ['entity:ego-pro'], 'conditions': {}})
+    spec = next(item for item in plan.requirements if item['capability'] == 'lookup_spec')
+    assert spec['conditions']['resolution'] == '1600x1200'
+    assert 'resolution_variant' not in spec['conditions']
+
+
+def test_field_options_question_is_spec_without_catalog_requirement():
+    plan = prepare_turn('EGO 双目 1920×1200 版本的 RGB 可选分辨率有哪些？',
+                        grounded_targets={'entities': ['entity:ego-1920'],
+                                          'conditions': {'resolution_variant': '1920x1200'}})
+    assert plan.planned_capabilities == ('lookup_spec',)
+    assert [item['field'] for item in plan.requirements] == ['rgb_resolution']
+
+
 @pytest.mark.parametrize('question', [
     'HUB 和主机怎么选？',
     '采集组合应该如何选？',

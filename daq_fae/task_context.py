@@ -20,11 +20,11 @@ _FIELDS = frozenset({
 _SWITCH = re.compile(r'^(?:换个场景|换个问题|另一个问题|重新开始|new topic|switch topic)', re.I)
 _FOLLOWUP = re.compile(r'继续|然后|还是|下一步|那|这个|它|\b(?:it|still|next|continue)\b', re.I)
 _INTENTS = {
-    'catalog': r'有哪些|有多少|型号列表|产品目录|产品线|\b(?:catalog|product list|product range)\b',
+    'catalog': r'(?:有哪些|有多少).{0,8}(?:产品|设备|型号|套件|系统)|(?:产品|设备|型号|套件|系统).{0,8}(?:有哪些|有多少)|型号列表|产品目录|产品线|\b(?:catalog|product list|product range)\b',
     'selection': r'推荐|选型|选择|适合|选哪个|选什么|怎么选|如何选|怎样选|选用|方案建议|\b(?:recommend|selection|choose|suitable)\b',
     'resolve_entity': r'设备|型号|变体|配置|套件|\b(?:device|model|variant|kit)\b',
-    'lookup_spec': r'规格|参数|精度|分辨率|帧率|带宽|功耗|基线|视场角|蓝牙|Wi[- ]?Fi|无线通信|USB.{0,8}(?:接口|物理)|物理接口|(?:几路|几颗|几个).{0,8}(?:相机|摄像头)|(?:相机|摄像头).{0,8}数量|(?:下游端口.{0,5}(?:有几个|数量|几个|数)|(?:有几个|几个).{0,5}下游端口)|\b(?:spec|specification|accuracy|resolution|fps|bandwidth|fov|camera count)\b',
-    'inspect_topology': r'接线|连接|主从|同步|组合|供电|\b(?:topology|connection|sync|wiring|power)\b',
+    'lookup_spec': r'规格|参数|精度|分辨率|帧率|带宽|功耗|供电输出|电源输出|基线|视场角|蓝牙|Wi[- ]?Fi|无线通信|USB.{0,8}(?:接口|物理)|物理接口|(?:几路|几颗|几个).{0,8}(?:相机|摄像头)|(?:相机|摄像头).{0,8}数量|(?:下游端口.{0,5}(?:有几个|数量|几个|数)|(?:有几个|几个).{0,5}下游端口)|\b(?:spec|specification|accuracy|resolution|fps|bandwidth|fov|camera count|power output)\b',
+    'inspect_topology': r'接线|连接|主从|同步|组合|供电(?!输出)|\b(?:topology|connection|sync|wiring|power)\b',
     'lookup_procedure': r'步骤|安装|配置|采集|录制|落盘|保存|启动|\b(?:procedure|install|setup|record|capture|save)\b',
     'check_software_support': r'兼容|viewer|sdk|软件|固件|firmware|\b(?:compatible|software support)\b',
     'sdk_evidence': r'\bsdk\b|\bapi\b|\bros2?\b|\bpython\b|代码|开发接口',
@@ -54,6 +54,7 @@ _SPEC_FIELDS = {
     'resolution': r'分辨率(?!版本)|resolution(?!\s*variant)',
     'frame_rate': r'帧率|\bfps\b', 'bandwidth': r'带宽|bandwidth',
     'power_consumption': r'功耗|power consumption', 'baseline': r'基线|baseline',
+    'power_output': r'供电输出|电源输出|\bpower output\b',
     'horizontal_fov': r'水平视场角|横向视场角|\bhfov\b',
     'vertical_fov': r'垂直视场角|纵向视场角|\bvfov\b',
 }
@@ -255,8 +256,41 @@ def prepare_turn(message: str, *, previous=None, updates=None, topic_switch=None
              'entities': context.get('equipment', hints.get('equipment', grounded.get('entities', []))),
              'conditions': {**grounded_conditions, **hinted_conditions,
                             **{key: value.value for key, value in values.items() if key != 'equipment'}}}
+    measurement_resolution = re.search(
+        r'(?:在|以)\s*([0-9]{3,4})\s*[x×X]\s*([0-9]{3,4})\s*分辨率(?:下|时)',
+        message, re.IGNORECASE)
+    if measurement_resolution:
+        scope['conditions']['resolution'] = (
+            f'{measurement_resolution.group(1)}x{measurement_resolution.group(2)}')
+    if re.search(r'供电输出|电源输出', message):
+        aggregate_ports = re.search(
+            r'(?:[二三四五六七八九十两多]|[2-9]\d*|所有|全部)\s*(?:个|路)?\s*(?:下游)?(?:端口|口)',
+            message) and re.search(r'同时|总(?:共|计|输出)?|合计|整体|一起', message)
+        if aggregate_ports or re.search(r'(?:总|合计)(?:的)?(?:供电|电源)输出', message):
+            scope['conditions']['per_port'] = False
+        elif re.search(r'(?:单个|每个|每路|单路).{0,12}(?:下游)?端口', message):
+            scope['conditions']['per_port'] = True
     requirements = []
     fields = [name for name, pattern in _SPEC_FIELDS.items() if re.search(pattern, message, re.I)]
+    if 'resolution' in fields and len(fields) > 1 and len(re.findall(
+            r'分辨率|\bresolution\b', message, re.IGNORECASE)) == 1 and re.search(
+                r'(?:在|以)\s*[0-9]{3,4}\s*[x×X]\s*[0-9]{3,4}\s*分辨率(?:下|时)',
+                message, re.IGNORECASE):
+        fields.remove('resolution')
+    if 'resolution' in fields:
+        rgb = bool(re.search(r'\bRGB\b|彩色|鱼眼', message, re.IGNORECASE))
+        mono = bool(re.search(r'\bMono\b|单色|黑白', message, re.IGNORECASE))
+        if rgb or mono:
+            index = fields.index('resolution')
+            fields[index:index + 1] = (["rgb_resolution"] if rgb else []) + (
+                ["mono_resolution"] if mono else [])
+    if 'frame_rate' in fields:
+        rgb = bool(re.search(r'\bRGB\b|彩色|鱼眼', message, re.IGNORECASE))
+        mono = bool(re.search(r'\bMono\b|单色|黑白', message, re.IGNORECASE))
+        if rgb or mono:
+            index = fields.index('frame_rate')
+            fields[index:index + 1] = (["rgb_frame_rate"] if rgb else []) + (
+                ["mono_frame_rate"] if mono else [])
     software = [name for name, pattern in _SOFTWARE.items() if re.search(pattern, message, re.I)]
     for capability in capabilities:
         dimensions = fields if capability == 'lookup_spec' and fields else (

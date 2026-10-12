@@ -6,7 +6,7 @@
 
 `master` 已推送到 `origin/master`，包含可运行的**本机 Dev 实例**；当前提交与远端状态请以 Git 查询结果为准。当前知识发布 `empty-dev-v0` 没有已审核数采事实，因此产品参数、兼容性、操作步骤和下载链接应明确缺证。当前共享 `src/` 是 [upstream-source.json](upstream-source.json) 记录的集成快照；上游集成分支已推送远端，但尚未核实受保护的持久 Git ref，因此不是正式依赖 pin。
 
-2026-10-12 起可显式开启**本机真实资料 Dev 预览**：逐文件哈希核对原件，加载 90 节仅限内部草案角色的候选章节，并从精确来源核对账本加载 15 条窄范围记录。候选章节只供检索和缺口诊断；`source_checked` 记录可在本机 Dev 精确型号/字段/条件匹配时回答。此路径没有切换正式 `active.json`，也不等于认证知识发布、Platform 联调或生产部署。用户已取消独立存储复制和具名签名作为当前 Dev 工作的前置门，仍须保留来源、冲突和权限边界。
+2026-10-12 起可显式开启**本机真实资料 Dev 预览**：逐文件哈希核对原件，加载 90 节仅限内部草案角色的候选章节，并从精确来源核对账本加载 23 条窄范围记录（6 个实体、17 条规格）。候选章节只供检索和缺口诊断；`source_checked` 记录可在本机 Dev 精确型号/字段/条件匹配时回答。此路径没有切换正式 `active.json`，也不等于认证知识发布、Platform 联调或生产部署。用户已取消独立存储复制和具名签名作为当前 Dev 工作的前置门，仍须保留来源、冲突和权限边界。
 
 | 能力 | 当前接入情况 |
 | --- | --- |
@@ -16,15 +16,15 @@
 | 附件上传、会话内检索/精读、图片分析、归档 | 已接入；认证模式可启用独立归档清单与删除确认，关闭新归档后仍处理既有删除，真实 Postgres 往返及删除与归档确认竞态测试通过；视觉 Provider 尚未配置时明确失败 |
 | WebUI | 本机 `/app/` 与内部认证模式 `/daq/` 分别装配，沿用旧客户端合同 |
 | Platform 身份、Postgres 会话/反馈、review、HTTP Task | 已装配可选内部认证模式；数采 Agent ID、任务签名 audience、会话和资料隔离；真实 Platform 联调未完成 |
-| 数采事实、关系、权限和知识发布 | 默认及正式活动指针仍为空知识；本机 Dev 已显式加载真实原件候选章节和 15 条逐项来源核对记录，支持窄范围正向答复。认证角色、软件、链接与组合结论未发布 |
+| 数采事实、关系、权限和知识发布 | 默认及正式活动指针仍为空知识；本机 Dev 已显式加载真实原件候选章节和 23 条逐项来源核对记录，支持窄范围正向答复。认证角色、软件、链接与组合结论未发布 |
 
-本机候选预览的实现与首轮结果见[Dev 来源核对与回放](docs/reviews/2026-10-12-daq-real-dev-candidate-knowledge.md)；最终 17 轮真实回放、自动硬门和 Codex 逐题语义判断见[相机 FAE 式复审](docs/reviews/2026-10-12-daq-camera-style-semantic-review.md)。默认启动仍是空知识；正式活动指针没有变化。
+本机候选预览的首轮 17 题见[相机 FAE 式复审](docs/reviews/2026-10-12-daq-camera-style-semantic-review.md)；扩充 8 条规格后的最终 11 题真实回放和 Codex 逐题语义判断见[Dev v2 来源核对与回放](docs/reviews/2026-10-12-daq-dev-source-checked-v2.md)。默认启动仍是空知识；正式活动指针没有变化。
 
 **尚不能宣布完整能力等价或试点可发布。** 共享源码虽已推送远端集成分支，受保护依赖 pin 尚未核实；真实 Opus 网关有一次 476 秒传输失败，相机 Dev 回归有一个硬失败和一个答案矛盾；数采认证知识、Platform 实例联调和部署回滚仍未验收。原始数采资料已有本机受限归档和逐文件哈希；当前仅供本机 Dev 显式预览。[接管门禁核查](docs/reviews/2026-10-08-daq-takeover-gate-audit.md)、[迁移计划](docs/superpowers/plans/2026-10-08-full-runtime-parity-migration.md)与[完整设计](docs/2026-10-08-数采FAE完整设计.md)记录发布门。
 
 ### 数采知识专项进度（2026-10-12）
 
-按[知识专项任务书](docs/superpowers/plans/2026-10-10-daq-knowledge-workstream-task-brief.md)已完成 276 份原件本机哈希核验，形成 114 个候选章节、742 条候选/冲突图记录和高频更新影响图。本轮按用户调整去掉 D1 独立复制与 D2 具名签名门，逐页核对其中 15 条实体/规格记录，在本机 Dev 显式接入 90 节内部候选章节和这些可答记录。真实 Opus 5.5 已对正向规格与缺证题回放；错误的 HUB 端口意图分类已根据 trace 修正。其余候选、冲突、组合、软件与链接继续显示缺口，不能冒充已核验事实。完整结果见[逐项状态](docs/reviews/2026-10-10-daq-knowledge-workstream-status.md)及[Dev 来源核对与回放](docs/reviews/2026-10-12-daq-real-dev-candidate-knowledge.md)。
+按[知识专项任务书](docs/superpowers/plans/2026-10-10-daq-knowledge-workstream-task-brief.md)已完成 276 份原件本机哈希核验，形成 114 个候选章节、742 条候选/冲突图记录和高频更新影响图。本轮按用户调整去掉 D1 独立复制与 D2 具名签名门，逐页核对其中 23 条实体/规格记录，在本机 Dev 显式接入 90 节内部候选章节和这些可答记录。真实 Opus 5.5 已对正向规格与缺证题回放；复审修正后的 11 题批通过自动硬门和 Codex 逐题语义复核。其余候选、冲突、组合、软件与链接继续显示缺口，不能冒充已核验事实。完整结果见[逐项状态](docs/reviews/2026-10-10-daq-knowledge-workstream-status.md)及[Dev v2 来源核对与回放](docs/reviews/2026-10-12-daq-dev-source-checked-v2.md)。
 
 [10 月 12 日当前候选复审](docs/reviews/2026-10-12-daq-current-readiness-recheck.md)纳入 742 条图记录与 909 项未签认审核项：D3 仍 `ready=false`，D4 已备十类 12 道未冻结候选题；均不构成真实知识发布或验收。
 
@@ -32,7 +32,7 @@
 
 ```bash
 python3.11 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install -r requirements-daq.txt
 cp .env.example .env
 cd webui && npm ci && npm run build && cd ..
 .venv/bin/uvicorn daq_fae.app:app --env-file .env --host 127.0.0.1 --port 8081
@@ -58,7 +58,7 @@ export DAQ_DEV_CANDIDATE_MODE=true
 export DAQ_DEV_CANDIDATE_GRAPH_DIR=data/knowledge/curated/b3-normalized-20261012/review-graph-v1
 export DAQ_DEV_CANDIDATE_BOUND_INDEX=data/knowledge/curated/b2-20261011/bound-section-index.json
 export DAQ_DEV_CANDIDATE_ARCHIVE=data/knowledge/local_archive/candidate-originals-v2-local-copy-20261010
-export DAQ_DEV_SOURCE_CHECK_FILE=review_recipes/dev_source_checked_v1.json
+export DAQ_DEV_SOURCE_CHECK_FILE=review_recipes/dev_source_checked_v2.json
 .venv/bin/uvicorn daq_fae.app:app --host 127.0.0.1 --port 8081
 ```
 
@@ -73,6 +73,8 @@ cd webui && npm test && npm run build
 ```
 
 源码核验会读取 `upstream-source.json` 中的完整提交 SHA，比对两仓的 `src/` Git tree 和 `requirements.txt` blob，并拒绝未提交的共享源码改动。GitHub CI 定义也包含此门，私有上游仓需配置只读 `FAE_UPSTREAM_READ_TOKEN`。数采仓已有 `origin/master`；本次未取得远端 CI 运行结果和上游 ref 保护设置的核验证据，因此不能把本机测试或已推送代码计为正式依赖 pin、CI 通过或生产部署。
+
+`requirements.txt` 保持与固定上游提交逐字节一致；数采专用的 PyYAML 依赖由 `requirements-daq.txt` 增补，本机安装和 CI 均使用后者。
 
 正式依赖 pin 之前还需完成旧 FAE Dev 回归、双服务合同、上游受保护 ref、数采真实 Dev 回放与独立答案复审。数采资料和用户附件不能自动进入知识库；发布仍受来源、事实裁决和角色权限约束。
 

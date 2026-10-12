@@ -39,6 +39,9 @@ def _identity_text(value: str) -> str:
 
 
 def _field_intent_matches(intent: str, field: str) -> bool:
+    if intent.casefold().endswith("frame_rate") and field.casefold().endswith("_fps"):
+        modality = intent.casefold().removesuffix("frame_rate").rstrip("_")
+        return not modality or modality in field.casefold().split("_")
     wanted = intent.casefold().split('_')
     actual = field.casefold().split('_')
     return any(actual[index:index + len(wanted)] == wanted
@@ -116,14 +119,15 @@ class DaqToolBox:
         scope_normalized = False
         if name == "lookup_spec" and getattr(self.knowledge, "is_candidate_preview", False):
             arguments = dict(arguments)
+            target = self.knowledge.ground_question(self.question)
+            entities = target.get("entities", [])
             field = arguments.get("field")
             if isinstance(field, str):
-                canonical = self.knowledge.resolve_field(field)
+                canonical = self.knowledge.resolve_field(
+                    field, entities[0] if len(entities) == 1 else None)
                 if canonical and canonical != field:
                     arguments["field"] = canonical
                     scope_normalized = True
-            target = self.knowledge.ground_question(self.question)
-            entities = target.get("entities", [])
             if len(entities) == 1:
                 entity_row = next((row for row in self.knowledge.records_for(self.role)
                                    if row["id"] == entities[0]), None)
@@ -143,6 +147,7 @@ class DaqToolBox:
                     for row in other_entities) if entity_row else False
                 if entity_row and requested_text and not competing_name and \
                         not competing_selector and (requested_text == _identity_text(entity_row["id"])
+                            or requested_text == _identity_text(entity_row["id"].split(":", 1)[-1])
                             or target_name in requested_text):
                     if arguments["entity"] != entity_row["id"]:
                         arguments["entity"] = entity_row["id"]
@@ -163,6 +168,43 @@ class DaqToolBox:
                             conditions[selector] = value
                             scope_normalized = True
                     arguments["conditions"] = conditions
+            if any(
+                requirement.get("capability") == "lookup_spec"
+                and _field_intent_matches(str(requirement.get("field") or ""),
+                                          str(arguments.get("field") or ""))
+                and requirement.get("conditions", {}).get("per_port") is True
+                for requirement in self.requirements
+            ):
+                raw = arguments.get("conditions")
+                conditions = dict(raw) if isinstance(raw, dict) else {}
+                if "per_port" not in conditions:
+                    conditions["per_port"] = True
+                    arguments["conditions"] = conditions
+                    scope_normalized = True
+            matching_spec_needs = [
+                requirement for requirement in self.requirements
+                if requirement.get("capability") == "lookup_spec"
+                and _field_intent_matches(str(requirement.get("field") or ""),
+                                          str(arguments.get("field") or ""))
+                and isinstance(requirement.get("conditions"), dict)
+            ]
+            resolutions = {requirement["conditions"]["resolution"]
+                           for requirement in matching_spec_needs
+                           if isinstance(requirement["conditions"].get("resolution"), str)}
+            if len(resolutions) == 1:
+                resolution = next(iter(resolutions))
+                raw = arguments.get("conditions")
+                conditions = dict(raw) if isinstance(raw, dict) else {}
+                plan_has_variant = any("resolution_variant" in requirement["conditions"]
+                                       for requirement in matching_spec_needs)
+                if not plan_has_variant and _identity_text(str(
+                        conditions.get("resolution_variant", ""))) == _identity_text(resolution):
+                    conditions.pop("resolution_variant")
+                    scope_normalized = True
+                if "resolution" not in conditions:
+                    conditions["resolution"] = resolution
+                    scope_normalized = True
+                arguments["conditions"] = conditions
         if name == "read_doc" or (name == "search_knowledge" and
                                   self.knowledge.manifest["format_version"] == 2):
             return self._section_result(name, arguments)

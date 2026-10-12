@@ -1,0 +1,99 @@
+{
+  "format_version": "daq-dev-source-check/v1",
+  "graph_sha256": "bcec15073b591e428bec2c83a1c614a42ad16f2279e0da52d7c18ece9f450506",
+  "reviewer": "Codex",
+  "reviewed_at": "2026-10-12",
+  "scope": "loopback_dev_internal_fae_only",
+  "field_aliases": {
+    "horizontal_fov": [
+      "水平视场角",
+      "横向视场角",
+      "HFOV"
+    ],
+    "vertical_fov": [
+      "垂直视场角",
+      "纵向视场角",
+      "VFOV"
+    ],
+    "rgb_camera_count": [
+      "RGB 相机数量",
+      "彩色相机数量",
+      "相机数量",
+      "camera_count"
+    ],
+    "rgb_resolution": [
+      "RGB 分辨率",
+      "彩色相机分辨率",
+      "鱼眼 RGB 分辨率"
+    ],
+    "stereo_mono_baseline": [
+      "双目 Mono 基线",
+      "Mono 双目基线",
+      "单色双目基线",
+      "mono_stereo_baseline",
+      "mono_baseline",
+      "stereo_baseline",
+      "baseline"
+    ],
+    "downstream_port_count": [
+      "下游端口数量",
+      "下游接口数量",
+      "下游端口数"
+    ],
+    "rgb_max_fps": [
+      "RGB 最大帧率",
+      "彩色相机最高帧率",
+      "最大帧率",
+      "rgb_max_frame_rate",
+      "rgb_frame_rate",
+      "rgb_fps",
+      "max_fps"
+    ],
+    "rgb_resolution_options": [
+      "RGB 可选分辨率",
+      "RGB 分辨率选项",
+      "可选分辨率"
+    ],
+    "stereo_mono_resolution": [
+      "双目 Mono 分辨率",
+      "Mono 双目分辨率",
+      "单色双目分辨率",
+      "mono_resolution",
+      "mono_camera_resolution"
+    ],
+    "downstream_port_power_output": [
+      "下游端口供电输出",
+      "下游供电输出"
+    ]
+  },
+  "records": {
+    "entity:ego-1600": "d06c4cbabe4fda821943035a1746b4d0f8241848dc2d24804e20c40ba83aff52",
+    "entity:ego-1920": "bef845bbd99ef43078afe6afde2e79100b356e7653f110d192d6fb8c91e57890",
+    "entity:ego-pro": "e826c98fd23414355f2e62a9bcba147b5bbf71cf06945f5e32db13c8fb243bb1",
+    "entity:umi-finger": "7c41fbdd756e83e08e7d1a7b5fe75de246362e1e339d1a25a234197c1068e625",
+    "entity:umi-vision-module": "ae8682464ad8d1afb341641bd79ab3de8f106d88e82d38374dfa8abd70eda33d",
+    "entity:hub": "9f0f02e9c2659852772c0add44203a765b3bd8566c9a099834a8dcd3e28938bc",
+    "claim:ego-1600-horizontal-fov": "3ffe2d80d730979f1c86310fa26e4cda9092a6000bf8686361f009c79967532a",
+    "claim:ego-1600-vertical-fov": "44b0cb461db820fc250e798a2a8096ab5275f7bc342cfff2edbec1c3a4cb6890",
+    "claim:ego-1920-horizontal-fov": "fa962751ab875d53435caf7a8180fd29b65351772b6334891248ec099c7b0e4e",
+    "claim:ego-1920-vertical-fov": "e56975bf70f528e1531f3a10cadc05427c8063c0391a07a919035ddc935675dc",
+    "claim:ego-pro-rgb-camera-count": "68e4133dfcd460aeafda5c3b8b0b7811077c535f4537572243cdde501dcc6757",
+    "claim:umi-finger-rgb-resolution": "bdd591f5779ac75c97e3a05777365bdcb01664c9b5ea8b17e84561c85b8d7a61",
+    "claim:umi-finger-mono-baseline": "1686917121fe562ca862a9cab294ca8d795fdcc0eacbe3780a46fad4d407656b",
+    "claim:umi-vision-module-rgb-resolution": "49ce9e54c11d0bb02fdaaaf90c788fb30b880bc8910ca5ac8285c9eafb45b149",
+    "claim:hub-downstream-port-count": "1421e1e741c5611d0d44d667bb9e540c77e8b8901ebc8dc19601f66a68e7e415",
+    "claim:ego-1600-resolution": "9c7882fc91427aa9330a3bfa9fcbc1bc1368b7da9d40371585730e61c7edb17e",
+    "claim:ego-1600-max-fps": "ed21332582291f71447f23daaae00863734d5abf290440c412d0ffc6380cd55f",
+    "claim:ego-1920-resolution": "4589956025226e03ac8b92ebc12e88bdb906c457157f4a7dbe0270b5e5cba70b",
+    "claim:ego-1920-max-fps": "a9448f336a9a8257a78bbd595a1d99aa730fa43651f7a2131ebda45357c868fb",
+    "claim:ego-pro-rgb-max-fps": "4a3815994cb4ea96e6e16608bf78300179c8ea3ce38ddfa420bc30481c138475",
+    "claim:umi-finger-mono-resolution": "c65fd9e2fddbc9304e7f9a8763bb747c00908b99f6c9dede199053263a97d017",
+    "claim:umi-vision-module-mono-resolution": "f91810d68421423d72d9d3986091a4b1f852f37b92951a49a570682b9a7b9c32",
+    "claim:hub-downstream-port-output": "2fc59b87b5e3231cb7c11199a74a6b2e8e248cbea2188cb75d735bc4b63b1d04"
+  },
+  "scoped_field_aliases": {
+    "entity:ego-1920": {
+      "rgb_resolution": "rgb_resolution_options"
+    }
+  }
+}

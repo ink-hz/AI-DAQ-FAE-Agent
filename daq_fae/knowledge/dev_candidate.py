@@ -36,7 +36,8 @@ class DevCandidateKnowledge:
     is_candidate_preview = True
 
     def __init__(self, release_id: str, sections: list[dict], records: list[dict],
-                 field_aliases: dict[str, str]):
+                 field_aliases: dict[str, str],
+                 scoped_field_aliases: dict[str, dict[str, str]] | None = None):
         self.release_id = release_id
         self.manifest = {"format_version": 2, "candidate_preview": True,
                          "section_count": len(sections),
@@ -44,6 +45,7 @@ class DevCandidateKnowledge:
         self._sections = tuple(deepcopy(sections))
         self._records = tuple(deepcopy(records))
         self._field_aliases = dict(field_aliases)
+        self._scoped_field_aliases = deepcopy(scoped_field_aliases or {})
 
     @classmethod
     def load(cls, graph_dir: Path, bound_index: Path, archive: Path,
@@ -99,6 +101,7 @@ class DevCandidateKnowledge:
             sections.append(projected)
         source_checked = []
         field_aliases = {}
+        scoped_field_aliases = {}
         ledger_hash = "0" * 64
         if source_check is not None:
             raw = source_check.read_bytes()
@@ -148,9 +151,32 @@ class DevCandidateKnowledge:
                     if normalized in field_aliases and field_aliases[normalized] != field:
                         raise ValueError("Dev source check field alias ambiguity")
                     field_aliases[normalized] = field
+            scoped = ledger.get("scoped_field_aliases", {})
+            if not isinstance(scoped, dict):
+                raise ValueError("Dev source check scoped aliases invalid")
+            selected_entities = {row["id"] for row in source_checked
+                                 if row["kind"] == "entity"}
+            fields_by_entity: dict[str, set[str]] = {}
+            for row in source_checked:
+                if row["kind"] == "claim":
+                    fields_by_entity.setdefault(row["data"]["entity_id"], set()).add(
+                        row["data"]["field"])
+            for entity_id, aliases in scoped.items():
+                if entity_id not in selected_entities or not isinstance(aliases, dict):
+                    raise ValueError("Dev source check scoped alias entity invalid")
+                scoped_field_aliases[entity_id] = {}
+                for alias, field in aliases.items():
+                    if (not isinstance(alias, str) or not alias.strip()
+                            or field not in fields_by_entity.get(entity_id, set())):
+                        raise ValueError("Dev source check scoped alias field invalid")
+                    normalized = _identity_text(alias)
+                    if (normalized in scoped_field_aliases[entity_id]
+                            and scoped_field_aliases[entity_id][normalized] != field):
+                        raise ValueError("Dev source check scoped alias ambiguity")
+                    scoped_field_aliases[entity_id][normalized] = field
         release_hash = hashlib.sha256((graph_hash + ledger_hash).encode()).hexdigest()
         return cls("candidate-dev-" + release_hash, sections, source_checked,
-                   field_aliases)
+                   field_aliases, scoped_field_aliases)
 
     def records_for(self, role: str, *, for_delivery: bool = False):
         return [deepcopy(row) for row in self._records] if role == "internal_fae" else []
@@ -161,8 +187,13 @@ class DevCandidateKnowledge:
     def conflict_notices_for(self, role: str):
         return []
 
-    def resolve_field(self, field: str) -> str | None:
-        return self._field_aliases.get(_identity_text(field))
+    def resolve_field(self, field: str, entity_id: str | None = None) -> str | None:
+        normalized = _identity_text(field)
+        if entity_id is not None:
+            scoped = self._scoped_field_aliases.get(entity_id, {})
+            if normalized in scoped:
+                return scoped[normalized]
+        return self._field_aliases.get(normalized)
 
     def source_checked_variant_scopes(self, entity: str, field: str) -> dict[str, list[str]]:
         """Expose only the selector choices behind a generic Dev spec question."""
@@ -177,8 +208,10 @@ class DevCandidateKnowledge:
                       if len(name) == longest and name in query}
         scopes: dict[str, set[str]] = {}
         for row in self._records:
-            if row["kind"] != "claim" or row["data"]["field"] != field or \
-                    row["data"]["entity_id"] not in entity_ids:
+            if row["kind"] != "claim" or row["data"]["entity_id"] not in entity_ids:
+                continue
+            if row["data"]["field"] not in {
+                    field, self.resolve_field(field, row["data"]["entity_id"])}:
                 continue
             scope = row["scope"]
             for selector in scope.get("required_selectors", []):
@@ -198,6 +231,19 @@ class DevCandidateKnowledge:
             if any(_identity_text(str(scope[key])) not in text for key in selectors):
                 continue
             matches.append(row)
+        if matches:
+            distinct_names = {_identity_text(row["data"]["name"]) for row in matches}
+            retained = []
+            for row in matches:
+                name = _identity_text(row["data"]["name"])
+                containing = [other for other in distinct_names
+                              if len(other) > len(name) and name in other]
+                residual = text
+                for other in containing:
+                    residual = residual.replace(other, "")
+                if not containing or name in residual:
+                    retained.append(row)
+            matches = retained
         if len(matches) != 1:
             return {}
         row = matches[0]

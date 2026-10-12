@@ -211,6 +211,243 @@ def test_generic_variant_spec_reports_checked_scopes_without_answering():
     assert result.sources == []
 
 
+def test_explicit_single_port_scope_reaches_source_checked_power_rating():
+    ref = {"path": "hub.pdf", "sha256": "a" * 64,
+           "locator": {"kind": "page", "page": 4}}
+    entity = {"id": "entity:hub", "kind": "entity", "status": "verified",
+              "scope": {"product": "hub"},
+              "data": {"name": "HUB", "entity_type": "hub"},
+              "source_refs": [ref]}
+    claim = {"id": "claim:hub-power", "kind": "claim", "status": "verified",
+             "scope": {"product": "hub"}, "source_refs": [ref],
+             "data": {"entity_id": "entity:hub", "field": "downstream_port_power_output",
+                      "value": "5V/2A", "unit": "electrical_rating",
+                      "conditions": {"per_port": True}}}
+    knowledge = DevCandidateKnowledge("candidate-dev-" + "a" * 64,
+                                      [], [entity, claim], {})
+    question = "数采 HUB 单个下游端口的供电输出是多少？"
+    plan = prepare_turn(question, grounded_targets=knowledge.ground_question(question))
+    toolbox = DaqToolBox(question=question, knowledge=knowledge, role="internal_fae",
+                         requirements=plan.requirements)
+    result = toolbox.dispatch("lookup_spec", {
+        "entity": "HUB", "field": "downstream_port_power_output"})
+    assert result.status == "ok"
+    assert result.content["matches"][0]["data"]["value"] == "5V/2A"
+    assert result.content["matched_requirement_ids"] == [
+        item["id"] for item in plan.requirements if item["capability"] == "lookup_spec"]
+    generic_question = "数采 HUB 下游端口的供电输出是多少？"
+    generic_plan = prepare_turn(generic_question,
+                                grounded_targets=knowledge.ground_question(generic_question))
+    generic_toolbox = DaqToolBox(question=generic_question, knowledge=knowledge,
+                                 role="internal_fae", requirements=generic_plan.requirements)
+    assert generic_toolbox.dispatch("lookup_spec", {
+        "entity": "HUB", "field": "downstream_port_power_output"}).status == "not_found"
+    assert toolbox.dispatch("lookup_spec", {
+        "entity": "HUB", "field": "downstream_port_power_output",
+        "conditions": {"per_port": False}}).status == "not_found"
+
+    for aggregate_question in (
+        "HUB 单个端口标称 5V/2A，四个下游端口同时供电输出是多少？",
+        "HUB 单个下游端口标称 5V/2A，四口同时供电输出是多少？",
+    ):
+        aggregate_plan = prepare_turn(aggregate_question,
+                                      grounded_targets=knowledge.ground_question(aggregate_question))
+        aggregate_result = DaqToolBox(
+            question=aggregate_question, knowledge=knowledge, role="internal_fae",
+            requirements=aggregate_plan.requirements).dispatch("lookup_spec", {
+                "entity": "HUB", "field": "downstream_port_power_output",
+                "conditions": {"per_port": True}})
+        assert aggregate_result.status == "ok"
+        assert aggregate_result.content["matched_requirement_ids"] == []
+        session = DaqEvidencePolicy(allow_dev_source_check=True).begin(
+            aggregate_plan.evidence_requirements())
+        session.observe("lookup_spec", aggregate_result)
+        assert set(session.snapshot().requirement_status.values()) == {"unknown"}
+
+
+def test_rgb_question_cannot_be_satisfied_by_mono_resolution():
+    ref = {"path": "umi.pdf", "sha256": "a" * 64,
+           "locator": {"kind": "page", "page": 3}}
+    entity = {"id": "entity:umi-finger", "kind": "entity", "status": "verified",
+              "scope": {"product": "umi-finger"},
+              "data": {"name": "UMI Finger", "entity_type": "device"},
+              "source_refs": [ref]}
+    mono = {"id": "claim:umi-mono", "kind": "claim", "status": "verified",
+            "scope": {"product": "umi-finger"}, "source_refs": [ref],
+            "data": {"entity_id": "entity:umi-finger", "field": "stereo_mono_resolution",
+                     "value": "1280x960", "unit": "px", "conditions": {}}}
+    knowledge = DevCandidateKnowledge("candidate-dev-" + "a" * 64, [], [entity, mono], {})
+    question = "UMI Finger 的 RGB 分辨率是多少？"
+    plan = prepare_turn(question, grounded_targets=knowledge.ground_question(question))
+    result = DaqToolBox(question=question, knowledge=knowledge, role="internal_fae",
+                        requirements=plan.requirements).dispatch("lookup_spec", {
+                            "entity": "UMI Finger", "field": "stereo_mono_resolution"})
+    assert result.status == "ok"
+    assert result.content["matched_requirement_ids"] == []
+
+
+def test_frame_rate_intent_matches_fps_claim_and_model_field_alias():
+    ref = {"path": "ego.pdf", "sha256": "a" * 64,
+           "locator": {"kind": "page", "page": 3}}
+    scope = {"product": "ego", "required_selectors": ["resolution_variant"],
+             "resolution_variant": "1600x1200"}
+    entity = {"id": "entity:ego-1600", "kind": "entity", "status": "verified",
+              "scope": scope, "data": {"name": "EGO", "entity_type": "variant"},
+              "source_refs": [ref]}
+    claim = {"id": "claim:ego-fps", "kind": "claim", "status": "verified",
+             "scope": scope, "source_refs": [ref],
+             "data": {"entity_id": "entity:ego-1600", "field": "rgb_max_fps",
+                      "value": 60, "unit": "fps",
+                      "conditions": {"resolution": "1600x1200"}}}
+    knowledge = DevCandidateKnowledge("candidate-dev-" + "a" * 64,
+                                      [], [entity, claim],
+                                      {"rgb_max_frame_rate": "rgb_max_fps"})
+    question = "EGO 1600×1200 版本在 1600×1200 分辨率下的 RGB 最高帧率是多少？"
+    plan = prepare_turn(question, grounded_targets=knowledge.ground_question(question))
+    result = DaqToolBox(question=question, knowledge=knowledge, role="internal_fae",
+                        requirements=plan.requirements).dispatch("lookup_spec", {
+                            "entity": "EGO", "field": "rgb_max_frame_rate",
+                            "conditions": {"resolution_variant": "1600x1200",
+                                           "resolution": "1600x1200"}})
+    assert result.status == "ok"
+    assert result.content["matches"][0]["data"]["value"] == 60
+    assert result.content["matched_requirement_ids"] == [
+        item["id"] for item in plan.requirements if item["capability"] == "lookup_spec"]
+
+
+def test_scoped_resolution_alias_does_not_cross_ego_variants():
+    ref = {"path": "ego.pdf", "sha256": "a" * 64,
+           "locator": {"kind": "page", "page": 4}}
+    rows = []
+    for suffix, field, value in (
+        ("1600", "rgb_resolution", "1600x1200"),
+        ("1920", "rgb_resolution_options", ["1920x1200", "1920x1080"]),
+    ):
+        scope = {"product": "ego", "required_selectors": ["resolution_variant"],
+                 "resolution_variant": suffix + "x1200"}
+        rows.extend([
+            {"id": "entity:ego-" + suffix, "kind": "entity", "status": "verified",
+             "scope": scope, "data": {"name": "EGO", "entity_type": "variant"},
+             "source_refs": [ref]},
+            {"id": "claim:ego-" + suffix + "-resolution", "kind": "claim",
+             "status": "verified", "scope": scope, "source_refs": [ref],
+             "data": {"entity_id": "entity:ego-" + suffix, "field": field,
+                      "value": value, "unit": "px", "conditions": {}}},
+        ])
+    knowledge = DevCandidateKnowledge(
+        "candidate-dev-" + "a" * 64, [], rows,
+        {"rgb_resolution": "rgb_resolution"},
+        scoped_field_aliases={"entity:ego-1920": {
+            "rgb_resolution": "rgb_resolution_options"}},
+    )
+    for suffix, expected in (
+        ("1600", "1600x1200"),
+        ("1920", ["1920x1200", "1920x1080"]),
+    ):
+        question = f"EGO 双目 {suffix}×1200 版本的 RGB 分辨率是多少？"
+        plan = prepare_turn(question, grounded_targets=knowledge.ground_question(question))
+        result = DaqToolBox(question=question, knowledge=knowledge,
+                            role="internal_fae", requirements=plan.requirements).dispatch(
+                                "lookup_spec", {"entity": "EGO", "field": "rgb_resolution"})
+        assert result.status == "ok"
+        assert result.content["matches"][0]["data"]["value"] == expected
+    generic = DaqToolBox(question="EGO 双目的 RGB 分辨率是多少？",
+                         knowledge=knowledge, role="internal_fae").dispatch(
+                             "lookup_spec", {"entity": "EGO", "field": "rgb_resolution"})
+    assert generic.status == "not_found"
+    assert generic.content["source_checked_variant_scopes"] == {
+        "resolution_variant": ["1600x1200", "1920x1200"]}
+
+
+def test_resolution_measurement_condition_corrects_model_variant_key_only_when_equal():
+    ref = {"path": "ego-pro.pdf", "sha256": "a" * 64,
+           "locator": {"kind": "page", "page": 4}}
+    entity = {"id": "entity:ego-pro", "kind": "entity", "status": "verified",
+              "scope": {"product": "ego-pro"},
+              "data": {"name": "EGO Pro", "entity_type": "device"},
+              "source_refs": [ref]}
+    claim = {"id": "claim:ego-pro-fps", "kind": "claim", "status": "verified",
+             "scope": {"product": "ego-pro"}, "source_refs": [ref],
+             "data": {"entity_id": "entity:ego-pro", "field": "rgb_max_fps",
+                      "value": 60, "unit": "fps",
+                      "conditions": {"resolution": "1600x1200"}}}
+    knowledge = DevCandidateKnowledge("candidate-dev-" + "a" * 64,
+                                      [], [entity, claim],
+                                      {"rgb_max_frame_rate": "rgb_max_fps"})
+    question = "EGO Pro 在 1600×1200 分辨率下的 RGB 最高帧率是多少？"
+    plan = prepare_turn(question, grounded_targets=knowledge.ground_question(question))
+    toolbox = DaqToolBox(question=question, knowledge=knowledge,
+                         role="internal_fae", requirements=plan.requirements)
+    result = toolbox.dispatch("lookup_spec", {
+        "entity": "EGO Pro", "field": "rgb_max_frame_rate",
+        "conditions": {"resolution_variant": "1600x1200"}})
+    assert result.status == "ok"
+    assert result.content["matches"][0]["data"]["value"] == 60
+    assert result.content["matched_requirement_ids"] == [
+        item["id"] for item in plan.requirements if item["capability"] == "lookup_spec"]
+    assert toolbox.dispatch("lookup_spec", {
+        "entity": "EGO Pro", "field": "rgb_max_frame_rate",
+        "conditions": {"resolution_variant": "1920x1200"}}).status == "not_found"
+
+
+def test_exact_longer_product_name_wins_over_shorter_variant_name():
+    ref = {"path": "ego.pdf", "sha256": "a" * 64,
+           "locator": {"kind": "page", "page": 4}}
+    rows = [
+        {"id": "entity:ego-1600", "kind": "entity", "status": "verified",
+         "scope": {"product": "ego", "required_selectors": ["resolution_variant"],
+                   "resolution_variant": "1600x1200"},
+         "data": {"name": "EGO", "entity_type": "variant"}, "source_refs": [ref]},
+        {"id": "entity:ego-pro", "kind": "entity", "status": "verified",
+         "scope": {"product": "ego-pro"},
+         "data": {"name": "EGO Pro", "entity_type": "device"}, "source_refs": [ref]},
+    ]
+    knowledge = DevCandidateKnowledge("candidate-dev-" + "a" * 64, [], rows, {})
+    assert knowledge.ground_question(
+        "EGO Pro 在 1600×1200 分辨率下的 RGB 帧率是多少？") == {
+            "entities": ["entity:ego-pro"], "conditions": {}}
+    assert knowledge.ground_question(
+        "EGO Pro 和 EGO 双目 1600×1200 的帧率分别是多少？") == {}
+    other = {"id": "entity:umi-vision-module", "kind": "entity",
+             "status": "verified", "scope": {"product": "umi-vision-module"},
+             "data": {"name": "UMI 视觉模块", "entity_type": "component"},
+             "source_refs": [ref]}
+    finger = {"id": "entity:umi-finger", "kind": "entity",
+              "status": "verified", "scope": {"product": "umi-finger"},
+              "data": {"name": "UMI Finger", "entity_type": "device"},
+              "source_refs": [ref]}
+    umi = DevCandidateKnowledge("candidate-dev-" + "a" * 64, [], [other, finger], {})
+    assert umi.ground_question("比较 UMI Finger 和 UMI 视觉模块的 Mono 分辨率") == {}
+
+
+def test_grounded_entity_accepts_its_unique_id_suffix_as_model_tool_argument():
+    ref = {"path": "umi.pdf", "sha256": "a" * 64,
+           "locator": {"kind": "page", "page": 4}}
+    entity = {"id": "entity:umi-vision-module", "kind": "entity",
+              "status": "verified", "scope": {"product": "umi-vision-module"},
+              "data": {"name": "UMI 视觉模块", "entity_type": "component"},
+              "source_refs": [ref]}
+    claim = {"id": "claim:umi-mono-resolution", "kind": "claim",
+             "status": "verified", "scope": {"product": "umi-vision-module"},
+             "source_refs": [ref],
+             "data": {"entity_id": "entity:umi-vision-module",
+                      "field": "stereo_mono_resolution", "value": "1280x960",
+                      "unit": "px", "conditions": {}}}
+    knowledge = DevCandidateKnowledge("candidate-dev-" + "a" * 64,
+                                      [], [entity, claim], {})
+    question = "UMI 视觉模块的双目 Mono 分辨率是多少？"
+    plan = prepare_turn(question, grounded_targets=knowledge.ground_question(question))
+    toolbox = DaqToolBox(question=question, knowledge=knowledge,
+                         role="internal_fae", requirements=plan.requirements)
+    result = toolbox.dispatch("lookup_spec", {
+        "entity": "umi-vision-module", "field": "stereo_mono_resolution"})
+    assert result.status == "ok"
+    assert result.content["matched_requirement_ids"] == [
+        item["id"] for item in plan.requirements if item["capability"] == "lookup_spec"]
+    assert toolbox.dispatch("lookup_spec", {
+        "entity": "umi-finger", "field": "stereo_mono_resolution"}).status == "not_found"
+
+
 @pytest.mark.parametrize("field", ["mono_stereo_baseline", "mono_baseline",
                                      "stereo_baseline", "baseline"])
 def test_source_checked_mono_baseline_accepts_model_field_variants(field):
