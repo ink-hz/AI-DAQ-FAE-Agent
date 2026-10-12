@@ -22,6 +22,9 @@ That audit applies to the original generic B3 drafts. A separate [2026-10-12
 private preparation](../reviews/2026-10-12-daq-locator-and-d4-preparation.md)
 adds ten concrete candidate cases, one per family. They remain unreviewed,
 unfrozen, outside a release-bound suite and count as zero D4 passes.
+The [current private draft](../reviews/2026-10-12-daq-current-readiness-recheck.md)
+has twelve cases across those ten families, including an unauthorized/internal
+role comparison. It has the same unreviewed, unfrozen status.
 
 Use the following source-neutral authoring guide. Each row requires at least
 one concrete question, an expected evidence boundary, coverage IDs, an

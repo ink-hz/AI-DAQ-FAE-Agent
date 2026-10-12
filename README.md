@@ -22,6 +22,8 @@
 
 按[知识专项任务书](docs/superpowers/plans/2026-10-10-daq-knowledge-workstream-task-brief.md)建立了从原件清单到 Dev 答案复审的工程合同。私有候选包含 276 份原件、114 个章节、70 条历史记录及 335 条新增候选；它们仍不能作为已审核答案使用。现已按相机 FAE 的产品正文、事实、专题、选型、软件与来源层次，重建[当前数采私有候选知识目录](docs/reviews/2026-10-12-daq-candidate-knowledge-refresh.md)，另设 5 个数采组合系统。B2 已将 335 条新增候选逐条回查原件并形成 337 条未签认字段候选和增量复审包，另有 142 个待补字段定义、52 条内容裁决项、288 处章节一致性发现及 102 处历史定位差异；五条流程检查点占位的[10-11 修订](docs/reviews/2026-10-11-daq-b2-checkpoint-refresh.md)与组合指导设备适用范围的[10-12 复审](docs/reviews/2026-10-12-daq-entity-scope-triage.md)保留了原件和未决缺口。[102 处历史定位差异已分类并备好私有核对包，D4 十类具体候选题已草拟](docs/reviews/2026-10-12-daq-locator-and-d4-preparation.md)，均未签认。B3 已将 337 条字段候选接入私有影响图，现有 712 个覆盖单元与同数的草案题；这些题仍是同一缺证题族，未冻结或回放。当前私有内容队列汇集 149 个字段定义、52 条裁决和 114 节正文，均未签认。D2 572 项与新增 337 项的事实、权限或页面审核均未签认；另备苍渊首批六项及组合指导十项交接包。独立受控原件归档与重取尚未完成；D3 真实发布审计拒绝激活；D4 已有[五轮真实模型空知识 Dev 基线](docs/reviews/2026-10-10-daq-real-dev-empty-knowledge-baseline.md)，但十类冻结题、非空知识 Dev 回放和正式独立答案复审仍未完成。[逐项状态与阻断](docs/reviews/2026-10-10-daq-knowledge-workstream-status.md)区分工程验证、资料签认和真实发布。合入代码或推送远端不等于 Dev 知识切换，更不等于生产部署。
 
+[10 月 12 日当前候选复审](docs/reviews/2026-10-12-daq-current-readiness-recheck.md)纳入 742 条图记录与 909 项未签认审核项：D3 仍 `ready=false`，D4 已备十类 12 道未冻结候选题；均不构成真实知识发布或验收。
+
 ## 本机启动
 
 ```bash
