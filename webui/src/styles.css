@@ -824,6 +824,27 @@ code {
   grid-row: 1 / span 2;
 }
 
+.historical-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 18px;
+  color: #5d4917;
+  background: #fff7df;
+  border-top: 1px solid #e5d6a5;
+  font-size: 13px;
+}
+
+.historical-banner button {
+  border: 1px solid #a78431;
+  border-radius: 6px;
+  padding: 6px 10px;
+  color: #5d4917;
+  background: #fff;
+  white-space: nowrap;
+}
+
 .response-language-control {
   display: grid;
   gap: 4px;

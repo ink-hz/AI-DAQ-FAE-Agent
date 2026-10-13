@@ -122,6 +122,7 @@ function ChatWorkspace({
   const [input, setInput] = useState('');
   const [responseLanguage, setResponseLanguage] = useState<ResponseLanguage>(readPreferredResponseLanguage);
   const [sessionId, setSessionId] = useState<string | undefined>();
+  const [readOnlyHistory, setReadOnlyHistory] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
   const [activeAssistantId, setActiveAssistantId] = useState<string | undefined>();
   const [error, setError] = useState<string | null>(null);
@@ -289,7 +290,7 @@ function ChatWorkspace({
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     const text = input.trim();
-    if (!canSendWithAttachments(text, attachmentDrafts, isStreaming)) return;
+    if (readOnlyHistory || !canSendWithAttachments(text, attachmentDrafts, isStreaming)) return;
 
     const sentAttachments = freezeSentAttachments(attachmentDrafts);
     const attachmentIds = attachmentDrafts
@@ -378,6 +379,7 @@ function ChatWorkspace({
     discardUnsentAttachments();
     setMessages([]);
     setSessionId(undefined);
+    setReadOnlyHistory(false);
     setActiveAssistantId(undefined);
     setError(null);
     setIsStreaming(false);
@@ -409,6 +411,7 @@ function ChatWorkspace({
     const latestAnswer = [...conversation.messages].reverse().find((item) => item.role === 'assistant');
     if (latestAnswer?.responseLanguage) setResponseLanguage(latestAnswer.responseLanguage);
     setSessionId(conversation.sessionId);
+    setReadOnlyHistory(conversation.readOnly);
     setActiveAssistantId(undefined);
     setError(null);
     setIsStreaming(false);
@@ -572,7 +575,8 @@ function ChatWorkspace({
               key={message.id}
               message={message}
               onSelect={() => setActiveAssistantId(message.id)}
-              onFeedback={(draft) => handleFeedback(message.id, index, draft)}
+              onFeedback={readOnlyHistory ? undefined
+                : (draft) => handleFeedback(message.id, index, draft)}
             />
           ))}
         </div>
@@ -580,7 +584,18 @@ function ChatWorkspace({
         {error && <div className="error-line">{responseLanguage === 'en-US'
           ? 'The operation failed. Please try again.' : error}</div>}
 
-        {sessionHint && !isStreaming && (
+        {readOnlyHistory && (
+          <div className="historical-banner" role="status">
+            <span>{responseLanguage === 'en-US'
+              ? 'This conversation used an earlier knowledge release. It is available for reference only; start a new conversation to ask a follow-up.'
+              : '此会话使用旧知识版本，仅供查阅；如需继续提问，请开启新会话。'}</span>
+            <button type="button" onClick={() => resetSession()}>
+              {responseLanguage === 'en-US' ? 'New conversation' : '开启新会话'}
+            </button>
+          </div>
+        )}
+
+        {sessionHint && !isStreaming && !readOnlyHistory && (
           <div className="session-hint-line" role="status">
             <span>{responseLanguage === 'en-US'
               ? 'This conversation is long. Earlier constraints may no longer be fully available; start a new conversation for a new topic.'
@@ -597,10 +612,11 @@ function ChatWorkspace({
           onSubmit={handleSubmit}
           onFiles={addAttachmentFiles}
           onFileError={reportAttachmentFileError}
-          fileInputDisabled={isStreaming}
+          fileInputDisabled={isStreaming || readOnlyHistory}
         >
           <textarea
             value={input}
+            disabled={readOnlyHistory}
             onChange={(event) => setInput(event.target.value)}
             onKeyDown={(event) => {
               if (!shouldSubmitComposer({
@@ -625,7 +641,7 @@ function ChatWorkspace({
             responseLanguage={responseLanguage}
             drafts={attachmentDrafts}
             visionEnabled={visionEnabled}
-            disabled={isStreaming}
+            disabled={isStreaming || readOnlyHistory}
             onFiles={addAttachmentFiles}
             onFileError={reportAttachmentFileError}
             onRemove={removeAttachment}
@@ -654,7 +670,7 @@ function ChatWorkspace({
               <button
                 type="submit"
                 className="primary-button"
-                disabled={!canSendWithAttachments(input, attachmentDrafts, isStreaming)}
+                disabled={readOnlyHistory || !canSendWithAttachments(input, attachmentDrafts, isStreaming)}
               >
                 <Send size={16} />
                 Send

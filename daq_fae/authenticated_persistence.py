@@ -151,7 +151,8 @@ class DaqAuthenticatedPersistence:
         )
         return store.adopt(session) if store is not None else session
 
-    def load_session(self, subject, session_id, *, store=None):
+    def _load_session_with_access(self, subject, session_id, *, store=None,
+                                  allow_historical=False):
         _assert_subject(subject)
         _assert_session_id(session_id)
         try:
@@ -161,6 +162,7 @@ class DaqAuthenticatedPersistence:
         except Exception:
             raise ConversationStoreError("daq_conversation_storage_unavailable") from None
         _assert_owner(subject, session)
+        read_only = False
         if self.knowledge_access is not None:
             policy, durable, release = self.knowledge_access
             binding = policy.binding_for(subject, release)
@@ -168,18 +170,27 @@ class DaqAuthenticatedPersistence:
                 checkpoint = durable.load_context(subject, session_id)
             except Exception:
                 raise ConversationStoreError("daq_knowledge_context_unavailable") from None
-            if checkpoint is None or checkpoint.state.roles.get("knowledge_role") != binding["role"] or checkpoint.state.knowledge_release != release:
+            if checkpoint is None or checkpoint.state.roles.get("knowledge_role") != binding["role"]:
+                raise ConversationNotFound("conversation_not_found")
+            read_only = checkpoint.state.knowledge_release != release
+            if read_only and not allow_historical:
                 raise ConversationNotFound("conversation_not_found")
         if store is not None:
             session = store.adopt(session)
             _assert_owner(subject, session)
+        return session, read_only
+
+    def load_session(self, subject, session_id, *, store=None):
+        session, _ = self._load_session_with_access(subject, session_id, store=store)
         return session
 
     def history(self, subject, session_id):
-        session = self.load_session(subject, session_id)
+        session, read_only = self._load_session_with_access(
+            subject, session_id, allow_historical=True)
         return {"session_id": session.session_id, "channel": session.channel,
                 "messages": list(session.messages),
-                "current_schema": session.current_schema.model_dump() if session.current_schema else None}
+                "current_schema": session.current_schema.model_dump() if session.current_schema else None,
+                "read_only": read_only}
 
     def conversation_detail(self, subject, session_id):
         result = self.history(subject, session_id)
@@ -194,7 +205,8 @@ class DaqAuthenticatedPersistence:
         result['turns'] = (self.turn_history_reader.list_for_subject(session_id, subject.subject_id)
                            if self.turn_history_reader is not None else [])
         # A role change during the projection must invalidate the whole response.
-        self.load_session(subject, session_id)
+        _, result['read_only'] = self._load_session_with_access(
+            subject, session_id, allow_historical=True)
         return result
 
     def list_conversations(self, subject, *, cursor=None, limit=30):
@@ -207,15 +219,18 @@ class DaqAuthenticatedPersistence:
                 raise ConversationStoreError("daq_conversation_agent_mismatch") from None
         visible_items = []
         for item in page.items:
+            read_only = False
             if self.knowledge_access is not None:
                 try:
-                    self.load_session(subject, item.external_session_id)
+                    _, read_only = self._load_session_with_access(
+                        subject, item.external_session_id, allow_historical=True)
                 except ConversationNotFound:
                     continue
-            visible_items.append(item)
+            visible_items.append((item, read_only))
         return {"items": [{"session_id": item.external_session_id, "title": item.title,
                            "channel": item.channel, "created_at": item.created_at.isoformat(),
-                           "last_active_at": item.last_active_at.isoformat()} for item in visible_items],
+                           "last_active_at": item.last_active_at.isoformat(),
+                           "read_only": read_only} for item, read_only in visible_items],
                 "next_cursor": page.next_cursor}
 
     def save_turn(self, subject, session, *, turn, attachment_relations=(), connection=None):

@@ -70,6 +70,7 @@ export interface AuthenticatedConversationSummary {
   channel: string;
   created_at: string;
   last_active_at: string;
+  read_only?: boolean;
 }
 
 export interface AuthenticatedConversationsPage {
@@ -103,6 +104,7 @@ export interface AuthenticatedConversationDetail {
   messages: AuthenticatedConversationMessage[];
   current_schema: Record<string, unknown> | null;
   attachments: AuthenticatedConversationAttachment[];
+  read_only?: boolean;
   turns?: AuthenticatedConversationTurn[];
 }
 

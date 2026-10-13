@@ -240,6 +240,47 @@ def test_list_fails_closed_if_store_returns_foreign_agent_namespace(tmp_path):
         adapter.list_conversations(SUBJECT)
 
 
+def test_prior_release_history_is_read_only_for_same_role_and_hidden_after_role_change(tmp_path):
+    from types import SimpleNamespace
+
+    adapter, repo, _, _, _ = assembly(tmp_path)
+    session = adapter.create_session(SUBJECT)
+    session.append_message('user', '旧问题')
+    session.append_message('assistant', '旧答案')
+    repo.sessions[session.session_id] = session
+    now = datetime.now(UTC)
+    repo.list_result = ConversationPage(items=(ConversationSummary(
+        external_session_id=session.session_id, channel='fae', title='旧问题',
+        message_count=2, created_at=now, last_active_at=now),), next_cursor=None)
+
+    class Policy:
+        role = 'internal_fae'
+
+        def binding_for(self, subject, release):
+            return {'role': self.role, 'release_id': release}
+
+    class Durable:
+        def load_context(self, subject, session_id):
+            return SimpleNamespace(state=SimpleNamespace(
+                roles={'knowledge_role': 'internal_fae'}, knowledge_release='prior-release'))
+
+    policy = Policy()
+    adapter.knowledge_access = (policy, Durable(), 'current-release')
+    with pytest.raises(ConversationNotFound):
+        adapter.load_session(SUBJECT, session.session_id)
+    page = adapter.list_conversations(SUBJECT)
+    assert page['items'][0]['session_id'] == session.session_id
+    assert page['items'][0]['read_only'] is True
+    detail = adapter.conversation_detail(SUBJECT, session.session_id)
+    assert detail['read_only'] is True
+    assert detail['messages'][-1]['content'] == '旧答案'
+
+    policy.role = 'channel'
+    assert adapter.list_conversations(SUBJECT)['items'] == []
+    with pytest.raises(ConversationNotFound):
+        adapter.conversation_detail(SUBJECT, session.session_id)
+
+
 
 def test_attachment_content_bearers_and_credential_urls_are_not_persisted(tmp_path):
     adapter, repo, _, _, _ = assembly(tmp_path)

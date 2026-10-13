@@ -66,6 +66,9 @@ describe('restored authenticated conversations', () => {
     });
     expect(restored.messages[1].responseLanguage).toBe('en-US');
   });
+  it('marks a previous knowledge release as view-only', () => {
+    expect(normalizeRestoredConversation({ ...detail, read_only: true }).readOnly).toBe(true);
+  });
   it('gives every restored message a stable client id and safe render metadata', () => {
     const first = normalizeRestoredConversation(detail);
     const second = normalizeRestoredConversation(detail);

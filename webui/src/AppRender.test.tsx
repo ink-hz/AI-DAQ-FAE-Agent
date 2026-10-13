@@ -839,6 +839,43 @@ describe('App partner-aware identity surface', () => {
     expect(container.querySelectorAll('.message')).toHaveLength(4);
   });
 
+  it('shows prior-release history without allowing a new turn in that session', async () => {
+    await bootstrapIdentity(PARTNER_SESSION);
+    const fetchMock = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+      if (String(input) === '/authenticated/conversations?limit=30') {
+        return Promise.resolve(new Response(JSON.stringify({
+          items: [{ session_id: 'session-1', title: '旧问题', channel: 'fae',
+            created_at: '2026-08-30T02:00:00+00:00',
+            last_active_at: '2026-08-30T02:30:00+00:00', read_only: true }],
+          next_cursor: null,
+        })));
+      }
+      if (String(input) === '/authenticated/conversations/session-1') {
+        return Promise.resolve(new Response(JSON.stringify({
+          session_id: 'session-1', channel: 'fae', read_only: true,
+          messages: [{ role: 'user', content: '旧问题' },
+            { role: 'assistant', content: '旧答案' }],
+          current_schema: null, attachments: [],
+        })));
+      }
+      return authenticatedFetch(input, init);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const { container } = renderInteractiveApp();
+    await flushEffects();
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('.history-item')?.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await flushEffects();
+    expect(container.textContent).toContain('旧答案');
+    expect(container.textContent).toContain('旧知识版本');
+    expect(container.querySelector('textarea')?.disabled).toBe(true);
+    expect(container.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(true);
+    expect(chatCalls(fetchMock)).toHaveLength(0);
+  });
+
   it('stops an in-flight answer before replacing the workspace with history', async () => {
     await bootstrapIdentity(PARTNER_SESSION);
     const pending = deferred<Response>();

@@ -7,6 +7,7 @@ import type {
 } from './types';
 
 export interface RestoredConversation {
+  readOnly: boolean;
   sessionId: string;
   channel: string;
   messages: ChatMessage[];
@@ -41,6 +42,7 @@ export function normalizeRestoredConversation(
   const sessionId = detail.session_id;
   if (typeof sessionId !== 'string' || !sessionId) invalid();
   if (detail.channel !== 'fae') invalid();
+  if (detail.read_only !== undefined && typeof detail.read_only !== 'boolean') invalid();
   if (!Array.isArray(detail.messages)) invalid();
   const turns = detail.turns ?? [];
   if (!Array.isArray(turns)) invalid();
@@ -88,6 +90,7 @@ export function normalizeRestoredConversation(
   if (!Array.isArray(attachments)) invalid();
   return {
     sessionId,
+    readOnly: detail.read_only === true,
     channel: detail.channel,
     messages,
     attachments,
