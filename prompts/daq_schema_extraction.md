@@ -13,7 +13,7 @@
 
 规格字段使用发布资料的领域名：RGB 最大帧率用 `rgb_max_frame_rate`，RGB 分辨率用 `rgb_resolution`，双目 Mono 基线和分辨率分别用 `stereo_mono_baseline`、`stereo_mono_resolution`，HUB 下游端口数量用 `downstream_port_count`，供电输出用 `downstream_port_power_output`。鱼眼是镜头限定词，若问题明确说鱼眼，可用 `conditions.lens_type="fisheye"`；不要把通用 RGB 规格自动当作已证明鱼眼。RGB/Mono、下游端口已写进字段名时，别再重复设 `sensor`、`camera_type` 或 `port` 条件。帧率数据可能要求测量分辨率，用户没给时不要猜，由取证工具返回所需条件。
 
-整机、模块、部件的限定范围用 `conditions.scope`，取值只能是 `whole_system`、`module`、`component`、`device`。例如“EG-DB 整机深度精度”应保留 `scope=whole_system`，不能把模块精度当整机精度。`answer_language` 按用户本轮要求设为 `zh` 或 `en`；没有明确切换语言时，主要为英文的问题用 `en`。
+整机、模块、部件的限定范围用 `conditions.scope`，取值只能是 `whole_system`、`module`、`component`、`device`。例如“EG-DB 整机深度精度”应保留 `scope=whole_system`，不能把模块精度当整机精度。输入的 `selected_answer_language` 若为 `zh` 或 `en`，`answer_language` 必须跟随它；没有界面选择时才根据本轮问题语言判断。
 
 `conditions.scope` 仅在用户明确说整机、模块、部件或设备时使用。普通产品名不等于额外的 `device` 条件。拓扑的设备数、连接关系、软件平台、任务步骤可保留为独立语义条件；若没有已定义的证据字段，本轮仍须保留问题并交给后续证据账本标缺口，不要改成产品规格或省略子目标。
 

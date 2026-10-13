@@ -45,6 +45,7 @@ export interface DoneEvent {
 }
 
 export interface ChatMessage {
+  responseLanguage?: import('./responseLanguage').ResponseLanguage;
   id: string;
   role: Role;
   content: string;

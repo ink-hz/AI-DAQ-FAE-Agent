@@ -819,8 +819,29 @@ code {
 .composer-actions {
   display: flex;
   align-items: flex-end;
+  gap: 12px;
   grid-column: 2;
   grid-row: 1 / span 2;
+}
+
+.response-language-control {
+  display: grid;
+  gap: 4px;
+  min-width: 135px;
+  color: #40564a;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.response-language-control select {
+  min-height: 36px;
+  padding: 6px 8px;
+  border: 1px solid #b8c8bb;
+  border-radius: 7px;
+  background: #fff;
+  color: #17211b;
+  font: inherit;
+  font-size: 13px;
 }
 
 .attachment-composer {

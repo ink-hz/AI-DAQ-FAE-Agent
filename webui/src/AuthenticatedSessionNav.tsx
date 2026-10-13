@@ -11,9 +11,10 @@ import type { AuthenticatedConversationSummary } from './types';
 
 interface AuthenticatedSessionNavProps {
   onOpen: (conversation: RestoredConversation) => void;
+  responseLanguage?: import('./responseLanguage').ResponseLanguage;
 }
 
-export function AuthenticatedSessionNav({ onOpen }: AuthenticatedSessionNavProps) {
+export function AuthenticatedSessionNav({ onOpen, responseLanguage = 'zh-CN' }: AuthenticatedSessionNavProps) {
   const [items, setItems] = useState<AuthenticatedConversationSummary[]>([]);
   // The cursor is opaque server state: it lives here and is never rendered.
   const [cursor, setCursor] = useState<string | null>(null);
@@ -30,11 +31,11 @@ export function AuthenticatedSessionNav({ onOpen }: AuthenticatedSessionNavProps
       setItems((current) => (nextCursor ? [...current, ...page.items] : page.items));
       setCursor(page.next_cursor);
     } catch {
-      setListError('历史会话加载失败');
+      setListError(responseLanguage === 'en-US' ? 'Could not load conversation history' : '历史会话加载失败');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [responseLanguage]);
 
   useEffect(() => {
     void loadPage();
@@ -49,7 +50,7 @@ export function AuthenticatedSessionNav({ onOpen }: AuthenticatedSessionNavProps
       onOpen(conversation);
       window.history.pushState(null, '', sessionConversationPath(conversation.sessionId));
     } catch {
-      setOpenError('会话打开失败');
+      setOpenError(responseLanguage === 'en-US' ? 'Could not open conversation' : '会话打开失败');
     } finally {
       setOpeningId(null);
     }
@@ -58,10 +59,10 @@ export function AuthenticatedSessionNav({ onOpen }: AuthenticatedSessionNavProps
   return (
     <nav
       className="authenticated-history"
-      aria-label="历史会话"
+      aria-label={responseLanguage === 'en-US' ? 'Conversation history' : '历史会话'}
       aria-busy={loading ? true : undefined}
     >
-      <div className="authenticated-history-heading">历史会话</div>
+      <div className="authenticated-history-heading">{responseLanguage === 'en-US' ? 'Conversation history' : '历史会话'}</div>
 
       {items.map((item) => (
         <button
@@ -79,13 +80,13 @@ export function AuthenticatedSessionNav({ onOpen }: AuthenticatedSessionNavProps
       ))}
 
       {!loading && !listError && items.length === 0 && (
-        <p className="history-empty">暂无历史会话</p>
+        <p className="history-empty">{responseLanguage === 'en-US' ? 'No conversations yet' : '暂无历史会话'}</p>
       )}
 
       {listError && (
         <div className="history-error" role="status">
           <span>{listError}</span>
-          <button type="button" onClick={() => { void loadPage(); }}>重试</button>
+          <button type="button" onClick={() => { void loadPage(); }}>{responseLanguage === 'en-US' ? 'Retry' : '重试'}</button>
         </div>
       )}
 

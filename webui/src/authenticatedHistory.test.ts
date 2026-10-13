@@ -54,6 +54,18 @@ describe('restored authenticated conversations', () => {
       outcome: 'safe_abstained', trace_id: 'trace-1', turn_id: 'turn-1',
     });
   });
+  it('restores the selected language from the persisted turn', () => {
+    const restored = normalizeRestoredConversation({
+      ...detail,
+      turns: [{
+        turn_index: 0, turn_id: 'turn-en', trace_id: 'trace-en',
+        question: detail.messages[0].content, answer: detail.messages[1].content,
+        outcome: 'resolved', sources: [], stages: [],
+        done: { outcome: 'resolved', answer_language: 'en' },
+      }],
+    });
+    expect(restored.messages[1].responseLanguage).toBe('en-US');
+  });
   it('gives every restored message a stable client id and safe render metadata', () => {
     const first = normalizeRestoredConversation(detail);
     const second = normalizeRestoredConversation(detail);

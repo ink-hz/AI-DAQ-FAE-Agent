@@ -13,6 +13,7 @@ const DOCUMENT_ATTACHMENT_ACCEPT = ATTACHMENT_ACCEPT.split(',')
   .join(',');
 
 interface AttachmentComposerProps {
+  responseLanguage?: import('./responseLanguage').ResponseLanguage;
   drafts: AttachmentDraft[];
   visionEnabled?: boolean;
   disabled?: boolean;
@@ -22,7 +23,12 @@ interface AttachmentComposerProps {
   onRetry: (draft: AttachmentDraft) => void;
 }
 
-function statusLabel(draft: AttachmentDraft): string {
+function statusLabel(draft: AttachmentDraft, english = false): string {
+  if (english) {
+    if (draft.status === 'uploading' || draft.status === 'selected') return 'Uploading and processing';
+    if (draft.status === 'failed') return 'Processing failed. Please retry.';
+    return draft.warnings?.includes('ocr_unavailable') ? 'Ready (OCR unavailable)' : 'Ready';
+  }
   if (draft.status === 'uploading' || draft.status === 'selected') return '上传并解析中';
   if (draft.status === 'failed') return draft.error || '处理失败';
   if (draft.warnings?.includes('ocr_unavailable')) return '已就绪（OCR 不可用）';
@@ -31,6 +37,7 @@ function statusLabel(draft: AttachmentDraft): string {
 
 export function AttachmentComposer({
   drafts, visionEnabled = false, disabled = false, onFiles, onFileError, onRemove, onRetry,
+  responseLanguage = 'zh-CN',
 }: AttachmentComposerProps) {
   const pickerPendingRef = useRef(false);
   const [pickerPending, setPickerPending] = useState(false);
@@ -60,7 +67,9 @@ export function AttachmentComposer({
     <div className="attachment-composer">
       <label className="attachment-picker">
         <Paperclip size={16} />
-        <span>{visionEnabled ? '添加图片或附件' : '添加附件'}</span>
+        <span>{responseLanguage === 'en-US'
+          ? (visionEnabled ? 'Add image or attachment' : 'Add attachment')
+          : (visionEnabled ? '添加图片或附件' : '添加附件')}</span>
         <input
           type="file"
           multiple
@@ -83,14 +92,14 @@ export function AttachmentComposer({
               <span className="attachment-card-copy">
                 <strong>{draft.displayName}</strong>
                 <small>{draft.kind} · {formatAttachmentSize(draft.sizeBytes)}</small>
-                <small role="status">{statusLabel(draft)}</small>
+                <small role="status">{statusLabel(draft, responseLanguage === 'en-US')}</small>
               </span>
               {draft.status === 'failed' && (
-                <button type="button" onClick={() => onRetry(draft)} aria-label={`重试 ${draft.displayName}`}>
+                <button type="button" onClick={() => onRetry(draft)} aria-label={responseLanguage === 'en-US' ? `Retry ${draft.displayName}` : `重试 ${draft.displayName}`}>
                   <RefreshCw size={14} />
                 </button>
               )}
-              <button type="button" onClick={() => onRemove(draft)} aria-label={`移除 ${draft.displayName}`}>
+              <button type="button" onClick={() => onRemove(draft)} aria-label={responseLanguage === 'en-US' ? `Remove ${draft.displayName}` : `移除 ${draft.displayName}`}>
                 <X size={14} />
               </button>
             </div>
@@ -99,7 +108,9 @@ export function AttachmentComposer({
       )}
       {!visionEnabled && (
         <p className="attachment-disclosure">
-          当前环境图片理解未启用；仍可上传 PDF、Office、文本、日志和代码附件。
+          {responseLanguage === 'en-US'
+            ? 'Image analysis is unavailable in this environment. You can still upload documents, text, logs and code.'
+            : '当前环境图片理解未启用；仍可上传 PDF、Office、文本、日志和代码附件。'}
         </p>
       )}
     </div>

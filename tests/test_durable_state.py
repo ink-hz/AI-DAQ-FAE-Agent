@@ -226,6 +226,52 @@ def test_missing_durable_config_fails_closed():
         configure_durable_state(FastAPI(), environ={})
 
 
+def test_legacy_v1_task_context_is_readable_without_losing_owner_provenance():
+    from daq_fae.durable_state import DaqContextState
+    from pydantic import ValidationError
+
+    legacy = {
+        'version': 1, 'topic_id': 'topic_1', 'turn': 1,
+        'values': {'platform': {'value': 'Linux', 'origin_turn': 1,
+                                'certainty': 'asserted', 'authority': 'user_supplied'}},
+        'attempted_steps': [], 'active_capabilities': [],
+    }
+    restored = DaqContextState.model_validate({'task_context': legacy})
+    assert restored.task_context['version'] == 3
+    assert restored.task_context['values'] == legacy['values']
+    assert restored.task_context['grounded_scope'] == {}
+    with pytest.raises(ValidationError):
+        DaqContextState.model_validate({'task_context': {**legacy, 'unreviewed_claim': 'yes'}})
+
+
+def test_sealed_legacy_v1_context_survives_database_history_read(pg_database):
+    from daq_fae.durable_state import DaqContextState
+
+    state = store(pg_database)
+    session_id = f'daq:{uuid4()}'
+    legacy = {'version': 1, 'topic_id': 'topic_1', 'turn': 1,
+              'values': {}, 'attempted_steps': [], 'active_capabilities': []}
+    payload = DaqContextState(knowledge_release='prior-release',
+                              roles={'knowledge_role': 'internal_fae'}).model_dump()
+    payload['task_context'] = legacy
+    binding = f'daq-context:ai-daq-fae-agent:{SUBJECT.subject_id}:{session_id}:r1'
+    sealed = state._seal(binding, payload)
+    with psycopg.connect(pg_database) as connection:
+        connection.execute('''insert into daq_state_sessions
+            (agent_id, external_session_id, owner_subject_id) values (%s,%s,%s)''',
+            ('ai-daq-fae-agent', session_id, SUBJECT.subject_id))
+        connection.execute('''insert into daq_context_checkpoints
+            (agent_id, owner_subject_id, external_session_id, revision,
+             state_ciphertext, state_key_version, state_sha256)
+            values (%s,%s,%s,1,%s,%s,%s)''',
+            ('ai-daq-fae-agent', SUBJECT.subject_id, session_id,
+             sealed.ciphertext, sealed.key_version, sealed.state_sha256))
+    restored = store(pg_database).load_context(SUBJECT, session_id)
+    assert restored.state.task_context['version'] == 3
+    assert restored.state.knowledge_release == 'prior-release'
+    assert restored.state.roles['knowledge_role'] == 'internal_fae'
+
+
 def test_task_context_checkpoint_round_trip_preserves_multiturn_user_provenance(pg_database):
     from daq_fae.durable_state import DaqContextState
     from daq_fae.task_context import prepare_turn

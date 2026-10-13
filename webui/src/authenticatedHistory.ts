@@ -70,6 +70,8 @@ export function normalizeRestoredConversation(
       id: `history-${sessionId}-${index}`,
       role,
       content,
+      ...(turn?.done.answer_language === 'en' ? { responseLanguage: 'en-US' as const }
+        : turn?.done.answer_language === 'zh' ? { responseLanguage: 'zh-CN' as const } : {}),
       // Synthetic monotonic order, not a clock reading: the server keeps no
       // per-message timestamp and the UI must not imply one.
       createdAt: index,

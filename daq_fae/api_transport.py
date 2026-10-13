@@ -17,6 +17,7 @@ class ChatRequest(BaseModel):
     channel: Literal['fae', 'ecom'] = 'fae'
     client_request_id: str | None = Field(default=None, min_length=1, max_length=128)
     attachment_ids: list[str] = Field(default_factory=list, max_length=5)
+    response_language: Literal['zh-CN', 'en-US'] | None = None
 
     @model_validator(mode='before')
     @classmethod

@@ -30,38 +30,41 @@ export function buildThinkingSteps(activeAssistant?: ChatMessage): ThinkingStep[
   stageEvents.forEach((stage, index) => {
     if (stage.stage_id) lastById.set(stage.stage_id, index);
   });
+  const english = activeAssistant.responseLanguage === 'en-US'
+    || activeAssistant.done?.answer_language === 'en';
   const steps = stageEvents
     .filter((stage, index) => !stage.stage_id || lastById.get(stage.stage_id) === index)
-    .map(stageToThinkingStep);
-  const capabilityStep = capabilityPlanStep(activeAssistant.done);
+    .map((stage, index) => stageToThinkingStep(stage, index, english));
+  const capabilityStep = capabilityPlanStep(activeAssistant.done, english);
   if (capabilityStep) steps.push(capabilityStep);
 
   const sourceCount = activeAssistant.sources?.length || 0;
   if (sourceCount > 0) {
     steps.push({
       id: 'sources',
-      title: '检索证据',
-      detail: `命中 ${sourceCount} 个来源`,
+      title: english ? 'Evidence sources' : '检索证据',
+      detail: english ? `${sourceCount} sources retrieved` : `命中 ${sourceCount} 个来源`,
       status: 'done',
     });
   }
 
-  const coverageStep = coverageSummaryStep(activeAssistant.done);
+  const coverageStep = coverageSummaryStep(activeAssistant.done, english);
   if (coverageStep) steps.push(coverageStep);
 
   if (activeAssistant.streamError) {
     const streamError = activeAssistant.streamError;
     steps.push({
       id: 'stream-error',
-      title: '请求流异常',
-      detail: `${streamError.phase} · 请求 ${streamError.clientRequestId.slice(0, 8)} · ${streamError.message}`,
+      title: english ? 'Request interrupted' : '请求流异常',
+      detail: english ? `${streamError.phase} · request ${streamError.clientRequestId.slice(0, 8)}`
+        : `${streamError.phase} · 请求 ${streamError.clientRequestId.slice(0, 8)} · ${streamError.message}`,
       status: 'warning',
     });
     return steps;
   }
 
   if (activeAssistant.done) {
-    steps.push(riskStatusStep(activeAssistant.done));
+    steps.push(riskStatusStep(activeAssistant.done, english));
   } else if (steps.length === 0) {
     steps.push({
       id: 'waiting',
@@ -81,18 +84,41 @@ export function buildThinkingSteps(activeAssistant?: ChatMessage): ThinkingStep[
   return steps;
 }
 
-function stageToThinkingStep(stage: StageEvent, index: number): ThinkingStep {
+function stageToThinkingStep(stage: StageEvent, index: number, english = false): ThinkingStep {
+  const known: Record<string, [string, string, string, string]> = {
+    guardrail: ['Boundary Guard Agent', '检查问题是否在 Orbbec 技术服务范围内',
+      'Boundary Guard Agent', 'Checked the technical service boundary'],
+    schema: ['Intent Analyst Agent', '问题结构化完成',
+      'Intent Analyst Agent', 'Structured the request and constraints'],
+    loop: ['AI DAQ FAE Agent', '模型驱动工具循环取证作答',
+      'AI DAQ FAE Agent', 'Gathered evidence and drafted the answer'],
+    coverage: ['证据覆盖检查', '核对本轮目标与实际证据',
+      'Evidence coverage', 'Checked goals against available evidence'],
+    outcome: ['回答结果', '记录本轮结果与回退状态',
+      'Answer outcome', 'Recorded the result and fallback status'],
+    tool_call: ['知识工具', '执行本轮证据查询',
+      'Evidence tool', 'Queried the available evidence'],
+  };
+  const display = stage.stage ? known[stage.stage] : undefined;
+  const running: Record<string, [string, string]> = {
+    guardrail: ['正在检查服务范围', 'Checking the service boundary'],
+    schema: ['正在理解问题与约束', 'Understanding the request and constraints'],
+    loop: ['正在检索证据并生成回答', 'Gathering evidence and drafting an answer'],
+  };
+  const runningDetail = stage.status === 'running' && stage.stage
+    ? running[stage.stage]?.[english ? 1 : 0] : undefined;
   return {
     id: `stage-${index}`,
-    title: stage.agent || stage.stage || 'Agent',
-    detail: stage.message || stage.status || 'running',
+    title: display ? display[english ? 2 : 0] : stage.agent || stage.stage || 'Agent',
+    detail: runningDetail || (display ? display[english ? 3 : 1]
+      : stage.message || stage.status || 'running'),
     status: stage.status === 'running' ? 'running'
       : stage.status === 'error' ? 'warning' : 'done',
     elapsedMs: stage.elapsed_ms,
   };
 }
 
-function capabilityPlanStep(done?: DoneEvent): ThinkingStep | null {
+function capabilityPlanStep(done?: DoneEvent, english = false): ThinkingStep | null {
   const plan = isRecord(done?.plan) ? done?.plan : undefined;
   if (!plan) return null;
   const capabilities: string[] = [];
@@ -105,13 +131,13 @@ function capabilityPlanStep(done?: DoneEvent): ThinkingStep | null {
   if (capabilities.length === 0) return null;
   return {
     id: 'capabilities',
-    title: '规划能力',
+    title: english ? 'Capabilities' : '规划能力',
     detail: capabilities.join(' + '),
     status: 'done',
   };
 }
 
-function coverageSummaryStep(done?: DoneEvent): ThinkingStep | null {
+function coverageSummaryStep(done?: DoneEvent, english = false): ThinkingStep | null {
   const coverage = isRecord(done?.capability_coverage) ? done?.capability_coverage : undefined;
   if (!coverage) return null;
   const pairs = Object.entries(coverage)
@@ -120,37 +146,39 @@ function coverageSummaryStep(done?: DoneEvent): ThinkingStep | null {
   if (pairs.length === 0) return null;
   return {
     id: 'coverage',
-    title: '证据覆盖',
+    title: english ? 'Evidence coverage' : '证据覆盖',
     detail: pairs.join('; '),
     status: 'done',
   };
 }
 
-function riskStatusStep(done: DoneEvent): ThinkingStep {
+function riskStatusStep(done: DoneEvent, english = false): ThinkingStep {
   if (done.fallback_used) {
     return {
       id: 'risk',
-      title: '风险状态',
+      title: english ? 'Fallback status' : '风险状态',
       detail: `fallback: ${done.fallback_reason || 'unknown'}`,
       status: 'warning',
     };
   }
   if (done.outcome === 'safe_abstained') {
     return {
-      id: 'risk', title: '风险状态',
-      detail: '安全弃答 · 关键证据仍不足', status: 'warning',
+      id: 'risk', title: english ? 'Fallback status' : '风险状态',
+      detail: english ? 'Unable to conclude · key evidence is missing'
+        : '安全弃答 · 关键证据仍不足', status: 'warning',
     };
   }
   if (done.outcome && done.outcome !== 'resolved') {
     return {
-      id: 'risk', title: '风险状态',
-      detail: `请求未完成 · ${done.outcome}`, status: 'warning',
+      id: 'risk', title: english ? 'Fallback status' : '风险状态',
+      detail: english ? `Request incomplete · ${done.outcome}`
+        : `请求未完成 · ${done.outcome}`, status: 'warning',
     };
   }
   return {
     id: 'risk',
-    title: '风险状态',
-    detail: '已完成',
+    title: english ? 'Fallback status' : '风险状态',
+    detail: english ? 'Completed' : '已完成',
     status: 'done',
   };
 }

@@ -88,6 +88,8 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument('--suite', choices=('new', 'old24', 'all'), default='new')
     parser.add_argument('--case-ids', default='')
+    parser.add_argument('--response-language', choices=('zh-CN', 'en-US'),
+                        help='Explicit browser language selection for every replayed turn')
     parser.add_argument('--output-dir', type=Path)
     parser.add_argument('--concurrency-probe', action='store_true',
                         help='Run exactly two independent one-turn cases concurrently')
@@ -177,6 +179,7 @@ def main() -> int:
                 'schema_prompt_sha256': _sha(ROOT / 'prompts/daq_schema_extraction.md'),
                 'model': app.state.chat_adapter.model if hasattr(app.state, 'chat_adapter') else os.environ['DAQ_ANTHROPIC_MODEL'],
                 'concurrency': 2 if args.concurrency_probe else 1,
+                'selected_response_language': args.response_language,
             }
             (output / 'identity.json').write_text(json.dumps(identity, ensure_ascii=False, indent=2))
             (output / 'identity.json').chmod(0o600)
@@ -197,6 +200,8 @@ def main() -> int:
                     def concurrent_turn(case):
                         body = {'message': case['question'],
                                 'client_request_id': f"{case['id']}-probe-{uuid4()}"}
+                        if args.response_language:
+                            body['response_language'] = args.response_language
                         barrier.wait(timeout=15)
                         started = time.monotonic()
                         response = client.post('/chat', json=body, headers=headers)
@@ -279,6 +284,8 @@ def main() -> int:
                     for index, question in enumerate(questions):
                         started = time.monotonic()
                         body = {'message': question, 'client_request_id': f"{case['id']}-{index}-{uuid4()}"}
+                        if args.response_language:
+                            body['response_language'] = args.response_language
                         if case.get('fixture') == 'current_turn_image':
                             from PIL import Image, ImageDraw
                             picture = Image.new('RGB', (320, 180), 'white')

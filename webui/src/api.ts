@@ -90,6 +90,7 @@ export function reduceAssistantTurn(turn: AssistantTurn, event: SseEvent): Assis
 }
 
 export async function streamChat(params: {
+  responseLanguage?: import('./responseLanguage').ResponseLanguage;
   message: string;
   sessionId?: string;
   channel?: 'fae' | 'ecom';
@@ -109,6 +110,7 @@ export async function streamChat(params: {
       },
       body: JSON.stringify({
         message: params.message,
+        response_language: params.responseLanguage,
         session_id: params.sessionId,
         channel: params.channel || 'fae',
         client_request_id: params.clientRequestId,

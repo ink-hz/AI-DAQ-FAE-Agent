@@ -26,6 +26,7 @@ interface MessageArticleProps {
 }
 
 export function MessageArticle({ message, onSelect, onFeedback }: MessageArticleProps) {
+  const english = message.responseLanguage === 'en-US' || message.done?.answer_language === 'en';
   const [previewAttachment, setPreviewAttachment] = useState<SentAttachment | null>(null);
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle');
   const [copyPending, setCopyPending] = useState(false);
@@ -116,7 +117,7 @@ export function MessageArticle({ message, onSelect, onFeedback }: MessageArticle
         {message.content ? (
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
         ) : message.restored ? (
-          <p className="restored-empty-content">未保存回答内容</p>
+          <p className="restored-empty-content">{english ? 'Answer content was not saved' : '未保存回答内容'}</p>
         ) : (
           <div className="stream-placeholder">
             <Activity size={16} />
@@ -126,7 +127,7 @@ export function MessageArticle({ message, onSelect, onFeedback }: MessageArticle
       </div>
 
       {message.role === 'user' && message.attachments && message.attachments.length > 0 && (
-        <div className="sent-attachments" aria-label="本轮附件">
+        <div className="sent-attachments" aria-label={english ? 'Attachments for this turn' : '本轮附件'}>
           {message.attachments.map((attachment) => {
             const hasImagePreview = attachment.kind === 'image' && attachment.previewUrl;
             return (
@@ -135,7 +136,7 @@ export function MessageArticle({ message, onSelect, onFeedback }: MessageArticle
                   <button
                     type="button"
                     className="sent-attachment-visual"
-                    aria-label={`查看 ${attachment.displayName} 大图`}
+                    aria-label={english ? `Enlarge ${attachment.displayName}` : `查看 ${attachment.displayName} 大图`}
                     onClick={(event) => {
                       event.stopPropagation();
                       previewTriggerRef.current = event.currentTarget;
@@ -169,7 +170,7 @@ export function MessageArticle({ message, onSelect, onFeedback }: MessageArticle
           className="attachment-preview-backdrop"
           role="dialog"
           aria-modal="true"
-          aria-label={`${previewAttachment.displayName} 大图预览`}
+          aria-label={english ? `Image preview: ${previewAttachment.displayName}` : `${previewAttachment.displayName} 大图预览`}
           onCancel={(event) => {
             event.preventDefault();
             closePreview();
@@ -198,7 +199,7 @@ export function MessageArticle({ message, onSelect, onFeedback }: MessageArticle
               <button
                 ref={previewCloseRef}
                 type="button"
-                aria-label={`关闭 ${previewAttachment.displayName} 大图`}
+                aria-label={english ? `Close ${previewAttachment.displayName}` : `关闭 ${previewAttachment.displayName} 大图`}
                 onClick={closePreview}
               >
                 <X size={18} />
@@ -207,7 +208,7 @@ export function MessageArticle({ message, onSelect, onFeedback }: MessageArticle
             <img
               className="attachment-preview-image"
               src={previewAttachment.previewUrl}
-              alt={`${previewAttachment.displayName} 大图`}
+              alt={english ? `Enlarged ${previewAttachment.displayName}` : `${previewAttachment.displayName} 大图`}
             />
           </div>
         </dialog>
@@ -226,16 +227,14 @@ export function MessageArticle({ message, onSelect, onFeedback }: MessageArticle
             <button
               type="button"
               className={`copy-answer-button ${copyState}`}
-              aria-label={copyPending
-                ? '正在复制'
-                : copyState === 'copied'
-                ? '已复制'
-                : copyState === 'error' ? '复制失败' : '复制回答'}
-              title={copyPending
-                ? '正在复制'
-                : copyState === 'copied'
-                ? '已复制'
-                : copyState === 'error' ? '复制失败' : '复制回答'}
+              aria-label={copyPending ? (english ? 'Copying' : '正在复制')
+                : copyState === 'copied' ? (english ? 'Copied' : '已复制')
+                  : copyState === 'error' ? (english ? 'Copy failed' : '复制失败')
+                    : (english ? 'Copy answer' : '复制回答')}
+              title={copyPending ? (english ? 'Copying' : '正在复制')
+                : copyState === 'copied' ? (english ? 'Copied' : '已复制')
+                  : copyState === 'error' ? (english ? 'Copy failed' : '复制失败')
+                    : (english ? 'Copy answer' : '复制回答')}
               disabled={copyPending || !isComplete || !message.content.trim()}
               onClick={copyAnswer}
             >
@@ -248,12 +247,14 @@ export function MessageArticle({ message, onSelect, onFeedback }: MessageArticle
                 className={copyState === 'error' ? 'copy-state error' : 'copy-state'}
                 role="status"
               >
-                {copyState === 'copied' ? '已复制' : '复制失败'}
+                {copyState === 'copied' ? (english ? 'Copied' : '已复制')
+                  : (english ? 'Copy failed' : '复制失败')}
               </span>
             )}
           </div>
           {shouldShowFeedback && onFeedback && (
             <FeedbackControls
+              english={english}
               feedback={message.feedback}
               onFeedback={onFeedback}
             />
@@ -269,11 +270,12 @@ export function MessageArticle({ message, onSelect, onFeedback }: MessageArticle
 }
 
 interface FeedbackControlsProps {
+  english?: boolean;
   feedback?: ChatMessage['feedback'];
   onFeedback: (draft: FeedbackDraft) => Promise<void> | void;
 }
 
-function FeedbackControls({ feedback, onFeedback }: FeedbackControlsProps) {
+function FeedbackControls({ feedback, onFeedback, english = false }: FeedbackControlsProps) {
   const [issueOpen, setIssueOpen] = useState(false);
   const [reasonCode, setReasonCode] = useState<FeedbackReasonCode>('fact_error');
   const [comment, setComment] = useState('');
@@ -309,8 +311,8 @@ function FeedbackControls({ feedback, onFeedback }: FeedbackControlsProps) {
       <button
         type="button"
         className={`feedback-icon-button ${isGood ? 'active' : ''}`}
-        aria-label="有用"
-        title="有用"
+        aria-label={english ? 'Helpful' : '有用'}
+        title={english ? 'Helpful' : '有用'}
         disabled={isSubmitting}
         onClick={submitGood}
       >
@@ -319,40 +321,44 @@ function FeedbackControls({ feedback, onFeedback }: FeedbackControlsProps) {
       <button
         type="button"
         className={`feedback-icon-button ${isBad ? 'active' : ''}`}
-        aria-label="不达标"
-        title="不达标"
+        aria-label={english ? 'Needs improvement' : '不达标'}
+        title={english ? 'Needs improvement' : '不达标'}
         disabled={isSubmitting}
         onClick={() => setIssueOpen((current) => !current)}
       >
         <ThumbsDown size={15} />
       </button>
       {feedback?.status === 'submitted' && (
-        <span className="feedback-state">已记录</span>
+        <span className="feedback-state">{english ? 'Recorded' : '已记录'}</span>
       )}
       {feedback?.status === 'error' && (
-        <span className="feedback-error">{feedback.error || '反馈提交失败'}</span>
+        <span className="feedback-error">{english ? 'Feedback submission failed' : feedback.error || '反馈提交失败'}</span>
       )}
 
       {issueOpen && (
         <form className="feedback-issue-form" onSubmit={submitIssue}>
           <select
-            aria-label="问题类型"
+            aria-label={english ? 'Issue type' : '问题类型'}
             value={reasonCode}
             disabled={isSubmitting}
             onChange={(event) => setReasonCode(event.target.value as FeedbackReasonCode)}
           >
             {FEEDBACK_REASON_OPTIONS.map((option) => (
               <option key={option.value} value={option.value}>
-                {option.label}
+                {english ? ({
+                  fact_error: 'Factual error', missed_context: 'Missed context',
+                  weak_evidence: 'Insufficient evidence', wrong_product: 'Wrong product',
+                  not_actionable: 'Not actionable', other: 'Other',
+                }[option.value]) : option.label}
               </option>
             ))}
           </select>
           <textarea
-            aria-label="补充原因"
+            aria-label={english ? 'Additional details' : '补充原因'}
             value={comment}
             disabled={isSubmitting}
             onChange={(event) => setComment(event.target.value)}
-            placeholder="补充具体原因，便于后续复盘"
+            placeholder={english ? 'Describe the issue to help us review it' : '补充具体原因，便于后续复盘'}
             rows={3}
           />
           <div className="feedback-issue-actions">
@@ -362,14 +368,14 @@ function FeedbackControls({ feedback, onFeedback }: FeedbackControlsProps) {
               disabled={isSubmitting}
               onClick={() => setIssueOpen(false)}
             >
-              取消
+              {english ? 'Cancel' : '取消'}
             </button>
             <button
               type="submit"
               className="feedback-submit-button"
               disabled={isSubmitting}
             >
-              提交
+              {english ? 'Submit' : '提交'}
             </button>
           </div>
         </form>

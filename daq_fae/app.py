@@ -377,7 +377,8 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                 root=_ROOT, agent_id=AGENT_ID,
                 knowledge_release=knowledge_release, runtime_release=runtime_release,
             )
-        fingerprint = (request.message, request.session_id, request.channel, tuple(request.attachment_ids))
+        fingerprint = (request.message, request.session_id, request.channel,
+                       tuple(request.attachment_ids), request.response_language)
         with registry.lock:
             registry.prune()
             if request.client_request_id:
@@ -496,6 +497,9 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                         else:
                             prepared = prepare_workflow(
                                 request.message, adapter=adapter, previous=previous,
+                                selected_answer_language=('en' if request.response_language == 'en-US'
+                                                          else 'zh' if request.response_language == 'zh-CN'
+                                                          else None),
                                 knowledge=knowledge, role='internal_fae',
                                 runtime_release=runtime_release,
                                 prior_user_context='\n'.join(
@@ -678,8 +682,10 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                 done, planned_capabilities=done["planned_capabilities"],
                 knowledge_release=knowledge_release,
             )
+            answer_language = (prepared.schema.answer_language if prepared is not None else
+                               'en' if request.response_language == 'en-US' else 'zh')
+            localize_answer(done, answer_language)
             if prepared is not None:
-                localize_answer(done, prepared.schema.answer_language)
                 done['request_kind'] = prepared.schema.request_kind
                 done['request_schema'] = asdict(prepared.schema)
                 done['evidence_requirements'] = copy.deepcopy(plan.requirements)

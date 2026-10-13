@@ -219,6 +219,18 @@ def test_english_question_requests_english_presentation():
     assert schema.answer_language == 'en'
 
 
+def test_selected_answer_language_overrides_model_and_question_language():
+    candidate = {'confidence': 'high', 'answer_language': 'zh', 'goals': [
+        {'kind': 'service', 'capability': 'service_identity'}]}
+    assert DaqRequestSchema.from_candidate(
+        '介绍一下你自己', candidate, selected_answer_language='en',
+    ).answer_language == 'en'
+    assert DaqRequestSchema.from_candidate(
+        'Who are you?', {**candidate, 'answer_language': 'en'},
+        selected_answer_language='zh',
+    ).answer_language == 'zh'
+
+
 def test_model_cannot_invent_entity_or_override_original_question():
     with pytest.raises(SchemaExtractionError, match='entity_not_grounded'):
         DaqRequestSchema.from_candidate('这个参数是多少？', {

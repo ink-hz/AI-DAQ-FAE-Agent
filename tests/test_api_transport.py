@@ -52,6 +52,30 @@ def test_local_semantic_service_request_uses_same_service_evidence_contract():
     assert done['sources'] == []
 
 
+def test_selected_response_language_controls_english_answer_for_chinese_question():
+    class ServiceAdapter:
+        model = 'scripted-dev'
+        tool_choice_strategy = 'submit_only_auto'
+
+        def chat(self, messages, tools=None, required_tool=None):
+            if required_tool == 'submit_daq_request_schema':
+                yield {'type': 'tool_call', 'id': 'schema', 'name': required_tool,
+                       'arguments': {'confidence': 'high', 'answer_language': 'zh',
+                                     'goals': [{'kind': 'service',
+                                                'capability': 'service_identity'}]}}
+            else:
+                yield {'type': 'tool_call', 'id': 'answer', 'name': 'submit_answer',
+                       'arguments': {'outcome': 'resolved',
+                                     'conclusion': 'I am the Orbbec DAQ FAE assistant.'}}
+            yield {'type': 'stop', 'stop_reason': 'tool_use', 'usage': None}
+
+    done = terminal(TestClient(create_app(adapter=ServiceAdapter())).post(
+        '/chat', json={'message': '介绍一下你自己', 'response_language': 'en-US'}))
+    assert done['outcome'] == 'resolved'
+    assert done['answer_language'] == 'en'
+    assert 'I am' in done['answer']
+
+
 def test_local_setup_statement_clarifies_without_starting_loop():
     class ContextAdapter:
         model = 'scripted-dev'

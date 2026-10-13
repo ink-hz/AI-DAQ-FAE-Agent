@@ -32,6 +32,11 @@ import { currentAuthenticatedAccount } from './enterpriseIdentity';
 import { buildFeedbackPayload } from './feedbackPayload';
 import { MessageArticle } from './MessageArticle';
 import { ReviewCenter } from './ReviewCenter';
+import {
+  readPreferredResponseLanguage,
+  writePreferredResponseLanguage,
+  type ResponseLanguage,
+} from './responseLanguage';
 import { parseFaeBrowserRoute, surfaceRootPath } from './routes';
 import { buildTurnSummaries } from './sessionNav';
 import { latestSessionHint, sessionHintText } from './sessionHint';
@@ -115,6 +120,7 @@ function ChatWorkspace({
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
+  const [responseLanguage, setResponseLanguage] = useState<ResponseLanguage>(readPreferredResponseLanguage);
   const [sessionId, setSessionId] = useState<string | undefined>();
   const [isStreaming, setIsStreaming] = useState(false);
   const [activeAssistantId, setActiveAssistantId] = useState<string | undefined>();
@@ -291,6 +297,7 @@ function ChatWorkspace({
       .map((item) => item.attachmentId as string);
 
     const userMessage: ChatMessage = {
+      responseLanguage,
       id: newId('user'),
       role: 'user',
       content: text,
@@ -299,6 +306,7 @@ function ChatWorkspace({
     };
     const assistantId = newId('assistant');
     const assistantMessage: ChatMessage = {
+      responseLanguage,
       id: assistantId,
       role: 'assistant',
       content: '',
@@ -318,6 +326,7 @@ function ChatWorkspace({
 
     try {
       await streamChat({
+        responseLanguage,
         message: text,
         sessionId,
         channel: 'fae',
@@ -397,6 +406,8 @@ function ChatWorkspace({
     discardUnsentAttachments();
     setInput('');
     setMessages(conversation.messages);
+    const latestAnswer = [...conversation.messages].reverse().find((item) => item.role === 'assistant');
+    if (latestAnswer?.responseLanguage) setResponseLanguage(latestAnswer.responseLanguage);
     setSessionId(conversation.sessionId);
     setActiveAssistantId(undefined);
     setError(null);
@@ -496,7 +507,9 @@ function ChatWorkspace({
               <h1 className="brand-name">AI DAQ FAE Agent</h1>
             </div>
           </div>
-          <button className="icon-button brand-reset" onClick={() => resetSession()} title="新会话" aria-label="新会话">
+          <button className="icon-button brand-reset" onClick={() => resetSession()}
+            title={responseLanguage === 'en-US' ? 'New conversation' : '新会话'}
+            aria-label={responseLanguage === 'en-US' ? 'New conversation' : '新会话'}>
             <RotateCcw size={16} />
           </button>
         </div>
@@ -519,7 +532,8 @@ function ChatWorkspace({
           <a className="partner-login-link" href="/partner/login">合作方客服登录</a>
         )}
 
-        {account && <AuthenticatedSessionNav onOpen={openRestoredConversation} />}
+        {account && <AuthenticatedSessionNav onOpen={openRestoredConversation}
+          responseLanguage={responseLanguage} />}
 
         <nav className="turn-list" aria-label="对话列表">
           {turnSummaries.map((turn) => (
@@ -546,8 +560,10 @@ function ChatWorkspace({
         <div className="message-list" aria-live="polite">
           {messages.length === 0 && (
             <div className="empty-state">
-              <h2>AI DAQ FAE 技术咨询</h2>
-              <p>输入采集设备、组合连接、Viewer/SDK、录制流程或排障问题。</p>
+              <h2>{responseLanguage === 'en-US' ? 'AI DAQ FAE technical support' : 'AI DAQ FAE 技术咨询'}</h2>
+              <p>{responseLanguage === 'en-US'
+                ? 'Ask about devices, connections, Viewer/SDK, recording or troubleshooting.'
+                : '输入采集设备、组合连接、Viewer/SDK、录制流程或排障问题。'}</p>
             </div>
           )}
 
@@ -561,13 +577,16 @@ function ChatWorkspace({
           ))}
         </div>
 
-        {error && <div className="error-line">{error}</div>}
+        {error && <div className="error-line">{responseLanguage === 'en-US'
+          ? 'The operation failed. Please try again.' : error}</div>}
 
         {sessionHint && !isStreaming && (
           <div className="session-hint-line" role="status">
-            <span>{sessionHintText(sessionHint)}</span>
+            <span>{responseLanguage === 'en-US'
+              ? 'This conversation is long. Earlier constraints may no longer be fully available; start a new conversation for a new topic.'
+              : sessionHintText(sessionHint)}</span>
             <button type="button" className="session-hint-action" onClick={() => resetSession()}>
-              开启新会话
+              {responseLanguage === 'en-US' ? 'Start a new conversation' : '开启新会话'}
             </button>
           </div>
         )}
@@ -597,10 +616,13 @@ function ChatWorkspace({
               event.preventDefault();
               event.currentTarget.form?.requestSubmit();
             }}
-            placeholder="描述设备组合、软件版本、采集任务或现场问题"
+            placeholder={responseLanguage === 'en-US'
+              ? 'Describe your devices, software, capture task or issue'
+              : '描述设备组合、软件版本、采集任务或现场问题'}
             rows={3}
           />
           <AttachmentComposer
+            responseLanguage={responseLanguage}
             drafts={attachmentDrafts}
             visionEnabled={visionEnabled}
             disabled={isStreaming}
@@ -610,6 +632,19 @@ function ChatWorkspace({
             onRetry={retryAttachment}
           />
           <div className="composer-actions">
+            <label className="response-language-control">
+              <span>回答语言 / Answer language</span>
+              <select aria-label="回答语言 / Answer language" value={responseLanguage}
+                disabled={isStreaming}
+                onChange={(event) => {
+                  const language = event.target.value as ResponseLanguage;
+                  setResponseLanguage(language);
+                  writePreferredResponseLanguage(language);
+                }}>
+                <option value="zh-CN">中文</option>
+                <option value="en-US">English</option>
+              </select>
+            </label>
             {isStreaming ? (
               <button type="button" className="secondary-button" onClick={stopStreaming}>
                 <Square size={16} />

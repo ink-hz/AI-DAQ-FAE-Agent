@@ -99,7 +99,16 @@ class DaqContextState(BaseModel):
             # reject discarded fields/coercions instead of silently promoting
             # or dropping user provenance during restore.
             if _json(normalized) != _json(value):
-                raise ValueError
+                # V1/V2 checkpoints predate grounded_scope/setup_statement.
+                # Accept only the known legacy fields whose values still round
+                # trip exactly; never admit extra claims during restoration.
+                known = {'version', 'topic_id', 'turn', 'values',
+                         'attempted_steps', 'active_capabilities',
+                         'grounded_scope', 'setup_statement'}
+                if (value.get('version') not in {1, 2} or set(value) - known
+                        or any(normalized.get(key) != item for key, item in value.items()
+                               if key != 'version')):
+                    raise ValueError
         except (AttributeError, KeyError, TypeError, ValueError, DurableStateError):
             raise ValueError("daq_task_context_checkpoint_invalid") from None
         return normalized

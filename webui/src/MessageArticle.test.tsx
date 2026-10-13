@@ -36,6 +36,16 @@ const previewMessage: ChatMessage = {
   }],
 };
 
+it('renders answer controls in the language selected for that turn', () => {
+  const html = renderToStaticMarkup(<MessageArticle message={{
+    id: 'en-answer', role: 'assistant', responseLanguage: 'en-US',
+    content: 'I can help with DAQ products.', createdAt: 1,
+    done: { outcome: 'resolved' },
+  }} onSelect={() => undefined} />);
+  expect(html).toContain('Copy answer');
+  expect(html).not.toContain('复制回答');
+});
+
 function renderPreviewMessage() {
   const container = document.createElement('div');
   const root = createRoot(container);

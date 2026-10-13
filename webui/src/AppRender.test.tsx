@@ -4,6 +4,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { Storage } from 'happy-dom';
 import App from './App';
 import {
   bootstrapEnterpriseIdentity,
@@ -170,6 +171,30 @@ afterEach(() => {
 });
 
 describe('App initial render', () => {
+  it('offers a persisted answer-language switch and sends the selected language', async () => {
+    const fetchMock = vi.fn(appFetch);
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('localStorage', new Storage());
+    window.localStorage.removeItem('daq.response-language.v1');
+    const { container } = renderInteractiveApp();
+    const selector = container.querySelector<HTMLSelectElement>(
+      'select[aria-label="回答语言 / Answer language"]',
+    );
+    expect(selector).not.toBeNull();
+    expect(selector?.value).toBe('zh-CN');
+    await act(async () => {
+      if (selector) {
+        selector.value = 'en-US';
+        selector.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    });
+    expect(window.localStorage.getItem('daq.response-language.v1')).toBe('en-US');
+    await sendQuestion(container, '介绍一下你自己');
+    const chat = fetchMock.mock.calls.find(([input, init]) =>
+      String(input) === '/chat' && init?.method === 'POST');
+    expect(JSON.parse(String(chat?.[1]?.body)).response_language).toBe('en-US');
+  });
+
   it('uses the same FAE Agent workspace at the public and internal roots', () => {
     const publicHtml = renderToStaticMarkup(<App initialPath="/app/" />);
     const internalHtml = renderToStaticMarkup(<App initialPath="/daq/" />);

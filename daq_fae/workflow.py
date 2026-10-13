@@ -141,7 +141,8 @@ def prepare_workflow(message: str, *, adapter, runtime_release: str,
                      role: str = 'internal_fae', knowledge=None,
                      previous=None, context_hints=None, grounded_targets=None,
                      attachment_source_ids=(), image_source_ids=(),
-                     prior_user_context: str = '') -> PreparedWorkflow:
+                     prior_user_context: str = '',
+                     selected_answer_language: str | None = None) -> PreparedWorkflow:
     refusal = categorize_refusal(message)
     if refusal is not None:
         return PreparedWorkflow(refusal, None, None, None, None)
@@ -156,6 +157,7 @@ def prepare_workflow(message: str, *, adapter, runtime_release: str,
         message, adapter=adapter, prior_user_context=prior_user_context,
         attachment_present=bool(attachment_source_ids or image_source_ids),
         image_present=bool(image_source_ids),
+        selected_answer_language=selected_answer_language,
     )
     if knowledge is not None and hasattr(knowledge, 'ground_question'):
         effective_grounding = (

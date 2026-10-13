@@ -181,6 +181,9 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
                 try:
                     prepared = prepare_workflow(
                         body.message, adapter=adapter, previous=previous,
+                        selected_answer_language=('en' if body.response_language == 'en-US'
+                                                  else 'zh' if body.response_language == 'zh-CN'
+                                                  else None),
                         knowledge=knowledge, role=binding['role'] if binding else 'internal_fae',
                         runtime_release=runtime_release,
                         prior_user_context='\n'.join(
@@ -319,8 +322,11 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
                 done, planned_capabilities=done["planned_capabilities"],
                 knowledge_release=knowledge_release,
             )
+            answer_language = (prepared.schema.answer_language if prepared is not None
+                               and prepared.schema is not None else
+                               'en' if body.response_language == 'en-US' else 'zh')
+            localize_answer(done, answer_language)
             if prepared is not None and prepared.schema is not None:
-                localize_answer(done, prepared.schema.answer_language)
                 done['request_kind'] = prepared.schema.request_kind
                 done['request_schema'] = asdict(prepared.schema)
                 done['evidence_requirements'] = copy.deepcopy(plan.requirements)

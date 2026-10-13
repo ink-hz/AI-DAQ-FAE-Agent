@@ -12,10 +12,29 @@ describe('buildThinkingSteps', () => {
       ],
       done: { outcome: 'resolved', fallback_used: false },
     });
-    expect(steps.filter((step) => step.title === 'loop')).toHaveLength(1);
-    expect(steps.find((step) => step.title === 'loop')).toMatchObject({
+    expect(steps.filter((step) => step.title === 'AI DAQ FAE Agent')).toHaveLength(1);
+    expect(steps.find((step) => step.title === 'AI DAQ FAE Agent')).toMatchObject({
       status: 'done', elapsedMs: 8,
     });
+  });
+
+  it('explains DAQ workflow stages without exposing raw stage codes', () => {
+    const steps = buildThinkingSteps({
+      id: 'a-stages', role: 'assistant', content: '', createdAt: 1,
+      stages: [
+        { stage: 'guardrail', status: 'completed', elapsed_ms: 1 },
+        { stage: 'schema', status: 'completed', elapsed_ms: 5647 },
+        { stage: 'loop', status: 'completed', elapsed_ms: 14097 },
+        { stage: 'coverage', status: 'completed' },
+        { stage: 'outcome', status: 'completed' },
+      ],
+      done: { outcome: 'resolved', capability_coverage: { service_identity: 'full' } },
+    });
+    expect(steps.slice(0, 5).map((step) => step.title)).toEqual([
+      'Boundary Guard Agent', 'Intent Analyst Agent', 'AI DAQ FAE Agent',
+      '证据覆盖检查', '回答结果',
+    ]);
+    expect(steps[1].detail).toContain('问题结构化完成');
   });
   it('returns a stable empty state without an active answer', () => {
     expect(buildThinkingSteps(undefined)).toEqual([

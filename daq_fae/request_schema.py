@@ -93,7 +93,8 @@ class DaqRequestSchema:
     @classmethod
     def from_candidate(cls, question: str, candidate: dict[str, Any], *,
                        prior_user_context: str = '', attachment_present: bool = False,
-                       image_present: bool = False) -> 'DaqRequestSchema':
+                       image_present: bool = False,
+                       selected_answer_language: str | None = None) -> 'DaqRequestSchema':
         if not isinstance(question, str) or not question.strip() or not isinstance(candidate, dict):
             raise SchemaExtractionError('schema_candidate_invalid')
         confidence = candidate.get('confidence')
@@ -260,7 +261,7 @@ class DaqRequestSchema:
             dependency = 'unknown'
         elif image_present and any(goal.capability == 'analyze_image' for goal in goals):
             dependency = 'required_for_answer'
-        language = candidate.get('answer_language')
+        language = selected_answer_language or candidate.get('answer_language')
         if language is None:
             language = ('en' if re.search(r'[A-Za-z]{2,}', question)
                         and not re.search(r'[\u3400-\u9fff]', question) else 'zh')
@@ -304,11 +305,13 @@ _SCHEMA_TOOL = {
 
 def extract_request_schema(question: str, *, adapter, prior_user_context: str = '',
                            attachment_present: bool = False,
-                           image_present: bool = False) -> DaqRequestSchema:
+                           image_present: bool = False,
+                           selected_answer_language: str | None = None) -> DaqRequestSchema:
     prompt = (_ROOT / 'prompts/daq_schema_extraction.md').read_text(encoding='utf-8')
     messages = [{'role': 'system', 'content': prompt}, {'role': 'user', 'content': json.dumps({
         'question': question, 'prior_user_context': prior_user_context,
         'attachment_present': attachment_present, 'image_present': image_present,
+        'selected_answer_language': selected_answer_language,
     }, ensure_ascii=False)}]
     calls = [event for event in adapter.chat(
         messages, tools=[_SCHEMA_TOOL], required_tool='submit_daq_request_schema')
@@ -338,4 +341,5 @@ def extract_request_schema(question: str, *, adapter, prior_user_context: str = 
     return DaqRequestSchema.from_candidate(
         question, raw, prior_user_context=prior_user_context,
         attachment_present=attachment_present, image_present=image_present,
+        selected_answer_language=selected_answer_language,
     )
