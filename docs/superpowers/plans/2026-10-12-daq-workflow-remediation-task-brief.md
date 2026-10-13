@@ -4,7 +4,7 @@
 
 **日期**：2026-10-12
 
-**状态**：Dev 验收通过待发布；R0–R6 及 R7 本地门已取得证据，生产构建与发布核验仍待执行。
+**状态**：已部署待业务观察；R0–R7 的工程与只读发布门均已取得证据，个人登录后的业务验收另行观察。
 **目标**：让 DAQ FAE 对服务说明、产品事实、混合咨询和跨轮问题使用正确的请求目标与证据合同，修正当前知识检索和 trace 错位，并通过真实 Dev 回放及独立复审证明用户所见问题及其泛化问题已经解决。
 
 **依据**：[工作流架构对照](../../reviews/2026-10-12-daq-workflow-architecture-audit.md)、[数采完整设计](../../2026-10-08-数采FAE完整设计.md)、原[开发任务书](2026-10-08-data-acquisition-fae-development-task-brief.md)的 A-2/A-4/V-1/V-2 门，以及相邻相机仓 `AI_FAE_Agent_工作流设计.md`。本任务书针对已经部署的内部 DAQ 试点做增量修复，不重做身份、数据库或知识发布系统。
@@ -13,7 +13,7 @@
 
 **技术栈**：Python/FastAPI、Pydantic、现有 `AnthropicAdapter`/`LoopRuntime`/`DaqEvidencePolicy`、PostgreSQL DAQ schema、pytest、React/Vitest；真实回答模型与网关沿用 DAQ Dev 的 Opus 5.5 adaptive/high、`submit_only_auto` 配置。
 
-**执行证据**：[修复前 RED 与旧合同基线](../../reviews/2026-10-12-daq-workflow-remediation-baseline.md)、[Dev 全量回放与独立答案复审](../../reviews/2026-10-12-daq-workflow-remediation-dev-review.md)。修复代码提交 `8e1af259a377f3dde65c8158fd11797363bcb69a`；本节状态只说明 Dev 结果，不代表线上已运行此提交。
+**执行证据**：[修复前 RED 与旧合同基线](../../reviews/2026-10-12-daq-workflow-remediation-baseline.md)、[Dev 全量回放与独立答案复审](../../reviews/2026-10-12-daq-workflow-remediation-dev-review.md)、[生产部署及回退记录](../../reviews/2026-10-13-daq-workflow-remediation-production-release.md)。修复代码提交 `8e1af259a377f3dde65c8158fd11797363bcb69a`，生产构建包提交 `49345ccbed83489c6a315d9272f0ea18dfd473a3`。
 
 ## 0. 不可变边界与完成定义
 
@@ -126,12 +126,12 @@
 
 - [x] 数采完整单测：`DAQ_KNOWLEDGE_RELEASE_ROOT=/tmp/daq-fae-empty-release-test-20261012 .venv/bin/python -m pytest -q tests`（先确认测试根目录没有 `active.json`）；WebUI：在 `webui/` 运行 `npm test` 与 `npm run build`。另以显式活动 manifest 跑已发布知识视图合同。关键路径单测必须有新旧对照，不得只增加与实现同构的测试。
 - [x] 若共享 `src/` 有改动，在相机仓跑受影响合同与完整单测，并在相机 Dev 运行相关核心/哨兵/历史反馈泛化题，独立审查零严重退化；未通过不得更新 DAQ 上游 pin。
-- [ ] 检查源代码 SHA、知识 release、提示词/模型配置、WebUI build、镜像 digest 与可回退版本。提交不等于部署；若另行部署，生产只做不触发模型的健康、身份、路由、权限隔离、版本、日志和相机健康检查。
+- [x] 检查源代码 SHA、知识 release、提示词/模型配置、WebUI build、镜像 digest 与可回退版本。提交不等于部署；若另行部署，生产只做不触发模型的健康、身份、路由、权限隔离、版本、日志和相机健康检查。
 - [x] 发布结论只可为“Dev 验收通过待发布”“已部署待业务观察”或“未通过”；不能把局部修复、Git 推送和生产验收写成同一状态。
 
-共享 `src/` 未改，两仓 tree 同为 `e69021117158cbdc7e6d75220c5247fe631bbe58`，因此第二项的相机模型回归条件未触发。第三项已有源码、知识、提示词、模型和 WebUI build 身份；新镜像 digest、生产绑定与只读部署烟测尚无证据，维持未勾选。当前结论限定为 **Dev 验收通过待发布**。
+共享 `src/` 未改，两仓 tree 同为 `e69021117158cbdc7e6d75220c5247fe631bbe58`，因此第二项的相机模型回归条件未触发。第三项的新镜像、知识绑定、备份与生产只读烟测见发布记录。当前结论为 **已部署待业务观察**；未在生产运行模型评测，也未把个人登录和试点反馈写成通过。
 
-**验收**：R0 原始失败可重放为 GREEN，R6 独立复审和 R7 本地门通过；待第三项完成后，才能将 R7 发布门及线上状态标记完成。证据包须能按 exact SHA/release 复跑。
+**验收**：R0 原始失败可重放为 GREEN，R6 独立复审和 R7 工程发布门通过；证据包能按 exact SHA/release 复跑。个人业务验收与更广知识发布仍独立进行。
 
 ## 3. 新冻结题集的最低内容与判据
 
