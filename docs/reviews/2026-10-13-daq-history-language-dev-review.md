@@ -4,15 +4,18 @@
 
 ## 故障与修复
 
-- 线上已认证的 `/authenticated/conversations?limit=30` 返回 503。生产库两个会话中，一条旧会话上下文携带 `task_context.version=1`，新版严格验证器将其规范化为 v3 后又要求字节语义完全相等，导致 `daq_knowledge_context_unavailable`，整页列表失败。新会话可读取。修复只接受已知 v1/v2 字段且要求所有原字段原值保留；未知字段和失去用户来源的字段仍拒绝。旧会话的知识 release 与当前 release 不同，现行角色和版本门仍会隐藏旧会话，不能把这当作旧会话已可继续。
+- 线上已认证的 `/authenticated/conversations?limit=30` 返回 503。生产库两个会话中，一条旧会话上下文携带 `task_context.version=1`，新版严格验证器将其规范化为 v3 后又要求字节语义完全相等，导致 `daq_knowledge_context_unavailable`，整页列表失败。新会话可读取。修复只接受已知 v1/v2 字段且要求所有原字段原值保留；未知字段和失去用户来源的字段仍拒绝。
+- 首次线上切换后只读核验发现列表变成 0 条：旧知识 release 的精确续聊门把两条旧会话都从历史列表隐藏。第二次修复将“查阅历史”与“继续旧会话”分开：只有当前角色仍与旧会话密封上下文中的角色一致时，才显示旧答案；旧版本会话带 `read_only`，页面明确提示并禁用发送、上传和反馈。续聊仍要求当前知识 release 完全一致，角色降权继续拒绝旧内容。修复代码 `9e95fd6`。
 - 数采原本由模型推断答复语言，WebUI 没有语言选择。现在用户可选中文或 English，选择存于浏览器并作为每轮 `response_language` 传给后端；已认证持久化终态保存 `answer_language`，恢复会话可还原该轮答复语言。输入语言与界面选择不一致时，以用户选择为准。错误终态保留结构化 outcome 与 fallback，不把 Provider 400 改写为 503。
 - `guardrail/schema/loop/coverage/outcome` 原样暴露在思考面板。现在前端按真实阶段事件显示可读标题与说明，没有伪造未执行的阶段。
 
 ## 测试与独立答案复审
 
-隔离 Python 全量 **962 passed**；WebUI **244 passed**；TypeScript/Vite 构建通过。旧 v1 加密上下文通过本地 PostgreSQL 读取；非法附加字段仍被拒绝。测试了语言选择穿过前端请求、后端 schema、答复合同、SSE 和持久化恢复路径。
+隔离 Python 全量 **963 passed**；WebUI **246 passed**；TypeScript/Vite 构建通过。旧 v1 加密上下文通过本地 PostgreSQL 读取；非法附加字段仍被拒绝。旧 release 的历史列表、详情、角色降权拒绝及页面只读交互均有回归测试。测试了语言选择穿过前端请求、后端 schema、答复合同、SSE 和持久化恢复路径。
 
 真实模型仅在隔离 Dev 运行，使用原已发布的 23 条事实、角色绑定和相同上游 pin。Dev 回放结果位于 Git 忽略目录 `data/knowledge/curated/language-fix-20261013/`：English 选择的 `S01/P01` 结果 SHA-256 `28329eceab5a845322d60ec0134eda3fa586d58efb07f7ad2d91cfa10722747f`；中文选择的 `S03` 结果 SHA-256 `9270f691225328a9c36040c7a6fd1c9a8f2cd8bfa32a1684eba10216a8b16aac`。三题均为 `resolved`、无 fallback，SSE 阶段生命周期、历史、trace、来源均一致。
+
+第一次精确重绑定 Dev 烟测 `S01/P01` 结果 SHA-256 `4059bbab9a82686d66758dd51fd4e1cae19861dc6e2a340c7b7b10cc7ed153d8`，均通过；生产随后暴露上述“0 条历史”问题。第二次修复代码 `9e95fd6` 在同一隔离 Dev 身份路径复跑 `S01`，结果 SHA-256 `a5204bf3d0519a318aaa5df858f1e4eae4b5db5f635a5569137c1d2d853e51d9`；英文身份答复、零产品来源、终态和完整阶段均通过。历史变更由独立 PostgreSQL 合同和浏览器回归覆盖，不拿模型回答自评历史可见性。
 
 Codex 逐题独立阅读完整答案及结构化证据：
 
@@ -22,4 +25,4 @@ Codex 逐题独立阅读完整答案及结构化证据：
 | P01 | 中文 EGO 1600×1200 水平视场角 + English | 英文答 165°，明示分辨率条件与规格书页码；两条结构化来源，未推广至其他变体。PASS |
 | S03 | 英文服务问题 + 中文 | 中文答服务身份和现阶段覆盖；未把未发布资料说成产品不支持。PASS |
 
-这三题只覆盖本轮语言行为；前次 48 行完整工作流 Dev 复审仍见 `2026-10-12-daq-workflow-remediation-dev-review.md`。未对生产回答接口发送评测问题。生产登录后的历史列表须在新镜像启动后再以只读方式核对，不能用匿名 401 替代。
+这些题只覆盖本轮语言行为；前次 48 行完整工作流 Dev 复审仍见 `2026-10-12-daq-workflow-remediation-dev-review.md`。未对生产回答接口发送评测问题。第二次生产切换后必须以当前角色对线上既有两条会话做只读列表与详情核验，不能用匿名 401 或“0 条但 200”替代。
