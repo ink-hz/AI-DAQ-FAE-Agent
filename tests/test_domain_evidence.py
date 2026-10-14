@@ -145,6 +145,25 @@ def test_unselected_variant_asks_for_safe_conditional_answer_before_contract_fai
     assert "safe_abstained" in decision.notice
 
 
+def test_field01_partial_specs_and_missing_selection_request_safe_answer():
+    session = DaqEvidencePolicy().begin({'requirements': [
+        {'id': 'fov', 'capability': 'lookup_spec', 'critical': True},
+        {'id': 'selection', 'capability': 'selection', 'critical': True},
+    ]})
+    session.observe('lookup_spec', ToolResult(
+        status='ok', content={'matched_requirement_ids': ['fov']},
+        sources=[{'source_id': 'claim:ego-fov', 'type': 'daq_governed_claim',
+                  'verification_status': 'verified', 'release_id': 'reviewed-v1'}],
+    ))
+    session.observe('selection', ToolResult(
+        status='not_found', content={'matched_requirement_ids': ['selection']},
+    ))
+    decision = session.evaluate(AnswerSubmission(
+        outcome='resolved', conclusion='推荐 EGO 1600 版用于整套采集。'))
+    assert decision.action == 'request_evidence'
+    assert 'safe_abstained' in decision.notice
+
+
 def test_dev_source_checked_evidence_only_counts_in_explicit_dev_policy():
     result = ToolResult(
         status="ok", content={"matched_requirement_ids": ["spec"]},
@@ -222,7 +241,8 @@ def test_answer_must_keep_internal_provenance_out_of_prose():
     assert session.snapshot().requirement_status["spec"] == "satisfied"
     for basis in ("依据 claim:ego-1600-horizontal-fov", "字段 horizontal_fov",
                   "查不到 depth_accuracy", "工具返回 not_found",
-                  "source_id: claim:ego-1600-horizontal-fov", "见规格书/EGO.pdf"):
+                  "source_id: claim:ego-1600-horizontal-fov", "见规格书/EGO.pdf",
+                  "内部 release reviewed-v1"):
         decision = session.evaluate(AnswerSubmission(
             outcome="resolved", conclusion="EGO 1600 的水平视场角为 165°", basis=basis))
         assert decision.action == "request_evidence"

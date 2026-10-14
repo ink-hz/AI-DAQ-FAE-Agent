@@ -33,7 +33,21 @@ def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _cases(suite: str) -> list[dict]:
+def _daq_code_sha() -> str:
+    digest = hashlib.sha256()
+    for path in sorted((ROOT / 'daq_fae').rglob('*.py')):
+        digest.update(str(path.relative_to(ROOT)).encode())
+        digest.update(b'\0')
+        digest.update(path.read_bytes())
+        digest.update(b'\0')
+    return digest.hexdigest()
+
+
+def _cases(suite: str, *, suite_file: Path | None = None) -> list[dict]:
+    if suite == 'file':
+        if suite_file is None:
+            raise ValueError('file suite requires suite_file')
+        return [json.loads(line) for line in suite_file.read_text().splitlines() if line]
     rows = []
     if suite in {'new', 'all'}:
         rows.extend(json.loads(line) for line in NEW_SUITE.read_text().splitlines() if line)
@@ -86,7 +100,11 @@ def _stop_postgres(directory: Path) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument('--suite', choices=('new', 'old24', 'all'), default='new')
+    parser.add_argument('--suite', choices=('new', 'old24', 'all', 'file'), default='new')
+    parser.add_argument('--suite-file', type=Path,
+                        help='Frozen JSONL question suite when --suite=file')
+    parser.add_argument('--release-root', type=Path, default=RELEASE_ROOT,
+                        help='Local Dev knowledge release root')
     parser.add_argument('--case-ids', default='')
     parser.add_argument('--response-language', choices=('zh-CN', 'en-US'),
                         help='Explicit browser language selection for every replayed turn')
@@ -95,7 +113,8 @@ def main() -> int:
                         help='Run exactly two independent one-turn cases concurrently')
     args = parser.parse_args()
     selected = set(filter(None, args.case_ids.split(',')))
-    cases = [case for case in _cases(args.suite) if not selected or case['id'] in selected]
+    cases = [case for case in _cases(args.suite, suite_file=args.suite_file)
+             if not selected or case['id'] in selected]
     if selected - {case['id'] for case in cases}:
         raise SystemExit('unknown case id: ' + ','.join(sorted(selected - {case['id'] for case in cases})))
     if not cases:
@@ -117,7 +136,7 @@ def main() -> int:
         os.environ['DAQ_KNOWLEDGE_RELEASE_ROOT'] = str(isolated_release)
         from dotenv import dotenv_values
         from daq_fae.knowledge.releases import read_active_release
-        active = read_active_release(RELEASE_ROOT)
+        active = read_active_release(args.release_root)
         if active is None:
             raise SystemExit('active DAQ release missing')
         runtime_release = active['manifest']['review']['operator_release']['runtime']['release']
@@ -161,7 +180,7 @@ def main() -> int:
                 provider_mode='anthropic', adapter=_anthropic_dev_adapter(),
                 vision_adapter=_daq_vision_adapter() if image_cases else None,
                 attachment_dir=workspace / 'attachments',
-                knowledge_release_root=RELEASE_ROOT,
+                knowledge_release_root=args.release_root,
                 platform_client=FakePlatform(),
                 identity_repository=InMemoryAuthenticatedSessionRepository(),
                 conversation_repository=AuthenticatedConversationRepository(dsn, codec=codec),
@@ -171,9 +190,11 @@ def main() -> int:
             )
             identity = {
                 'suite': args.suite, 'new_suite_sha256': _sha(NEW_SUITE),
+                'suite_file_sha256': _sha(args.suite_file) if args.suite_file else None,
                 'old_suite_sha256': [_sha(path) for path in OLD_SUITES],
                 'knowledge_release': active['release_id'],
                 'runtime_release': runtime_release,
+                'daq_code_sha256': _daq_code_sha(),
                 'upstream_revision': json.loads((ROOT / 'upstream-source.json').read_text())['revision'],
                 'prompt_sha256': _sha(ROOT / 'prompts/reviewed_knowledge_system.md'),
                 'schema_prompt_sha256': _sha(ROOT / 'prompts/daq_schema_extraction.md'),

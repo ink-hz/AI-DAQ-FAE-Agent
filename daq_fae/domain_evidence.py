@@ -134,6 +134,9 @@ class DaqEvidenceSession:
                 source_id = source.get("source_id")
                 if isinstance(source_id, str) and source_id:
                     self._internal_provenance.add(source_id.casefold())
+                release_id = source.get("release_id")
+                if isinstance(release_id, str) and release_id:
+                    self._internal_provenance.add(release_id.casefold())
                 for ref in source.get("source_refs", []):
                     if isinstance(ref, dict) and isinstance(ref.get("path"), str):
                         self._internal_provenance.add(ref["path"].casefold())
@@ -241,6 +244,16 @@ class DaqEvidenceSession:
                     '用户尚未指定产品变体；即使逐个查到已核对的条件数值，也不能提交 '
                     'resolved。请按变体分别说明数值和适用范围，要求用户选择，并改用 '
                     'safe_abstained。',
+                )
+            if (not any(self.status[item.id] == 'conflict' for item in outstanding)
+                    and any(item.evidence_class == 'governed_required'
+                            and self.status[item.id] == 'satisfied'
+                            for item in self.requirements)):
+                return EvidenceDecision(
+                    'request_evidence', 'daq_partial_evidence_only',
+                    '已有部分来源核实的事实，但仍有关键目标缺少已发布证据。'
+                    '请改用 safe_abstained，逐项说明已确认的数值及适用条件，'
+                    '明确未证实的组合或选型边界；不要把缺口写成整体资料不存在。',
                 )
             return EvidenceDecision("reject", "daq_evidence_not_satisfied")
         return EvidenceDecision(

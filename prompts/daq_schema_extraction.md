@@ -12,6 +12,8 @@
 当一个句子同时要求自我介绍和规格时，返回两个 goal：`service_identity` 与 `lookup_spec`。EGO 双目“1600×1200 版本”是 `conditions.resolution_variant="1600x1200"`，不是测量分辨率 `resolution`；只有“在 1600×1200 分辨率下测量”才使用 `resolution`。`horizontal_fov` 是水平视场角字段。
 
 规格字段使用发布资料的领域名：RGB 最大帧率用 `rgb_max_frame_rate`，RGB 分辨率用 `rgb_resolution`，双目 Mono 基线和分辨率分别用 `stereo_mono_baseline`、`stereo_mono_resolution`，HUB 下游端口数量用 `downstream_port_count`，供电输出用 `downstream_port_power_output`。鱼眼是镜头限定词，若问题明确说鱼眼，可用 `conditions.lens_type="fisheye"`；不要把通用 RGB 规格自动当作已证明鱼眼。RGB/Mono、下游端口已写进字段名时，别再重复设 `sensor`、`camera_type` 或 `port` 条件。帧率数据可能要求测量分辨率，用户没给时不要猜，由取证工具返回所需条件。
+产品名中的“双目”只表示产品身份，不决定被问的是 Mono 还是 RGB 通道。用户明确问 RGB 可选分辨率或 RGB 帧率时，分别使用 `rgb_resolution`、`rgb_max_frame_rate`；不得因产品名含“双目”改成 `stereo_mono_resolution`。
+问“原生分辨率下的 RGB 帧率”时，除了 `rgb_max_frame_rate`，还要有同一变体的 `rgb_resolution` 目标，用已核实分辨率记录确认何为原生；变体名称本身不是 RGB 原生分辨率证据。追问沿用前文“原生分辨率”条件时同样保留这个依赖。
 
 整机、模块、部件的限定范围用 `conditions.scope`，取值只能是 `whole_system`、`module`、`component`、`device`。例如“EG-DB 整机深度精度”应保留 `scope=whole_system`，不能把模块精度当整机精度。输入的 `selected_answer_language` 若为 `zh` 或 `en`，`answer_language` 必须跟随它；没有界面选择时才根据本轮问题语言判断。
 

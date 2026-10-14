@@ -195,6 +195,18 @@ class DaqRequestSchema:
                     conditions['camera_type'] = camera
             elif camera is not None:
                 raise SchemaExtractionError('camera_qualifier_invalid')
+            # A product named "双目" is not evidence that a question about its
+            # RGB output asks for the Mono/stereo output field. Keep modality
+            # anchored to the user's explicit words even if the model picked
+            # a plausible but wrong field name.
+            if kind == 'product' and capability == 'lookup_spec' and has_rgb and not has_mono:
+                if field in {'mono_resolution', 'stereo_mono_resolution',
+                             'stereo_resolution', 'stereo_resolution_options',
+                             'resolution_options'}:
+                    field = 'rgb_resolution'
+                elif field in {'mono_frame_rate', 'stereo_mono_frame_rate',
+                               'stereo_mono_max_frame_rate'}:
+                    field = 'rgb_max_frame_rate'
             port = conditions.get('port')
             if port == 'downstream' and field and field.startswith('downstream_') \
                     and re.search(r'下游|downstream', user_words, re.I):
@@ -232,20 +244,55 @@ class DaqRequestSchema:
                 if any(not isinstance(item, (str, int)) or
                        _normalized(str(item)) not in accepted_scope for item in values):
                     unmapped.add(key)
-            payload = [kind, capability, sorted(set(entities)), field, conditions]
-            digest = hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:16]
-            goal_id = 'goal_' + digest
-            if goal_id in ids:
-                raise SchemaExtractionError('schema_goal_duplicate')
-            ids.add(goal_id)
-            goals.append(DaqGoal(goal_id, kind, capability, tuple(dict.fromkeys(entities)),
-                                 field, tuple(sorted(conditions.items())),
-                                 tuple(sorted(unmapped & set(conditions)))))
+            variants = conditions.get('resolution_variant')
+            if kind == 'product' and capability == 'lookup_spec' and isinstance(variants, list):
+                if not variants or any(not isinstance(value, str) or not value for value in variants):
+                    raise SchemaExtractionError('variant_selector_invalid')
+                scoped_conditions = [
+                    {**conditions, 'resolution_variant': value}
+                    for value in dict.fromkeys(variants)
+                ]
+            else:
+                scoped_conditions = [conditions]
+            for scoped in scoped_conditions:
+                payload = [kind, capability, sorted(set(entities)), field, scoped]
+                digest = hashlib.sha256(json.dumps(
+                    payload, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:16]
+                goal_id = 'goal_' + digest
+                if goal_id in ids:
+                    raise SchemaExtractionError('schema_goal_duplicate')
+                ids.add(goal_id)
+                goals.append(DaqGoal(goal_id, kind, capability, tuple(dict.fromkeys(entities)),
+                                     field, tuple(sorted(scoped.items())),
+                                     tuple(sorted(unmapped & set(scoped)))))
+                if len(goals) > 16:
+                    raise SchemaExtractionError('schema_goals_expansion_limit')
         kinds = {goal.kind for goal in goals if goal.kind != 'unknown'}
         request_kind = 'mixed' if len(kinds) > 1 else next(iter(kinds), 'unknown')
         topic_switch = candidate.get('topic_switch', False)
         if not isinstance(topic_switch, bool):
             raise SchemaExtractionError('topic_switch_invalid')
+        native_context = question if topic_switch else question + '\n' + prior_user_context
+        if re.search(r'原生分辨率|native\s+(?:rgb\s+)?resolution', native_context, re.I):
+            for goal in tuple(goals):
+                if goal.kind != 'product' or goal.capability != 'lookup_spec' \
+                        or goal.field not in {'rgb_max_frame_rate', 'rgb_max_fps'}:
+                    continue
+                selectors = {key: value for key, value in goal.condition_map().items()
+                             if key in {'variant', 'resolution_variant',
+                                        'hardware_revision', 'scope'}}
+                payload = ['product', 'lookup_spec', sorted(set(goal.entities)),
+                           'rgb_resolution', selectors]
+                digest = hashlib.sha256(json.dumps(
+                    payload, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:16]
+                goal_id = 'goal_' + digest
+                if goal_id not in ids:
+                    ids.add(goal_id)
+                    goals.append(DaqGoal(goal_id, 'product', 'lookup_spec',
+                                         goal.entities, 'rgb_resolution',
+                                         tuple(sorted(selectors.items()))))
+                    if len(goals) > 16:
+                        raise SchemaExtractionError('schema_goals_expansion_limit')
         effective = candidate.get('effective_question', question)
         if not isinstance(effective, str) or not effective.strip() or len(effective) > 2000:
             raise SchemaExtractionError('effective_question_invalid')
@@ -316,30 +363,37 @@ def extract_request_schema(question: str, *, adapter, prior_user_context: str = 
     calls = [event for event in adapter.chat(
         messages, tools=[_SCHEMA_TOOL], required_tool='submit_daq_request_schema')
         if event.get('type') == 'tool_call']
-    if not calls:
-        # The Dev gateway uses auto tool choice with adaptive thinking. A model
-        # can end its turn without the required tool despite the prompt. Retry
-        # once with an explicit correction, then expose a schema error if it
-        # still omits the call. Never turn a provider error into a content gap.
-        retry = [{**messages[0], 'content': messages[0]['content'] +
-                  '\n上一次回复没有调用要求的工具。现在必须只调用 '
-                  '`submit_daq_request_schema` 一次；不要输出正文。'},
+    def validated(candidate_calls: list[dict]) -> DaqRequestSchema:
+        candidates = [event.get('arguments') for event in candidate_calls
+                      if event.get('name') == 'submit_daq_request_schema']
+        if len(candidate_calls) != 1 or len(candidates) != 1:
+            raise SchemaExtractionError('model_schema_missing_or_ambiguous')
+        raw = candidates[0]
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise SchemaExtractionError('model_schema_json_invalid') from exc
+        return DaqRequestSchema.from_candidate(
+            question, raw, prior_user_context=prior_user_context,
+            attachment_present=attachment_present, image_present=image_present,
+            selected_answer_language=selected_answer_language,
+        )
+
+    try:
+        return validated(calls)
+    except SchemaExtractionError as exc:
+        # Retry once for either a missing call or an invalid schema. Never
+        # pass the untrusted candidate back as facts or hide provider errors.
+        correction = ('上一次回复没有调用要求的工具。现在必须只调用 '
+                      '`submit_daq_request_schema` 一次；不要输出正文。'
+                      if not calls else
+                      '上一次结构化结果未通过校验（' + str(exc) + '）。请仅重新调用 '
+                      '`submit_daq_request_schema` 一次。产品实体只能逐字来自本轮问题或'
+                      '提供的用户历史；无法接地的实体请省略。不要补产品事实。')
+        retry = [{**messages[0], 'content': messages[0]['content'] + '\n' + correction},
                  messages[1]]
-        calls = [event for event in adapter.chat(
+        retry_calls = [event for event in adapter.chat(
             retry, tools=[_SCHEMA_TOOL], required_tool='submit_daq_request_schema')
             if event.get('type') == 'tool_call']
-    candidates = [event.get('arguments') for event in calls
-                  if event.get('name') == 'submit_daq_request_schema']
-    if len(calls) != 1 or len(candidates) != 1:
-        raise SchemaExtractionError('model_schema_missing_or_ambiguous')
-    raw = candidates[0]
-    if isinstance(raw, str):
-        try:
-            raw = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise SchemaExtractionError('model_schema_json_invalid') from exc
-    return DaqRequestSchema.from_candidate(
-        question, raw, prior_user_context=prior_user_context,
-        attachment_present=attachment_present, image_present=image_present,
-        selected_answer_language=selected_answer_language,
-    )
+        return validated(retry_calls)

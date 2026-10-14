@@ -62,6 +62,16 @@ _SPEC_FIELDS = {
     'lens_type': r'鱼眼|fisheye|镜头类型|lens type',
 }
 
+# A user's task and desired result are part of the question, but they are not
+# selectors for a published specification claim. Keep them visible separately
+# so the evidence ledger can match the actual product/measurement scope.
+_SPEC_EVIDENCE_CONDITIONS = frozenset({
+    'variant', 'resolution_variant', 'hardware_revision', 'resolution',
+    'platform', 'connection', 'connection_mode', 'viewer_version',
+    'sdk_version', 'firmware_version', 'per_port', 'scope', 'camera_type',
+    'lens_type', 'port',
+})
+
 
 @dataclass(frozen=True)
 class UserAssertion:
@@ -396,6 +406,16 @@ def prepare_turn(message: str, *, previous=None, updates=None, topic_switch=None
                 elif goal.entities and not goal_scope['entities']:
                     goal_scope['entities'] = list(goal.entities)
                 goal_scope['conditions'].update(goal.condition_map())
+                question_constraints = {}
+                if goal.capability == 'lookup_spec':
+                    question_constraints = {
+                        key: value for key, value in goal_scope['conditions'].items()
+                        if key not in _SPEC_EVIDENCE_CONDITIONS
+                    }
+                    goal_scope['conditions'] = {
+                        key: value for key, value in goal_scope['conditions'].items()
+                        if key in _SPEC_EVIDENCE_CONDITIONS
+                    }
                 requirement = {
                     'id': 'req_' + goal.id, 'goal_id': goal.id,
                     'capability': goal.capability, 'critical': True,
@@ -405,7 +425,9 @@ def prepare_turn(message: str, *, previous=None, updates=None, topic_switch=None
                                              else 'user_supplied'),
                     'entity_status': 'unresolved',
                 }
-                if goal.unmapped_condition_keys:
+                if question_constraints:
+                    requirement['question_constraints'] = question_constraints
+                if goal.unmapped_condition_keys and goal.capability != 'lookup_spec':
                     requirement['reason'] = 'unmapped_condition_unverified'
                     requirement['unmapped_condition_keys'] = list(goal.unmapped_condition_keys)
                 if goal.field:

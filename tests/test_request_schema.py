@@ -89,6 +89,93 @@ def test_unmapped_topology_and_software_conditions_are_explicit_gaps():
         assert plan.requirements[0]['reason'] == 'unmapped_condition_unverified'
 
 
+def test_field02_fps_target_is_not_a_claim_measurement_condition():
+    from daq_fae.task_context import prepare_turn
+    question = 'EGO 双目 1920×1200 原生 RGB 能跑 60 fps 吗？'
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'medium', 'goals': [{
+            'kind': 'product', 'capability': 'lookup_spec',
+            'entities': ['EGO 双目'], 'field': 'rgb_max_frame_rate',
+            'conditions': {'resolution_variant': '1920x1200',
+                           'rgb_resolution': '1920x1200',
+                           'rgb_max_frame_rate': 60},
+        }],
+    })
+    requirement = prepare_turn(question, request_schema=schema).requirements[0]
+    assert requirement['conditions'] == {'resolution_variant': '1920x1200'}
+    assert requirement.get('reason') != 'unmapped_condition_unverified'
+    assert requirement['question_constraints'] == {
+        'rgb_resolution': '1920x1200', 'rgb_max_frame_rate': 60,
+    }
+
+
+def test_field01_capture_task_does_not_filter_static_fov_claim():
+    from daq_fae.task_context import prepare_turn
+    question = 'EGO 双目 1600×1200 版本做手部动作采集，水平视场角是多少？'
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'medium', 'goals': [{
+            'kind': 'product', 'capability': 'lookup_spec',
+            'entities': ['EGO 双目'], 'field': 'horizontal_fov',
+            'conditions': {'resolution_variant': '1600x1200'},
+        }],
+    })
+    requirement = prepare_turn(question, request_schema=schema).requirements[0]
+    assert requirement['conditions'] == {'resolution_variant': '1600x1200'}
+
+
+def test_field01_comparison_expands_each_variant_to_an_independent_spec_goal():
+    from daq_fae.task_context import prepare_turn
+    question = 'EGO 双目 1600×1200 和 1920×1200 两个版本的水平视角怎么比？'
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'medium', 'goals': [{
+            'kind': 'product', 'capability': 'lookup_spec',
+            'entities': ['EGO 双目'], 'field': 'horizontal_fov',
+            'conditions': {'resolution_variant': ['1600x1200', '1920x1200']},
+        }],
+    })
+    assert len(schema.goals) == 2
+    assert [goal.condition_map()['resolution_variant'] for goal in schema.goals] == [
+        '1600x1200', '1920x1200']
+    assert [item['conditions']['resolution_variant'] for item in
+            prepare_turn(question, request_schema=schema).requirements] == [
+                '1600x1200', '1920x1200']
+
+
+def test_field13_rgb_mode_question_cannot_become_stereo_mono_resolution():
+    question = ('EGO 双目 1920×1200 版除了原生分辨率还能选 '
+                '1920×1080 吗？切到 1080 后 RGB 能到 60 fps 吗？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'medium', 'goals': [{
+            'kind': 'product', 'capability': 'lookup_spec',
+            'entities': ['EGO'], 'field': 'stereo_mono_resolution',
+            'conditions': {'resolution_variant': '1920x1200'},
+        }],
+    })
+    assert schema.goals[0].field == 'rgb_resolution'
+
+
+def test_field12_native_fps_followup_requires_native_rgb_resolution_evidence():
+    question = '如果设备换成 1600×1200 版本，这三项要怎么改？'
+    prior = ('我现在用 EGO 双目 1920×1200 版本，RGB 按原生分辨率采。\n'
+             '它的水平、垂直视场角分别是多少？原生分辨率最高多少帧？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [
+            {'kind': 'product', 'capability': 'lookup_spec',
+             'entities': ['EGO 双目'], 'field': 'horizontal_fov',
+             'conditions': {'resolution_variant': '1600x1200'}},
+            {'kind': 'product', 'capability': 'lookup_spec',
+             'entities': ['EGO 双目'], 'field': 'vertical_fov',
+             'conditions': {'resolution_variant': '1600x1200'}},
+            {'kind': 'product', 'capability': 'lookup_spec',
+             'entities': ['EGO 双目'], 'field': 'rgb_max_frame_rate',
+             'conditions': {'resolution_variant': '1600x1200'}},
+        ],
+    }, prior_user_context=prior)
+    assert any(goal.capability == 'lookup_spec' and goal.field == 'rgb_resolution'
+               and goal.condition_map() == {'resolution_variant': '1600x1200'}
+               for goal in schema.goals)
+
+
 def test_context_statement_can_keep_product_scope_and_a_pure_clarification_goal():
     schema = DaqRequestSchema.from_candidate('我用 EGO 双目 1600×1200 版本', {
         'confidence': 'low', 'goals': [
@@ -167,6 +254,26 @@ class CandidateAdapter:
         yield {'type': 'tool_call', 'name': 'submit_daq_request_schema',
                'arguments': self.candidate}
         yield {'type': 'stop', 'stop_reason': 'tool_use'}
+
+
+def test_schema_retries_once_when_model_invents_an_entity():
+    class SequenceAdapter:
+        def __init__(self):
+            self.calls = 0
+
+        def chat(self, messages, tools=None, required_tool=None):
+            self.calls += 1
+            entity = 'invented-model' if self.calls == 1 else 'EGO Pro'
+            yield {'type': 'tool_call', 'name': 'submit_daq_request_schema',
+                   'arguments': {'confidence': 'medium', 'goals': [{
+                       'kind': 'product', 'capability': 'resolve_entity',
+                       'entities': [entity],
+                   }]}}
+
+    adapter = SequenceAdapter()
+    schema = extract_request_schema('EGO Pro 的规格是多少？', adapter=adapter)
+    assert adapter.calls == 2
+    assert schema.goals[0].entities == ('EGO Pro',)
 
 
 @pytest.mark.parametrize('question,candidate,kind', [
@@ -299,9 +406,10 @@ def test_schema_retry_is_bounded_and_invalid_candidate_is_not_hidden():
         extract_request_schema('EgoViewer 是什么？', adapter=adapter)
     assert len(adapter.calls) == 2
 
-    invalid = SequencedSchemaAdapter([[{'type': 'tool_call',
+    invalid_response = [{'type': 'tool_call',
         'name': 'submit_daq_request_schema',
-        'arguments': {'confidence': 'high', 'goals': []}}]])
+        'arguments': {'confidence': 'high', 'goals': []}}]
+    invalid = SequencedSchemaAdapter([invalid_response, invalid_response])
     with pytest.raises(SchemaExtractionError, match='schema_goals_invalid'):
         extract_request_schema('EgoViewer 是什么？', adapter=invalid)
-    assert len(invalid.calls) == 1
+    assert len(invalid.calls) == 2

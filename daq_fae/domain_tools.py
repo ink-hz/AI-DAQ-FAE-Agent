@@ -19,7 +19,7 @@ from daq_fae.knowledge.section_search import (
 _TOOLS: dict[str, tuple[str, dict[str, dict], tuple[str, ...]]] = {
     "catalog": ("List governed DAQ products, kits, and release scope.", {"query": {"type": "string"}}, ("query",)),
     "selection": ("Evaluate a DAQ configuration against all stated acquisition constraints.", {"query": {"type": "string"}}, ("query",)),
-    "resolve_entity": ("Resolve a DAQ product, variant, kit, or component.", {"text": {"type": "string"}}, ("text",)),
+    "resolve_entity": ("Resolve a DAQ product, variant, kit, or component. Returns reviewed spec field coverage without values; use lookup_spec before answering a field.", {"text": {"type": "string"}}, ("text",)),
     "lookup_spec": ("Look up a governed DAQ claim. Use a canonical field such as rgb_resolution or rgb_camera_count; conditions must be a JSON object, for example {\"resolution_variant\":\"1600x1200\"}. A generic product name cannot select a variant.", {"entity": {"type": "string"}, "field": {"type": "string"}, "conditions": {"type": "object"}}, ("entity", "field")),
     "inspect_topology": ("Inspect a verified acquisition system topology.", {"query": {"type": "string"}}, ("query",)),
     "lookup_procedure": ("Find an applicable, reviewed acquisition procedure.", {"task": {"type": "string"}, "entity": {"type": "string"}}, ("task",)),
@@ -119,6 +119,7 @@ class DaqToolBox:
         return result
 
     def _dispatch(self, name: str, arguments: dict) -> ToolResult:
+        original_arguments = arguments
         if name not in _TOOLS:
             return ToolResult(status="tool_error", content={"error": "unknown_tool"})
         if self.allowed_tools is not None and name not in self.allowed_tools:
@@ -134,8 +135,26 @@ class DaqToolBox:
                 "claim_status": "unknown", "matches": [],
             })
         scope_normalized = False
+        completed_claim_conditions = {}
+        question_targets = {}
         if name == "lookup_spec" and hasattr(self.knowledge, "ground_question"):
             arguments = dict(arguments)
+            raw_conditions = arguments.get('conditions')
+            if isinstance(raw_conditions, dict):
+                conditions = dict(raw_conditions)
+                field_name = str(arguments.get('field') or '').casefold()
+                for key in list(conditions):
+                    if key == field_name or (field_name.endswith(
+                            ('fps', 'frame_rate')) and key == 'frame_rate_target'):
+                        question_targets[key] = conditions.pop(key)
+                if field_name.endswith(('fps', 'frame_rate')) and 'rgb_resolution' in conditions:
+                    if 'resolution' not in conditions:
+                        conditions['resolution'] = conditions.pop('rgb_resolution')
+                    elif conditions['resolution'] == conditions['rgb_resolution']:
+                        conditions.pop('rgb_resolution')
+                if conditions != raw_conditions:
+                    arguments['conditions'] = conditions
+                    scope_normalized = True
             target = (self.knowledge.ground_question(self.question)
                       if getattr(self.knowledge, "is_candidate_preview", False)
                       else self.knowledge.ground_question(self.question, role=self.role))
@@ -193,12 +212,19 @@ class DaqToolBox:
                 # user compare known variants without treating the family as
                 # one product or guessing a selector.
                 requested = arguments.get('entity')
-                conditions = arguments.get('conditions')
+                conditions = arguments.get('conditions') or {}
                 if isinstance(requested, str) and isinstance(conditions, dict):
                     query = _identity_text(requested)
                     candidates = [row for row in self.knowledge.records_for(self.role)
                                   if row['kind'] == 'entity' and
                                   _identity_text(row['data']['name']) in query]
+                    if not candidates:
+                        # Some published entities have a longer display name
+                        # than their exact public product key (for example HUB).
+                        # Never pick an alias if it names multiple variants.
+                        candidates = [row for row in self.knowledge.records_for(self.role)
+                                      if row['kind'] == 'entity' and
+                                      _identity_text(str(row['scope'].get('product', ''))) == query]
                     if candidates:
                         longest = max(len(_identity_text(row['data']['name']))
                                       for row in candidates)
@@ -208,6 +234,13 @@ class DaqToolBox:
                         if len(candidates) == 1:
                             arguments['entity'] = candidates[0]['id']
                             scope_normalized = True
+                            field = arguments.get('field')
+                            if isinstance(field, str):
+                                canonical = self.knowledge.resolve_field(
+                                    field, candidates[0]['id'])
+                                if canonical and canonical != field:
+                                    arguments['field'] = canonical
+                                    scope_normalized = True
             if any(
                 requirement.get("capability") == "lookup_spec"
                 and _field_intent_matches(str(requirement.get("field") or ""),
@@ -254,6 +287,31 @@ class DaqToolBox:
                     if row["kind"] == "entity"}
         entity_records = {row["id"]: row for row in rows if row["kind"] == "entity"}
         topologies = {row["id"]: row for row in rows if row["kind"] == "topology"}
+        if name == 'lookup_spec' and isinstance(arguments.get('conditions'), dict):
+            supplied = arguments['conditions']
+            field = str(arguments.get('field') or '')
+            entity = str(arguments.get('entity') or '').casefold()
+            candidates = [row for row in rows if row['kind'] == 'claim'
+                          and row['status'] == 'verified'
+                          and _field_intent_matches(field, str(row['data'].get('field') or ''))
+                          and entity in self._entity_names(row, entities, topologies)
+                          and self._scope_selectors_match(row['scope'], supplied)
+                          and all(self._condition_supported(row, key, value, entity_records)
+                                  for key, value in supplied.items())]
+            missing_sets = {
+                json.dumps({key: value for key, value in row['data']['conditions'].items()
+                            if key not in supplied}, ensure_ascii=False, sort_keys=True)
+                for row in candidates
+            }
+            if candidates and len(missing_sets) == 1:
+                missing = json.loads(next(iter(missing_sets)))
+                # The selected variant and published measurement resolution
+                # must agree. Never infer other dimensions such as per-port
+                # power, which change the meaning of a generic question.
+                if missing == {'resolution': supplied.get('resolution_variant')} \
+                        and isinstance(missing['resolution'], str):
+                    arguments = {**arguments, 'conditions': {**supplied, **missing}}
+                    completed_claim_conditions = missing
         if name in {'check_software_support', 'sdk_evidence'}:
             missing = missing_conditions(arguments)
             gaps = [support_gap(row, arguments, self._entity_names(row, entities, topologies), topologies)
@@ -265,11 +323,11 @@ class DaqToolBox:
                 return ToolResult(status='not_found', content={
                     'release_id': self.knowledge.release_id, 'reason': reason,
                     'claim_status': 'unknown', 'missing_conditions': missing,
-                    'matches': [], 'matched_requirement_ids': self._attempted_requirement_ids(name, arguments),
+                    'matches': [], 'matched_requirement_ids': self._attempted_requirement_ids(name, original_arguments),
                 })
         matches = [row for row in rows if self._matches(
             name, arguments, row, entities, topologies, entity_records)]
-        attempted = self._attempted_requirement_ids(name, arguments)
+        attempted = self._attempted_requirement_ids(name, original_arguments)
         if name in {'check_software_support', 'sdk_evidence'} and len({
             row['status'] for row in matches
         }) > 1:
@@ -319,6 +377,25 @@ class DaqToolBox:
                             for key, values in sorted(missing.items())},
                         'matches': [], 'matched_requirement_ids': attempted,
                     })
+                scoped = [row for row in rows if row['kind'] == 'claim'
+                          and row['status'] == 'verified'
+                          and _field_intent_matches(field, str(row['data']['field']))
+                          and entity in self._entity_names(row, entities, topologies)
+                          and self._scope_selectors_match(row['scope'], supplied)]
+                mismatched = {}
+                for row in scoped:
+                    for key, value in row['data']['conditions'].items():
+                        if key in supplied and supplied[key] != value:
+                            mismatched.setdefault(key, {})[
+                                json.dumps(value, ensure_ascii=False, sort_keys=True)] = value
+                if mismatched:
+                    return ToolResult(status='not_found', content={
+                        'reason': 'claim_conditions_mismatch', 'claim_status': 'unknown',
+                        'available_claim_conditions': {
+                            key: [value for _, value in sorted(values.items())]
+                            for key, values in sorted(mismatched.items())},
+                        'matches': [], 'matched_requirement_ids': attempted,
+                    })
         if not matches and name == "lookup_spec" and hasattr(self.knowledge, "ground_question"):
             choices = (self.knowledge.source_checked_variant_scopes(
                 str(arguments.get("entity") or ""), str(arguments.get("field") or ""))
@@ -341,6 +418,14 @@ class DaqToolBox:
                 "matches": [], "matched_requirement_ids": attempted,
             })
         matches = matches[:20]
+        field_coverage = {}
+        if name == 'resolve_entity':
+            for entity_row in matches:
+                fields = sorted({str(row['data']['field']) for row in rows
+                                 if row['kind'] == 'claim'
+                                 and row['status'] == 'verified'
+                                 and row['data'].get('entity_id') == entity_row['id']})
+                field_coverage[entity_row['id']] = fields
         matched_requirements = sorted({
             requirement["id"] for requirement in self.requirements
             if isinstance(requirement, dict) and isinstance(requirement.get("id"), str)
@@ -351,6 +436,13 @@ class DaqToolBox:
         })
         return ToolResult(status="ok", content={
             "release_id": self.knowledge.release_id,
+            **({'available_spec_fields': field_coverage,
+                'available_spec_fields_are_values': False}
+               if name == 'resolve_entity' else {}),
+            **({'query_conditions_completed_from_unique_claim': completed_claim_conditions}
+               if completed_claim_conditions else {}),
+            **({'question_targets_not_claim_conditions': question_targets}
+               if question_targets else {}),
             **({"query_scope_normalized": scope_normalized} if
                getattr(self.knowledge, "is_candidate_preview", False) else {}),
             "evidence_level": ("dev_source_checked" if
@@ -644,8 +736,24 @@ class DaqToolBox:
             "inspect_topology", "selection",
         } and not required_entities:
             return False
+        def reviewed_entity_matches(item: str) -> bool:
+            if item.casefold() in names:
+                return True
+            candidates = [entity for entity in (entity_records or {}).values()
+                          if _reviewed_name_in_query(str(entity['data']['name']), item)
+                          or _identity_text(str(entity['scope'].get('product', ''))) ==
+                          _identity_text(item)]
+            if not candidates:
+                return False
+            longest = max(len(_identity_text(str(entity['data']['name'])))
+                          for entity in candidates)
+            return any(entity['id'].casefold() in names
+                       for entity in candidates
+                       if len(_identity_text(str(entity['data']['name']))) == longest)
+
         if required_entities and (not isinstance(required_entities, list) or not all(
-            isinstance(item, str) and item.casefold() in names for item in required_entities
+            isinstance(item, str) and reviewed_entity_matches(item)
+            for item in required_entities
         )):
             return False
         conditions = requirement.get("conditions") or {}
