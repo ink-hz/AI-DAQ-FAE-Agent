@@ -69,8 +69,9 @@ _SPEC_EVIDENCE_CONDITIONS = frozenset({
     'variant', 'resolution_variant', 'hardware_revision', 'resolution',
     'platform', 'connection', 'connection_mode', 'viewer_version',
     'sdk_version', 'firmware_version', 'per_port', 'scope', 'camera_type',
-    'lens_type', 'port',
+    'lens_type', 'port', 'simultaneous_port_count',
 })
+_IDENTITY_SELECTOR_KEYS = frozenset({'variant', 'resolution_variant', 'hardware_revision'})
 
 
 @dataclass(frozen=True)
@@ -230,7 +231,8 @@ def extract_context_hints(excerpts) -> dict:
 
 def prepare_turn(message: str, *, previous=None, updates=None, topic_switch=None,
                  attachment_source_ids=(), image_source_ids=(), context_hints=None,
-                 grounded_targets=None, request_schema: DaqRequestSchema | None = None) -> TurnPlan:
+                 grounded_targets=None, request_schema: DaqRequestSchema | None = None,
+                 clear_prior_grounding: bool = False) -> TurnPlan:
     """Prepare a turn without mutating prior state or granting facts/permissions.
 
     Pass the returned context into the next turn/checkpoint, tool_context() to the
@@ -271,6 +273,27 @@ def prepare_turn(message: str, *, previous=None, updates=None, topic_switch=None
             raise ValueError('daq_equipment_invalid')
         values[key] = UserAssertion(copy.deepcopy(raw), turn, certainty)
     if request_schema is not None:
+        for key in _IDENTITY_SELECTOR_KEYS:
+            old_selector = values.get(key)
+            if old_selector is None or old_selector.origin_turn == turn:
+                continue
+            requested = {
+                str(value).casefold().replace('×', 'x').replace(' ', '')
+                for goal in request_schema.goals if goal.kind == 'product'
+                for name, value in goal.condition_map().items() if name == key
+            }
+            grounded_conditions_preview = (
+                grounded_targets.get('conditions', {})
+                if isinstance(grounded_targets, dict) else {})
+            if isinstance(grounded_conditions_preview, dict) and key in grounded_conditions_preview:
+                requested.add(str(grounded_conditions_preview[key]).casefold()
+                              .replace('×', 'x').replace(' ', ''))
+            prior = str(old_selector.value).casefold().replace('×', 'x').replace(' ', '')
+            if clear_prior_grounding or (requested and requested != {prior}):
+                # A later explicit variant selection supersedes the old
+                # user assertion; otherwise a third follow-up can revert it.
+                values.pop(key, None)
+    if request_schema is not None:
         capabilities = [goal.capability for goal in request_schema.goals]
     else:
         capabilities = [name for name, pattern in _INTENTS.items() if re.search(pattern, message, re.I)]
@@ -292,8 +315,21 @@ def prepare_turn(message: str, *, previous=None, updates=None, topic_switch=None
         setup = UserAssertion(message[:1000], turn,
                               'hypothesis' if re.search(r'可能|猜测|\b(?:maybe|possibly)\b',
                                                         message, re.I) else 'asserted')
+    prior_grounding = {} if switched or clear_prior_grounding else copy.deepcopy(old.grounded_scope)
+    if request_schema is not None and prior_grounding:
+        prior_selectors = prior_grounding.get('conditions', {})
+        if any(
+            key in prior_selectors
+            and str(prior_selectors[key]).casefold().replace('×', 'x').replace(' ', '')
+            != str(value).casefold().replace('×', 'x').replace(' ', '')
+            for goal in request_schema.goals if goal.kind == 'product'
+            for key, value in goal.condition_map().items()
+        ):
+            # A user-selected new variant cannot inherit the old canonical
+            # entity, even when the new variant is not in the reviewed view.
+            prior_grounding = {}
     context = DaqTaskContext(topic_id, turn, values, tuple(steps), tuple(capabilities),
-                             {} if switched else copy.deepcopy(old.grounded_scope), setup)
+                             prior_grounding, setup)
     hints = copy.deepcopy(dict(context_hints or {}))
     if set(hints) - {'equipment', 'variant', 'platform', 'viewer_version',
                      'sdk_version', 'firmware_version'}:
@@ -317,13 +353,19 @@ def prepare_turn(message: str, *, previous=None, updates=None, topic_switch=None
              'entities': context.get('equipment', hints.get('equipment', grounded.get('entities', []))),
              'conditions': {**grounded_conditions, **hinted_conditions,
                             **{key: value.value for key, value in values.items() if key != 'equipment'}}}
+    if request_schema is not None:
+        # Measurement and per-port conditions belong to an individual schema
+        # goal. A turn-wide regex or grounded phrase can refer to only one
+        # clause of a comparison and must not filter its other goals.
+        scope['conditions'].pop('resolution', None)
+        scope['conditions'].pop('per_port', None)
     measurement_resolution = re.search(
         r'(?:在|以)\s*([0-9]{3,4})\s*[x×X]\s*([0-9]{3,4})\s*分辨率(?:下|时)',
         message, re.IGNORECASE)
-    if measurement_resolution:
+    if request_schema is None and measurement_resolution:
         scope['conditions']['resolution'] = (
             f'{measurement_resolution.group(1)}x{measurement_resolution.group(2)}')
-    if re.search(r'供电输出|电源输出', message):
+    if request_schema is None and re.search(r'供电输出|电源输出', message):
         aggregate_ports = re.search(
             r'(?:[二三四五六七八九十两多]|[2-9]\d*|所有|全部)\s*(?:个|路)?\s*(?:下游)?(?:端口|口)',
             message) and re.search(r'同时|总(?:共|计|输出)?|合计|整体|一起', message)
@@ -369,6 +411,24 @@ def prepare_turn(message: str, *, previous=None, updates=None, topic_switch=None
             requirement['id'] = f'req_{capability}_{digest}'
             requirements.append(requirement)
     if request_schema is not None:
+        product_goals = [goal for goal in request_schema.goals if goal.kind == 'product']
+        distinct_goal_entities = {tuple(goal.entities) for goal in product_goals
+                                  if goal.entities}
+        selector_signatures = {
+            tuple(sorted((key, str(value).casefold().replace('×', 'x').replace(' ', ''))
+                         for key, value in goal.condition_map().items()
+                         if key in _IDENTITY_SELECTOR_KEYS))
+            for goal in product_goals
+        }
+        shared_grounding_safe = (all(len(goal.entities) == 1 for goal in product_goals)
+                                 and len(distinct_goal_entities) <= 1
+                                 and len(selector_signatures) <= 1)
+        if not shared_grounding_safe:
+            # A global canonical binding or its selector cannot stand in for
+            # multiple members or for goals with different variant scopes.
+            context = replace(context, grounded_scope={})
+            for key in _IDENTITY_SELECTOR_KEYS:
+                scope['conditions'].pop(key, None)
         for goal in request_schema.goals:
             if goal.kind == 'service':
                 requirements.append({
@@ -398,23 +458,46 @@ def prepare_turn(message: str, *, previous=None, updates=None, topic_switch=None
                 })
             elif goal.kind == 'product':
                 goal_scope = copy.deepcopy(scope)
-                if grounded_targets and grounded_targets.get('entities'):
+                goal_conditions = goal.condition_map()
+                if goal.capability in {'lookup_spec', 'resolve_entity'}:
+                    # In a structured request, claim selectors belong to the
+                    # individual goal. Setup task, software and measurement
+                    # context cannot filter an entity identity or an unrelated
+                    # specification.
+                    goal_scope['conditions'] = ({
+                        key: (values[key].value if key in values
+                              else grounded_conditions[key])
+                        for key in _IDENTITY_SELECTOR_KEYS
+                        if shared_grounding_safe
+                        and (key in values or key in grounded_conditions)
+                    })
+                    if goal.capability == 'resolve_entity':
+                        goal_conditions = {key: value for key, value in
+                                           goal_conditions.items()
+                                           if key in _IDENTITY_SELECTOR_KEYS}
+                if shared_grounding_safe and grounded_targets and grounded_targets.get('entities'):
                     # This ID was resolved from the role-visible published
                     # entity view; the model's surface name remains a user
                     # assertion but does not become the evidence key.
                     goal_scope['entities'] = list(grounded_targets['entities'])
+                elif not shared_grounding_safe:
+                    goal_scope['entities'] = list(goal.entities)
                 elif goal.entities and not goal_scope['entities']:
                     goal_scope['entities'] = list(goal.entities)
-                goal_scope['conditions'].update(goal.condition_map())
+                goal_scope['conditions'].update(goal_conditions)
                 question_constraints = {}
                 if goal.capability == 'lookup_spec':
+                    evidence_conditions = _SPEC_EVIDENCE_CONDITIONS
+                    if (goal.field or '').casefold().endswith(
+                            ('resolution', 'resolution_options')):
+                        evidence_conditions = evidence_conditions - {'resolution'}
                     question_constraints = {
                         key: value for key, value in goal_scope['conditions'].items()
-                        if key not in _SPEC_EVIDENCE_CONDITIONS
+                        if key not in evidence_conditions
                     }
                     goal_scope['conditions'] = {
                         key: value for key, value in goal_scope['conditions'].items()
-                        if key in _SPEC_EVIDENCE_CONDITIONS
+                        if key in evidence_conditions
                     }
                 requirement = {
                     'id': 'req_' + goal.id, 'goal_id': goal.id,
@@ -422,6 +505,9 @@ def prepare_turn(message: str, *, previous=None, updates=None, topic_switch=None
                     'status': 'unknown', 'evidence_class': 'governed_required',
                     **goal_scope,
                     'conditions_authority': ('platform_context_unverified' if used_hints
+                                             and (goal.capability not in {
+                                                 'lookup_spec', 'resolve_entity'}
+                                                  or not goal.entities)
                                              else 'user_supplied'),
                     'entity_status': 'unresolved',
                 }

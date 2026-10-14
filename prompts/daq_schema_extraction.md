@@ -2,6 +2,8 @@
 
 把一轮咨询拆成可组合目标，不要用单一分类吞掉另一部分。只能使用下列 `kind` 与 `capability` 对应项，不能自造 `query_product_specs` 等同义工具名：
 
+每个 goal 必须对应用户实际提出的结论，不要为了构造完整方案而主动补查相邻规格。问设备组合的接线、同步或落盘步骤时，只有用户明确问端口数量、供电或“口数够不够”，才加入 HUB 的 `lookup_spec`；端口数量本身不能证明该组合接法、供电或同步可行。确实被问到的规格、软件和流程仍须分别保留，不能因其他目标缺证而删掉。
+
 | kind | capability | 用途 |
 | --- | --- | --- |
 | service | service_identity / service_capabilities / service_coverage | 助手身份、能协助的任务、当前资料覆盖 |
@@ -9,9 +11,18 @@
 | attachment | search_attachments / analyze_image | 本轮文本附件或图片观察 |
 | unknown | clarify | 意图不足，只请求最小澄清 |
 
+只有 `lookup_spec` 使用 `field`；软件兼容、SDK 证据和官方下载链接分别使用 `check_software_support`、`sdk_evidence`、`official_links`。同一能力、实体和条件只列一次 goal，不能靠给非规格目标重复填写不同 `field` 来表示不同软件部件；平台、版本、录制任务等用户明确提出的条件要保留。不要把缺少兼容资料改写为已经验证的录制保证。
+
 当一个句子同时要求自我介绍和规格时，返回两个 goal：`service_identity` 与 `lookup_spec`。EGO 双目“1600×1200 版本”是 `conditions.resolution_variant="1600x1200"`，不是测量分辨率 `resolution`；只有“在 1600×1200 分辨率下测量”才使用 `resolution`。`horizontal_fov` 是水平视场角字段。
+产品版本与取流模式是不同条件。例如“EGO 双目 1920×1200 版还能选 1920×1080 吗？切到 1080 后能到 60 fps 吗？”中，两个规格目标始终保留 `resolution_variant="1920x1200"`；查可选分辨率用 `field="rgb_resolution"`，查切换后的帧率用 `field="rgb_max_frame_rate"` 并加 `resolution="1920x1080"`。不能把 1920×1080 写成新的 `resolution_variant`，也不能把 1920×1200 模式的帧率当成 1080 模式的帧率。
+`entities` 只列产品或部件名称；“1920×1200 版本”这类纯变体短语只能放入 `conditions.resolution_variant`，不能作为第二个实体。真正询问 EGO 与 WristCam 组合时，两个产品仍都要列入 `entities`。
+同一规格字段比较两个产品或部件时，给每个实体单独列 `lookup_spec` goal；版本、范围、测量条件和用户目标值都只附在实际适用的实体目标上，不能把一个产品的条件复制到另一个产品。组合拓扑等组合目标仍保留多个实体。
+同一产品在本轮或历史中出现多个版本时，每项规格 goal 都要写明自己指向的 `resolution_variant`。例如先问“它的视角”，再说“如果换成另一版本，帧率怎样”，前者仍指原版本、后者才指新版本；不能因为实体名称相同就把新版本条件附给前者。短追问若本轮没有提出新版本，可沿用历史中用户唯一明确的产品版本；这是产品身份选择器，不是视场角或帧率的测量分辨率。
+分别核对多个产品身份时也给每个实体单独列 `resolve_entity` goal；它的 `conditions` 只能包含产品版本选择器 `variant`、`resolution_variant`、`hardware_revision`。采集任务或 `usage_context`、软件版本、连接方式和测量条件不是产品身份条件；若用户另问这些能力，应生成相应的独立 goal。
 
 规格字段使用发布资料的领域名：RGB 最大帧率用 `rgb_max_frame_rate`，RGB 分辨率用 `rgb_resolution`，双目 Mono 基线和分辨率分别用 `stereo_mono_baseline`、`stereo_mono_resolution`，HUB 下游端口数量用 `downstream_port_count`，供电输出用 `downstream_port_power_output`。鱼眼是镜头限定词，若问题明确说鱼眼，可用 `conditions.lens_type="fisheye"`；不要把通用 RGB 规格自动当作已证明鱼眼。RGB/Mono、下游端口已写进字段名时，别再重复设 `sensor`、`camera_type` 或 `port` 条件。帧率数据可能要求测量分辨率，用户没给时不要猜，由取证工具返回所需条件。
+HUB `downstream_port_power_output` 仅表示单口规格；明确问“每口”时写 `conditions.per_port=true`。问多个口同时使用时的**总供电输出**，另列 `field="total_downstream_port_power_output"`，并将同时使用的口数写成 `conditions.simultaneous_port_count`。同题问每口和总量时必须保留两个独立目标；总量目标不能由单口 5V/2A 记录满足。若还问端口数，再独立列 `downstream_port_count`。本轮明确提到另一个产品时，不得把历史 HUB 的供电目标带进本轮。
+用户提出指标能否达到、两个版本怎么比较或替代时，产品身份只是取证入口，必须为每个被问到的规格字段和变体生成 `lookup_spec` goal。即使问题以“客户手上是某设备”开头，也不能只返回 `resolve_entity`；那会阻断规格工具，导致已发布数值被误报为缺证。
 产品名中的“双目”只表示产品身份，不决定被问的是 Mono 还是 RGB 通道。用户明确问 RGB 可选分辨率或 RGB 帧率时，分别使用 `rgb_resolution`、`rgb_max_frame_rate`；不得因产品名含“双目”改成 `stereo_mono_resolution`。
 问“原生分辨率下的 RGB 帧率”时，除了 `rgb_max_frame_rate`，还要有同一变体的 `rgb_resolution` 目标，用已核实分辨率记录确认何为原生；变体名称本身不是 RGB 原生分辨率证据。追问沿用前文“原生分辨率”条件时同样保留这个依赖。
 

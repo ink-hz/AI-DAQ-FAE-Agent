@@ -189,6 +189,39 @@ def test_tool_error_is_protocol_failure_not_missing_knowledge():
     assert decision.reason_code == "daq_evidence_tool_failure"
 
 
+def test_out_of_goal_tool_call_does_not_poison_safe_evidence_gap_answer():
+    allowed_tools = frozenset({'inspect_topology'})
+    session = DaqEvidencePolicy(allowed_tools=allowed_tools).begin({'requirements': [
+        {'id': 'topology', 'capability': 'inspect_topology', 'critical': True},
+    ]})
+    box = DaqToolBox(allowed_tools=allowed_tools)
+    denied = box.dispatch('lookup_spec', {})
+    assert denied.status == 'tool_error'
+    assert denied.content['error'] == 'tool_outside_request_goals'
+    session.observe('lookup_spec', denied)
+    assert session.snapshot().requirement_status == {'topology': 'unknown'}
+    assert session.evaluate(AnswerSubmission(
+        outcome='safe_abstained', missing='No reviewed wiring topology is available.',
+    )).action == 'allow'
+    assert session.evaluate(AnswerSubmission(
+        outcome='resolved', conclusion='The wiring is supported.',
+    )).action != 'allow'
+
+
+def test_planned_tool_scope_error_remains_a_configuration_failure():
+    session = DaqEvidencePolicy(allowed_tools=frozenset({'lookup_spec'})).begin({
+        'requirements': [{'id': 'spec', 'capability': 'lookup_spec'}],
+    })
+    session.observe('lookup_spec', ToolResult(
+        status='tool_error', content={'error': 'tool_outside_request_goals'},
+    ))
+    decision = session.evaluate(AnswerSubmission(
+        outcome='safe_abstained', missing='No specification was found.',
+    ))
+    assert decision.action == 'reject'
+    assert decision.reason_code == 'daq_evidence_tool_failure'
+
+
 def test_vision_unavailable_allows_explicit_abstention_but_no_resolution():
     session = DaqEvidencePolicy().begin(question_requirements("看一下这张图"))
     session.observe("analyze_image", ToolResult(
@@ -251,6 +284,18 @@ def test_answer_must_keep_internal_provenance_out_of_prose():
         outcome="resolved", conclusion="EGO 1600 的水平视场角为 165°",
         basis="按 1600×1200 版本的已发布规格核对。",
     )).action == "allow"
+
+
+def test_english_provenance_repair_notice_uses_selected_answer_language():
+    session = DaqEvidencePolicy(answer_language='en').begin({'requirements': [
+        {'id': 'identity', 'capability': 'resolve_entity'},
+    ]})
+    decision = session.evaluate(AnswerSubmission(
+        outcome='safe_abstained', missing='No source_id was returned.',
+    ))
+    assert decision.reason_code == 'daq_internal_provenance_in_answer'
+    assert 'Rewrite' in decision.notice
+    assert not any('\u3400' <= character <= '\u9fff' for character in decision.notice)
 
 
 def test_chinese_answer_contract_rewrites_an_english_body_for_chinese_question():

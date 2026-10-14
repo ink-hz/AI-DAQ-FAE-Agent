@@ -37,13 +37,15 @@ class DaqEvidencePolicy:
     def __init__(self, *, allow_dev_source_check: bool = False,
                  service_contract: ServiceContract | None = None,
                  answer_language: str = 'zh',
-                 allowed_chinese_terms: tuple[str, ...] = ()):
+                 allowed_chinese_terms: tuple[str, ...] = (),
+                 allowed_tools: frozenset[str] | None = None):
         if answer_language not in {'zh', 'en'}:
             raise ValueError('daq_answer_language_invalid')
         self.allow_dev_source_check = allow_dev_source_check
         self.service_contract = service_contract
         self.answer_language = answer_language
         self.allowed_chinese_terms = allowed_chinese_terms
+        self.allowed_tools = allowed_tools
 
     def begin(self, requirements: Mapping[str, object]) -> "DaqEvidenceSession":
         raw = requirements.get("requirements", [])
@@ -78,7 +80,8 @@ class DaqEvidencePolicy:
         return DaqEvidenceSession(tuple(parsed), allow_dev_source_check=self.allow_dev_source_check,
                                   service_contract=self.service_contract,
                                   answer_language=self.answer_language,
-                                  allowed_chinese_terms=self.allowed_chinese_terms)
+                                  allowed_chinese_terms=self.allowed_chinese_terms,
+                                  allowed_tools=self.allowed_tools)
 
 
 class DaqEvidenceSession:
@@ -86,7 +89,8 @@ class DaqEvidenceSession:
                  allow_dev_source_check: bool = False,
                  service_contract: ServiceContract | None = None,
                  answer_language: str = 'zh',
-                 allowed_chinese_terms: tuple[str, ...] = ()):
+                 allowed_chinese_terms: tuple[str, ...] = (),
+                 allowed_tools: frozenset[str] | None = None):
         self.requirements = requirements
         self.status = {
             item.id: ('satisfied' if item.evidence_class == 'service_contract'
@@ -103,12 +107,20 @@ class DaqEvidenceSession:
         self.allow_dev_source_check = allow_dev_source_check
         self.answer_language = answer_language
         self.allowed_chinese_terms = allowed_chinese_terms
+        self.allowed_tools = allowed_tools
 
     def observe(self, tool_name: str, result: ToolResult) -> None:
         if tool_name not in self.actual:
             self.actual.append(tool_name)
         if result.status == "tool_error":
             code = result.content.get("error") if isinstance(result.content, dict) else None
+            if (code == "tool_outside_request_goals" and
+                    self.allowed_tools is not None and
+                    tool_name not in self.allowed_tools):
+                # The DAQ pre-loop withheld this tool. No evidence was read or
+                # failed, so the attempt cannot certify a goal or poison a
+                # truthful abstention about the planned evidence gaps.
+                return
             if tool_name == "analyze_image" and code in {
                 "vision_unavailable", "vision_timeout", "vision_http_error",
                 "vision_transport_error", "vision_invalid_response",
@@ -171,7 +183,11 @@ class DaqEvidenceSession:
             if item.id not in matched_ids and not (empty_release and result.status == "not_found"):
                 continue
             previous = self.status[item.id]
-            if result.status == "conflict":
+            if result.status == "conflict" or (
+                tool_name == 'lookup_spec' and result.status == 'not_found'
+                and content.get('reason') == 'reviewed_conflict_notice'
+                and content.get('claim_status') == 'conflict'
+            ):
                 self.status[item.id] = "conflict"
             elif previous == "conflict":
                 continue
@@ -215,9 +231,14 @@ class DaqEvidenceSession:
                 or any(token in prose for token in self._internal_provenance)):
             return EvidenceDecision(
                 "request_evidence", "daq_internal_provenance_in_answer",
-                "请重新提交终稿：正文只用自然中文说明结论、适用条件和必要缺口；"
-                "删除内部记录 ID、英文内部字段代码和原始文件路径。"
-                "来源已保留在结构化 sources，不必重复取证。",
+                ("Rewrite the answer in natural English. Remove internal record IDs, "
+                 "field codes, tool status codes and source file paths from every answer "
+                 "field. Keep the same facts, conditions, evidence gaps and outcome. "
+                 "Sources are already attached as structured metadata."
+                 if self.answer_language == 'en' else
+                 "请重新提交终稿：正文只用自然中文说明结论、适用条件和必要缺口；"
+                 "删除内部记录 ID、英文内部字段代码和原始文件路径。"
+                 "来源已保留在结构化 sources，不必重复取证。"),
             )
         if self.tool_failed:
             return EvidenceDecision("reject", "daq_evidence_tool_failure")

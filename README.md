@@ -2,21 +2,21 @@
 
 数采 FAE 独立发布服务和知识版本，复用固定源码版本的通用 FAE 运行时。首期仅面向内部 FAE 试点。
 
-## 当前状态（2026-10-13）
+## 当前状态（2026-10-14）
 
-**工作流修复已部署到 23 条知识的内部试点**：[数采 FAE 入口](https://agent.orbbec.com.cn/daq/)。当前仍只发布 6 个产品/变体实体和 17 条规格 claim，可见角色为 `internal_fae`，Platform 仅授权苍渊一名内部用户。软件兼容、下载链接、组合拓扑、操作流程、候选章节和未裁决冲突均未发布；个人登录后的业务验收仍待观察。
+**本仓新一轮修复已通过 Dev，尚未切换生产**。[数采 FAE 入口](https://agent.orbbec.com.cn/daq/)的最近一次有记录的生产切换为 2026-10-13：运行时 `daq-654a668a7489`、知识发布 `42317417a8a9031dda4562c1a97d326ec1eeaa7216707d7f3d7233e9ed6913e8`，见[切换记录](docs/reviews/2026-10-13-daq-history-language-dev-review.md)。新候选知识仍只有 6 个产品/变体实体和 17 条规格 claim，仅 `internal_fae` 可见。软件兼容、下载链接、组合拓扑、操作流程、候选章节和未裁决冲突尚未发布；个人登录后的业务验收仍待观察。
 
 | 项目 | 实际状态 |
 | --- | --- |
-| 数采代码 | 构建包提交 `49345ccbed83489c6a315d9272f0ea18dfd473a3`；运行时 `daq-49345ccbed83`；生产镜像 `sha256:acbd04e1e5fcff70dca83ab44d2345c3ac9c844e1c532814ee0c5d13e1bd95a6` |
-| 知识 | 活动发布 `2f52df9cef39cf524628ba897ef53f027dff8e95396adef61dc79599f7710cb9`；与前版同一批 23 条事实，绑定新 runtime，仅 `internal_fae` 可读 |
+| 数采代码 | 最近有记录的生产运行时 `daq-654a668a7489`；本轮 Dev 修复待提交、打包和切换 |
+| 知识 | 最近有记录的生产发布 `42317417a8a9031dda4562c1a97d326ec1eeaa7216707d7f3d7233e9ed6913e8`；本轮 Dev 候选 `0bcd36ec82524bf51077cbbc4f5661168a85ec93519c123c8c0bd86a4f3d4d4d`，23 条已审记录 |
 | 原件 | 276 个、2,038,212,224 字节保存在本仓 Git 忽略的本机受限归档；清单 SHA-256 为 `e35fe11f6773bc157734d65a3b19c87a18fdf14bab3c5458d1b4d75b22387d56` |
-| Dev 模型回放 | 新旧冻结集 48 行逐题独立复审通过；46 个真模型 turn，串行 P95 37.8 秒。新发布绑定另跑 5 类 Dev 哨兵 |
+| Dev 模型回放 | 本轮 14 场景、16 轮主集与 5 道边界题全部经独立语义复审 PASS；均 HTTP 200、无 fallback，SSE/历史/trace 一致，详见[本轮复审](docs/reviews/2026-10-14-daq-alias-variant-dev-review.md) |
 | 生产接入 | 与相机 FAE 共用 PostgreSQL 逻辑数据库和 Anthropic 网关/API 凭据；数采表位于独立 `daq_fae` schema，会话/内容密钥与逐人权限独立 |
 | Platform | DAQ catalog 和身份启动代码为 `7bce35f0`；控制库迁移 113 已执行；只有苍渊获得 DAQ user scope，相机原 `all_members` 授权保持 |
-| 线上验证 | 数采与相机容器健康、重启 0；`/daq/` 200，受保护 API 匿名 401，公网健康路径 404；浏览器实际 JS 与本机构建哈希一致。生产未调用模型 |
+| 线上验证 | 2026-10-13 切换记录中的只读烟测通过；本轮修复尚未执行生产切换与新版本烟测，生产未用于模型评测 |
 
-本次升级只重建数采容器，保持相机和 Platform 镜像不变。新数采镜像内 237 个发布文件与精确源码包逐字节相等；数据库、环境、知识指针和旧镜像均有回退材料。详见[工作流修复发布记录](docs/reviews/2026-10-13-daq-workflow-remediation-production-release.md)；首批试点和此前热修见[原发布记录](docs/reviews/2026-10-12-daq-production-pilot-release.md)。
+2026-10-13 的已完成切换仅重建数采容器，保持相机和 Platform 镜像不变；当时的数据库、环境、知识指针和旧镜像有回退材料。详见[工作流修复发布记录](docs/reviews/2026-10-13-daq-workflow-remediation-production-release.md)；本轮新代码与知识要另行打包、绑定和切换。
 
 独立原始事实/权限人工签字、异机原件复制和独立发布签名已按项目负责人决定取消。来源、版本、角色和 Dev 答案复核仍被程序核验。上游固定 SHA `4f453b77073005d24d9f07f36016b7172009443a` 的 Git tree 与本仓 `src/` 相同；受保护持久 ref 尚无核验证据。生产个人登录后的端到端交互、并发延迟与业务试点反馈尚未验收。
 
@@ -42,7 +42,7 @@ npm --prefix webui test
 npm --prefix webui run build
 ```
 
-最新本机验证为 Python 957 题、WebUI 240 题通过，WebUI 构建通过。共享 `src/` 没有本轮改动；本轮没有执行生产模型评测。[Dev 复核](docs/reviews/2026-10-12-daq-workflow-remediation-dev-review.md)记录逐题范围和延迟。
+最新本机验证为 Python 1109 题、WebUI 246 题通过，WebUI 构建通过。共享 `src/` 没有本轮改动；本轮没有执行生产模型评测。[Dev 复核](docs/reviews/2026-10-14-daq-alias-variant-dev-review.md)记录逐题范围、独立语义审查和时延。
 
 ## 知识更新
 

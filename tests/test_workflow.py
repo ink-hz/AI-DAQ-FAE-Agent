@@ -1,3 +1,5 @@
+import pytest
+
 from daq_fae.workflow import prepare_workflow, allowed_tools_for, context_clarification_done
 from daq_fae.request_schema import DaqRequestSchema
 
@@ -77,6 +79,199 @@ def test_guardrail_runs_before_semantic_model_and_loop():
     assert adapter.calls == 0
 
 
+@pytest.mark.parametrize('also_resolve_current', [False, True])
+def test_current_reviewed_product_retries_stale_hub_power_goal(also_resolve_current):
+    from pathlib import Path
+    from daq_fae.knowledge.releases import read_active_release
+    from daq_fae.knowledge.reviewed_view import ReviewedKnowledge
+
+    release = read_active_release(Path(__file__).resolve().parents[1] /
+                                  'data/knowledge/published')
+    knowledge = ReviewedKnowledge.from_manifest(release['release_id'],
+                                                 release['manifest'])
+    question = 'UMI Finger 每口供电是多少？'
+    assert knowledge.ground_question(question, role='internal_fae')['entities'] == [
+        'entity:umi-finger']
+
+    class RetryingAdapter:
+        calls = 0
+
+        def chat(self, messages, tools=None, required_tool=None):
+            self.calls += 1
+            entity, field = (('数采 HUB', 'downstream_port_power_output')
+                             if self.calls == 1 else ('UMI Finger', 'power_output'))
+            goals = [{'kind': 'product', 'capability': 'lookup_spec',
+                      'entities': [entity], 'field': field}]
+            if self.calls == 1 and also_resolve_current:
+                goals.insert(0, {'kind': 'product', 'capability': 'resolve_entity',
+                                 'entities': ['UMI Finger']})
+            yield {'type': 'tool_call', 'name': required_tool,
+                   'arguments': {'confidence': 'high', 'goals': goals}}
+
+    adapter = RetryingAdapter()
+    prepared = prepare_workflow(
+        question, adapter=adapter, knowledge=knowledge, role='internal_fae',
+        runtime_release='runtime-dev',
+        prior_user_context='我正在使用数采 HUB。')
+    assert adapter.calls == 2
+    assert prepared.schema.goals[0].entities == ('UMI Finger',)
+    assert prepared.plan.requirements[0]['entities'] == ['entity:umi-finger']
+
+
+@pytest.mark.parametrize('question', [
+    '数采 HUB 接 UMI Finger，UMI Finger 每口供电是多少？',
+    '数采 HUB 接 UMI Finger 每口供电是多少？',
+])
+def test_reviewed_power_target_overrides_hub_topology_background(question):
+    from pathlib import Path
+    from daq_fae.knowledge.releases import read_active_release
+    from daq_fae.knowledge.reviewed_view import ReviewedKnowledge
+
+    release = read_active_release(Path(__file__).resolve().parents[1] /
+                                  'data/knowledge/published')
+    knowledge = ReviewedKnowledge.from_manifest(release['release_id'],
+                                                 release['manifest'])
+
+    class RetryingAdapter:
+        calls = 0
+
+        def chat(self, messages, tools=None, required_tool=None):
+            self.calls += 1
+            goals = ([
+                {'kind': 'product', 'capability': 'resolve_entity',
+                 'entities': ['UMI Finger']},
+                {'kind': 'product', 'capability': 'lookup_spec',
+                 'entities': ['数采 HUB'],
+                 'field': 'downstream_port_power_output'},
+            ] if self.calls == 1 else [{
+                'kind': 'product', 'capability': 'lookup_spec',
+                'entities': ['UMI Finger'], 'field': 'power_output',
+            }])
+            yield {'type': 'tool_call', 'name': required_tool,
+                   'arguments': {'confidence': 'high', 'goals': goals}}
+
+    adapter = RetryingAdapter()
+    prepared = prepare_workflow(
+        question, adapter=adapter, knowledge=knowledge, role='internal_fae',
+        runtime_release='runtime-dev',
+        prior_user_context='我正在使用数采 HUB。')
+    assert adapter.calls == 2
+    assert prepared.schema.goals[0].entities == ('UMI Finger',)
+
+
+def test_two_named_power_subjects_keep_separate_valid_goals():
+    from pathlib import Path
+    from daq_fae.knowledge.releases import read_active_release
+    from daq_fae.knowledge.reviewed_view import ReviewedKnowledge
+
+    release = read_active_release(Path(__file__).resolve().parents[1] /
+                                  'data/knowledge/published')
+    knowledge = ReviewedKnowledge.from_manifest(release['release_id'],
+                                                 release['manifest'])
+    question = '数采 HUB 每口供电和 UMI Finger 的总功率分别多少？'
+    goals = [
+        {'kind': 'product', 'capability': 'lookup_spec',
+         'entities': ['数采 HUB'], 'field': 'downstream_port_power_output',
+         'conditions': {'per_port': True}},
+        {'kind': 'product', 'capability': 'lookup_spec',
+         'entities': ['UMI Finger'], 'field': 'power_output'},
+    ]
+    adapter = SemanticAdapter(goals)
+    prepared = prepare_workflow(
+        question, adapter=adapter, knowledge=knowledge, role='internal_fae',
+        runtime_release='runtime-dev')
+    assert adapter.calls == 1
+    assert {goal.entities for goal in prepared.schema.goals} == {
+        ('数采 HUB',), ('UMI Finger',),
+    }
+
+
+def test_two_named_power_subjects_cannot_replace_second_spec_with_identity():
+    from pathlib import Path
+    from daq_fae.knowledge.releases import read_active_release
+    from daq_fae.knowledge.reviewed_view import ReviewedKnowledge
+    from daq_fae.request_schema import SchemaExtractionError
+
+    release = read_active_release(Path(__file__).resolve().parents[1] /
+                                  'data/knowledge/published')
+    knowledge = ReviewedKnowledge.from_manifest(release['release_id'],
+                                                 release['manifest'])
+    adapter = SemanticAdapter([
+        {'kind': 'product', 'capability': 'lookup_spec',
+         'entities': ['数采 HUB'], 'field': 'downstream_port_power_output',
+         'conditions': {'per_port': True}},
+        {'kind': 'product', 'capability': 'resolve_entity',
+         'entities': ['UMI Finger']},
+    ])
+    with pytest.raises(SchemaExtractionError, match='schema_missing_explicit_spec_goal'):
+        prepare_workflow(
+            '数采 HUB 每口供电和 UMI Finger 的总功率分别多少？',
+            adapter=adapter, knowledge=knowledge, role='internal_fae',
+            runtime_release='runtime-dev')
+    assert adapter.calls == 2
+
+
+def test_plain_power_question_does_not_inherit_hub_spec_from_topology():
+    from pathlib import Path
+    from daq_fae.knowledge.releases import read_active_release
+    from daq_fae.knowledge.reviewed_view import ReviewedKnowledge
+
+    release = read_active_release(Path(__file__).resolve().parents[1] /
+                                  'data/knowledge/published')
+    knowledge = ReviewedKnowledge.from_manifest(release['release_id'],
+                                                 release['manifest'])
+
+    class RetryingAdapter:
+        calls = 0
+
+        def chat(self, messages, tools=None, required_tool=None):
+            self.calls += 1
+            goals = ([
+                {'kind': 'product', 'capability': 'resolve_entity',
+                 'entities': ['UMI Finger']},
+                {'kind': 'product', 'capability': 'lookup_spec',
+                 'entities': ['数采 HUB'], 'field': 'downstream_port_power_output'},
+            ] if self.calls == 1 else [{
+                'kind': 'product', 'capability': 'lookup_spec',
+                'entities': ['UMI Finger'], 'field': 'power_output',
+            }])
+            yield {'type': 'tool_call', 'name': required_tool,
+                   'arguments': {'confidence': 'high', 'goals': goals}}
+
+    adapter = RetryingAdapter()
+    prepared = prepare_workflow(
+        '数采 HUB 接 UMI Finger，UMI Finger 供电是多少？',
+        adapter=adapter, knowledge=knowledge, role='internal_fae',
+        runtime_release='runtime-dev')
+    assert adapter.calls == 2
+    assert prepared.schema.goals[0].entities == ('UMI Finger',)
+
+
+def test_coordinated_products_can_share_one_power_question():
+    from pathlib import Path
+    from daq_fae.knowledge.releases import read_active_release
+    from daq_fae.knowledge.reviewed_view import ReviewedKnowledge
+
+    release = read_active_release(Path(__file__).resolve().parents[1] /
+                                  'data/knowledge/published')
+    knowledge = ReviewedKnowledge.from_manifest(release['release_id'],
+                                                 release['manifest'])
+    adapter = SemanticAdapter([
+        {'kind': 'product', 'capability': 'lookup_spec',
+         'entities': ['数采 HUB'], 'field': 'downstream_port_power_output'},
+        {'kind': 'product', 'capability': 'lookup_spec',
+         'entities': ['UMI Finger'], 'field': 'power_output'},
+    ])
+    prepared = prepare_workflow(
+        '数采 HUB 和 UMI Finger 的供电输出分别是多少？',
+        adapter=adapter, knowledge=knowledge, role='internal_fae',
+        runtime_release='runtime-dev')
+    assert adapter.calls == 1
+    assert {goal.entities for goal in prepared.schema.goals} == {
+        ('数采 HUB',), ('UMI Finger',),
+    }
+
+
 def test_checkpointed_user_setup_reaches_schema_when_short_history_has_expired():
     import json
     from daq_fae.task_context import prepare_turn
@@ -125,3 +320,222 @@ def test_validated_context_statement_clarifies_without_product_claim_or_loop():
          'entities': ['EGO'], 'field': 'horizontal_fov'}]),
         runtime_release='runtime-dev')
     assert context_clarification_done(question) is None
+
+
+def test_followup_variant_change_rebinds_reviewed_entity_before_evidence_plan():
+    from daq_fae.knowledge.reviewed_view import ReviewedKnowledge
+    from daq_fae.task_context import prepare_turn
+
+    rows = []
+    for variant in ('1600x1200', '1920x1200'):
+        rows.append({
+            'id': 'entity:ego-' + variant[:4], 'kind': 'entity',
+            'status': 'verified', 'answerable': True,
+            'data': {'name': 'EGO', 'aliases': ['EGO 双目'],
+                     'entity_type': 'variant'},
+            'scope': {'product': 'ego', 'resolution_variant': variant,
+                      'required_selectors': ['resolution_variant']},
+            'access_review': {'view_roles': ['internal_fae'],
+                              'forward_roles': ['internal_fae']},
+            'source_refs': [],
+        })
+    knowledge = ReviewedKnowledge('reviewed-test', {'records': rows, 'sections': []})
+    first = '我现在用 EGO 双目 1920×1200 版本，RGB 按原生分辨率采。'
+    first_schema = DaqRequestSchema.from_candidate(first, {
+        'confidence': 'high', 'goals': [{
+            'kind': 'product', 'capability': 'resolve_entity',
+            'entities': ['EGO 双目'],
+            'conditions': {'resolution_variant': '1920x1200'},
+        }],
+    })
+    previous = prepare_turn(
+        first, request_schema=first_schema,
+        grounded_targets={'entities': ['entity:ego-1920'],
+                          'conditions': {'resolution_variant': '1920x1200'}},
+    ).context.to_checkpoint()
+    question = '如果设备换成 1600×1200 版本，这三项要怎么改？'
+    goals = [{
+        'kind': 'product', 'capability': 'lookup_spec',
+        'entities': ['EGO 双目'], 'field': field,
+        'conditions': {'resolution_variant': '1600x1200'},
+    } for field in ('horizontal_fov', 'vertical_fov', 'rgb_max_frame_rate')]
+    prepared = prepare_workflow(
+        question, adapter=SemanticAdapter(goals), knowledge=knowledge,
+        role='internal_fae', runtime_release='runtime-dev', previous=previous,
+        prior_user_context=first + '\n它的视场角和帧率是多少？',
+    )
+    assert len(prepared.plan.requirements) == 4
+    assert all(item['entities'] == ['entity:ego-1600'] and
+               item['conditions']['resolution_variant'] == '1600x1200'
+               for item in prepared.plan.requirements)
+    assert prepared.plan.context.grounded_scope['entities'] == ['entity:ego-1600']
+    followup = prepare_workflow(
+        '它的垂直视场角是多少？', adapter=SemanticAdapter([{
+            'kind': 'product', 'capability': 'lookup_spec',
+            'entities': ['EGO 双目'], 'field': 'vertical_fov',
+        }]), knowledge=knowledge, role='internal_fae',
+        runtime_release='runtime-dev',
+        previous=prepared.plan.context.to_checkpoint(),
+        prior_user_context=first + '\n' + question,
+    )
+    assert followup.plan.requirements[0]['entities'] == ['entity:ego-1600']
+    assert followup.plan.requirements[0]['conditions']['resolution_variant'] == '1600x1200'
+    assert followup.plan.context.get('resolution_variant') != '1920x1200'
+    noisy_goal = prepare_workflow(
+        '它的水平、垂直视场角分别是多少？原生分辨率最高多少帧？',
+        adapter=SemanticAdapter([{
+            'kind': 'product', 'capability': 'lookup_spec',
+            'entities': ['EGO 双目', '1920x1200 版本'],
+            'field': 'horizontal_fov',
+            'conditions': {'resolution_variant': '1920x1200'},
+        }]), knowledge=knowledge, role='internal_fae',
+        runtime_release='runtime-dev', previous=previous,
+        prior_user_context=first,
+    )
+    assert noisy_goal.plan.requirements[0]['entities'] == ['entity:ego-1920']
+    previous_with_value = prepare_turn(
+        first, request_schema=first_schema,
+        updates={'resolution_variant': '1920x1200'},
+        grounded_targets={'entities': ['entity:ego-1920'],
+                          'conditions': {'resolution_variant': '1920x1200'}},
+    ).context.to_checkpoint()
+    direct = prepare_workflow(
+        'EGO 双目 1600×1200 版的垂直视场角是多少？',
+        adapter=SemanticAdapter([{
+            'kind': 'product', 'capability': 'lookup_spec',
+            'entities': ['EGO 双目'], 'field': 'vertical_fov',
+        }]), knowledge=knowledge, role='internal_fae',
+        runtime_release='runtime-dev', previous=previous_with_value,
+        prior_user_context=first,
+    )
+    assert direct.plan.requirements[0]['entities'] == ['entity:ego-1600']
+    assert direct.plan.requirements[0]['conditions']['resolution_variant'] == '1600x1200'
+    named_with_selector = prepare_workflow(
+        'EGO 双目 1600×1200 的水平视场角是多少？',
+        adapter=SemanticAdapter([{
+            'kind': 'product', 'capability': 'lookup_spec',
+            'entities': ['EGO 双目 1600×1200'], 'field': 'horizontal_fov',
+            'conditions': {'resolution_variant': '1600x1200'},
+        }]), knowledge=knowledge, role='internal_fae',
+        runtime_release='runtime-dev',
+    )
+    assert named_with_selector.plan.requirements[0]['entities'] == ['entity:ego-1600']
+
+    unknown = prepare_workflow(
+        '如果设备换成 2048×1536 版本，这三项要怎么改？',
+        adapter=SemanticAdapter([{
+            **goal, 'conditions': {'resolution_variant': '2048x1536'}
+        } for goal in goals]), knowledge=knowledge,
+        role='internal_fae', runtime_release='runtime-dev', previous=previous,
+        prior_user_context=first,
+    )
+    assert unknown.plan.context.grounded_scope == {}
+    assert all('entity:ego-1920' not in item['entities']
+               for item in unknown.plan.requirements)
+    from copy import deepcopy
+    incomplete_checkpoint = deepcopy(previous)
+    incomplete_checkpoint['grounded_scope']['conditions'] = {}
+    unknown_from_incomplete = prepare_workflow(
+        '如果设备换成 2048×1536 版本，这三项要怎么改？',
+        adapter=SemanticAdapter([{
+            **goal, 'conditions': {'resolution_variant': '2048x1536'}
+        } for goal in goals]), knowledge=knowledge,
+        role='internal_fae', runtime_release='runtime-dev',
+        previous=incomplete_checkpoint, prior_user_context=first,
+    )
+    assert unknown_from_incomplete.plan.context.grounded_scope == {}
+
+    role_changed = prepare_workflow(
+        question, adapter=SemanticAdapter(goals), knowledge=knowledge,
+        role='channel', runtime_release='runtime-dev', previous=previous,
+        prior_user_context=first,
+    )
+    assert role_changed.plan.context.grounded_scope == {}
+    assert all('entity:ego-1600' not in item['entities'] and
+               'entity:ego-1920' not in item['entities']
+               for item in role_changed.plan.requirements)
+
+    import pytest
+    from daq_fae.request_schema import SchemaExtractionError
+    with pytest.raises(SchemaExtractionError, match='stale_variant_selector'):
+        prepare_workflow(
+            '它的水平视场角是多少？', adapter=SemanticAdapter([{
+                'kind': 'product', 'capability': 'lookup_spec',
+                'entities': ['EGO 双目'], 'field': 'horizontal_fov',
+                'conditions': {'resolution_variant': '1600x1200'},
+            }]), knowledge=knowledge, role='internal_fae',
+            runtime_release='runtime-dev', previous=previous,
+            prior_user_context=('之前讨论过 EGO 双目 1600×1200。\n' + first),
+        )
+
+    contradictory_id = prepare_workflow(
+        '如果 entity:ego-1920 设备换成 1600×1200 版本，这三项要怎么改？',
+        adapter=SemanticAdapter([{
+            **goal, 'entities': ['entity:ego-1920']
+        } for goal in goals]), knowledge=knowledge,
+        role='internal_fae', runtime_release='runtime-dev', previous=previous,
+        prior_user_context=first,
+    )
+    assert contradictory_id.plan.context.grounded_scope == {}
+    assert all(item['entities'] == ['entity:ego-1920']
+               for item in contradictory_id.plan.requirements)
+
+    unscoped = deepcopy(rows)
+    for row in unscoped:
+        row['scope'].pop('product')
+    unscoped_view = ReviewedKnowledge('unscoped-test', {
+        'records': unscoped, 'sections': [],
+    })
+    assert unscoped_view.rebind_variant(
+        previous['grounded_scope'], prepared.schema.goals,
+        role='internal_fae', current_question=question) == {}
+
+
+def test_side_mentioned_product_cannot_replace_the_schema_goal_entity():
+    from daq_fae.knowledge.reviewed_view import ReviewedKnowledge
+    from daq_fae.task_context import prepare_turn
+    rows = [{
+        'id': entity_id, 'kind': 'entity', 'status': 'verified',
+        'answerable': True,
+        'data': {'name': name, 'entity_type': 'product'},
+        'scope': {'product': product, 'required_selectors': []},
+        'access_review': {'view_roles': ['internal_fae'],
+                          'forward_roles': ['internal_fae']},
+        'source_refs': [],
+    } for entity_id, name, product in (
+        ('entity:umi-finger', 'UMI Finger', 'umi-finger'),
+        ('entity:ego-pro', 'EGO Pro', 'ego-pro'),
+    )]
+    knowledge = ReviewedKnowledge('reviewed-test', {'records': rows, 'sections': []})
+    first = '我用 UMI Finger。'
+    first_schema = DaqRequestSchema.from_candidate(first, {
+        'confidence': 'high', 'goals': [{
+            'kind': 'product', 'capability': 'resolve_entity',
+            'entities': ['UMI Finger'],
+        }],
+    })
+    previous = prepare_turn(first, request_schema=first_schema,
+                            grounded_targets={'entities': ['entity:umi-finger'],
+                                              'conditions': {}}).context.to_checkpoint()
+    question = '与 EGO Pro 的规格相比，前面那台的 RGB 分辨率是多少？'
+    assert knowledge.ground_question(question, role='internal_fae')['entities'] == [
+        'entity:ego-pro']
+    prepared = prepare_workflow(
+        question, adapter=SemanticAdapter([{
+            'kind': 'product', 'capability': 'lookup_spec',
+            'entities': ['UMI Finger'], 'field': 'rgb_resolution',
+        }]), knowledge=knowledge, role='internal_fae',
+        runtime_release='runtime-dev', previous=previous,
+        prior_user_context=first,
+    )
+    assert prepared.plan.requirements[0]['entities'] == ['entity:umi-finger']
+    pregrounded = prepare_workflow(
+        question, adapter=SemanticAdapter([{
+            'kind': 'product', 'capability': 'lookup_spec',
+            'entities': ['UMI Finger'], 'field': 'rgb_resolution',
+        }]), knowledge=knowledge, role='internal_fae',
+        runtime_release='runtime-dev', previous=previous,
+        prior_user_context=first,
+        grounded_targets=knowledge.ground_question(question, role='internal_fae'),
+    )
+    assert pregrounded.plan.requirements[0]['entities'] == ['entity:umi-finger']

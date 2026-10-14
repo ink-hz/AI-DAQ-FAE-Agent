@@ -8,7 +8,8 @@ import re
 import unicodedata
 
 from daq_fae.knowledge.records import (KINDS, ROLES, STATUSES,
-                                       access_fingerprint, record_fingerprint, link_review_valid)
+                                       _data_valid, _entity_label, access_fingerprint,
+                                       record_fingerprint, link_review_valid)
 from daq_fae.knowledge.releases import read_active_release
 from daq_fae.knowledge.source_paths import record_contains_source_path
 
@@ -18,6 +19,50 @@ _LINK_LIKE = re.compile(
     r"(?i)(?:\b[a-z][a-z0-9+.-]*://|//[a-z0-9][a-z0-9.-]*\.[a-z]{2,}"
     r"|\b[a-z0-9][a-z0-9.-]*\.[a-z]{2,}(?=$|[\s/?#)\]>]))"
 )
+
+
+class StaleVariantSelector(ValueError):
+    """A schema selector conflicts with the prior entity but not this turn."""
+
+
+def reviewed_name_in_query(name: str, query: str,
+                           *, selector_values=()) -> bool:
+    """Recognize a reviewed label followed by a selector or clear grammar."""
+    normalized_name = unicodedata.normalize('NFKC', name)
+    normalized_query = unicodedata.normalize('NFKC', query)
+    pattern = re.escape(normalized_name).replace(r'\ ', r'\s*')
+    boundary = re.compile(r'(?<![A-Za-z0-9])' + pattern + r'(?![A-Za-z0-9])', re.I)
+    selectors = {re.sub(r'\s+', '', unicodedata.normalize('NFKC', str(value))).casefold()
+                 for value in selector_values}
+    for match in boundary.finditer(normalized_query):
+        tail = normalized_query[match.end():]
+        stripped = tail.lstrip()
+        if not stripped or stripped[0] in ',.;:!?，。；：！？、）)]}':
+            return True
+        if stripped.startswith('有'):
+            proposed = stripped[1:].lstrip()
+            if re.match(r'\d+(?:[x×]\d+)+', proposed, re.I):
+                stripped = proposed
+        numeric = re.match(r'\d+(?:[x×]\d+)+', stripped, re.I)
+        if numeric and numeric.group().casefold().replace('×', 'x') in selectors:
+            remaining = stripped[numeric.end():].lstrip()
+            if not remaining or remaining.startswith(('版', '版本', '变体')):
+                return True
+            stripped = remaining
+        if re.match(r'(?:的|是|在|与|和|有几|能否|是否|可以|供电|电源|功率|'
+                    r'每口|每个下游口|单口)'
+                    r'(?![A-Za-z0-9])',
+                    stripped):
+            return True
+        if re.match(r'加[一二两三四五六七八九十0-9]|接\s+[A-Za-z]', stripped):
+            return True
+        english = re.match(r'([A-Za-z]+)\b', stripped)
+        if english and english.group(1).casefold() in {
+            'on', 'in', 'with', 'for', 'to', 'is', 'are', 'can', 'has', 'supports',
+            'and', 'or',
+        }:
+            return True
+    return False
 
 
 def _url_bearing_strings(value: object) -> list[str]:
@@ -70,8 +115,18 @@ class ReviewedKnowledge:
         """Ground only role-visible exact entities and required variant selectors."""
         text = self._identity_text(question)
         matches = []
-        for row in self.records_for(role):
-            if row['kind'] != 'entity' or self._identity_text(row['data']['name']) not in text:
+        rows = self.records_for(role)
+        for row in rows:
+            if row['kind'] != 'entity':
+                continue
+            labels = [row['data']['name'], *row['data'].get('aliases', [])]
+            family_selectors = [other['scope'][key] for other in rows
+                                if other['kind'] == 'entity'
+                                and other['scope'].get('product') == row['scope'].get('product')
+                                for key in other['scope'].get('required_selectors', [])]
+            if not any(reviewed_name_in_query(label, question,
+                                              selector_values=family_selectors)
+                       for label in labels):
                 continue
             scope = row['scope']
             if any(self._identity_text(str(scope[key])) not in text
@@ -96,6 +151,104 @@ class ReviewedKnowledge:
         return {'entities': [row['id']], 'conditions': {
             key: row['scope'][key] for key in row['scope'].get('required_selectors', [])}}
 
+    def grounding_matches_goals(self, grounded: dict, goals, *, role: str) -> bool:
+        """Reject a side-mentioned product as the evidence key for another goal."""
+        ids = grounded.get('entities', []) if isinstance(grounded, dict) else []
+        if len(ids) != 1:
+            return False
+        row = next((item for item in self.records_for(role)
+                    if item['kind'] == 'entity' and item['id'] == ids[0]), None)
+        if row is None:
+            return False
+        labels = {self._identity_text(str(value)) for value in (
+            row['id'], row['data']['name'], row['scope'].get('product', ''),
+            *row['data'].get('aliases', [])) if value}
+        selector_keys = row['scope'].get('required_selectors', [])
+        if len(selector_keys) == 1:
+            selector = self._identity_text(str(row['scope'][selector_keys[0]]))
+            labels.update(label + selector + suffix for label in tuple(labels)
+                          for suffix in ('', '版', '版本', '变体'))
+        product_goals = [goal for goal in goals if goal.kind == 'product']
+        return bool(product_goals) and all(
+            goal.entities and all(self._identity_text(name) in labels
+                                  for name in goal.entities)
+            and all(self._identity_text(str(value)) == self._identity_text(
+                str(row['scope'].get(key, '')))
+                for key, value in goal.condition_map().items()
+                if key in {'variant', 'resolution_variant', 'hardware_revision'})
+            for goal in product_goals)
+
+    def rebind_variant(self, previous_scope: dict, goals, *, role: str,
+                       current_question: str) -> dict | None:
+        """Apply a new explicit selector within the prior reviewed product family.
+
+        None means no selector change. An empty result means the new selector
+        cannot identify one role-visible variant; the old binding must be
+        discarded rather than combined with the new condition.
+        """
+        previous_ids = previous_scope.get('entities', []) if isinstance(previous_scope, dict) else []
+        if len(previous_ids) != 1:
+            return None
+        entities = [row for row in self.records_for(role) if row['kind'] == 'entity']
+        previous = next((row for row in entities if row['id'] == previous_ids[0]), None)
+        if previous is None:
+            return {}
+        product = previous['scope'].get('product')
+        if not isinstance(product, str) or not product.strip():
+            return {}
+        family = [row for row in entities
+                  if row['scope'].get('product') == product]
+        selector_keys = {key for row in family
+                         for key in row['scope'].get('required_selectors', [])}
+        product_goals = [goal for goal in goals if goal.kind == 'product']
+        requested: dict[str, str] = {}
+        conflicting = False
+        for goal in product_goals:
+            for key, value in goal.condition_map().items():
+                if key not in selector_keys:
+                    continue
+                normalized = self._identity_text(str(value))
+                if key in requested and requested[key] != normalized:
+                    conflicting = True
+                requested[key] = normalized
+        if not requested:
+            return None
+        changed = conflicting or any(
+            self._identity_text(str(previous['scope'].get(key, ''))) != value
+            for key, value in requested.items())
+        if not changed:
+            return None
+        labels = {self._identity_text(str(label)) for row in family for label in (
+            row['id'], row['data']['name'], row['scope'].get('product', ''),
+            *row['data'].get('aliases', [])) if label}
+        if conflicting or any(
+            self._identity_text(label) not in labels
+            for goal in product_goals for label in goal.entities):
+            return {}
+        matches = [row for row in family if all(
+            self._identity_text(str(row['scope'].get(key, ''))) == value
+            for key, value in requested.items())
+            and all(key in requested for key in row['scope'].get('required_selectors', []))]
+        if len(matches) != 1:
+            return {}
+        row = matches[0]
+        explicit_ids = {candidate['id'] for candidate in family
+                        for goal in product_goals for label in goal.entities
+                        if self._identity_text(label) == self._identity_text(candidate['id'])}
+        if explicit_ids and explicit_ids != {row['id']}:
+            return {}
+        current = unicodedata.normalize('NFKC', current_question).casefold().replace('×', 'x')
+        compact_current = re.sub(r'\s+', '', current)
+        for value in requested.values():
+            present = (bool(re.search(r'(?<![a-z0-9])' + re.escape(value)
+                                      + r'(?![a-z0-9])', current, re.I))
+                       if len(value) <= 2 and value.isascii() else
+                       value in compact_current)
+            if not present:
+                raise StaleVariantSelector('stale_variant_selector')
+        return {'entities': [row['id']], 'conditions': {
+            key: row['scope'][key] for key in row['scope'].get('required_selectors', [])}}
+
     def resolve_field(self, field: str, entity_id: str | None = None) -> str | None:
         evidence = self.manifest.get('review', {}).get('operator_release', {})
         normalized = self._identity_text(field)
@@ -115,14 +268,21 @@ class ReviewedKnowledge:
         """Expose role-visible selector choices without releasing their values."""
         query = self._identity_text(entity)
         rows = self.records_for(role)
-        names = {row['id']: self._identity_text(row['data']['name'])
+        names = {row['id']: {self._identity_text(label) for label in
+                            [row['data']['name'], *row['data'].get('aliases', [])]}
                  for row in rows if row['kind'] == 'entity'}
-        matching = [name for name in names.values() if name and name in query]
-        if not matching:
+        exact_ids = {rid for rid in names if self._identity_text(rid) == query}
+        if exact_ids:
+            entity_ids = exact_ids
+        elif query.startswith('entity:'):
             return {}
-        longest = max(map(len, matching))
-        entity_ids = {rid for rid, name in names.items()
-                      if len(name) == longest and name in query}
+        else:
+            # This parameter is an entity selector, not free-text retrieval.
+            # Descriptors require a reviewed alias before they can inherit a
+            # published family's variant choices.
+            entity_ids = {rid for rid, labels in names.items() if query in labels}
+            if not entity_ids:
+                return {}
         scopes: dict[str, set[str]] = {}
         for row in rows:
             if row['kind'] != 'claim' or row['data']['entity_id'] not in entity_ids:
@@ -187,6 +347,7 @@ class ReviewedKnowledge:
                 raise ValueError("knowledge source inventory invalid")
             source_hashes[source["path"]] = source["sha256"]
         seen: set[str] = set()
+        entity_labels: dict[str, dict[str, tuple[tuple[str, str], set[str]]]] = {}
         answerable = 0
         for row in manifest["records"]:
             if not isinstance(row, dict) or not isinstance(row.get("id"), str) or row["id"] in seen:
@@ -196,6 +357,22 @@ class ReviewedKnowledge:
                     not isinstance(row.get("scope"), dict) or not row["scope"] or \
                     not isinstance(row.get("data"), dict):
                 raise ValueError("knowledge record schema invalid")
+            if row['kind'] == 'entity':
+                if not _data_valid('entity', row['status'], row['data']):
+                    raise ValueError('knowledge entity labels invalid')
+                identity = (_entity_label(row['data']['name']),
+                            _entity_label(str(row['scope'].get('product', ''))))
+                labels = [('id', row['id']), ('name', row['data']['name']),
+                          *(("alias", alias) for alias in row['data'].get('aliases', []))]
+                product = row['scope'].get('product')
+                if isinstance(product, str) and product.strip():
+                    labels.append(('product', product))
+                for source, label in labels:
+                    key = _entity_label(label)
+                    by_id = entity_labels.setdefault(key, {})
+                    if row['id'] not in by_id:
+                        by_id[row['id']] = (identity, set())
+                    by_id[row['id']][1].add(source)
             expected_answerable = row.get("status") in {"verified", "unsupported"}
             if row.get("answerable") is not expected_answerable:
                 raise ValueError("knowledge record answerability invalid")
@@ -236,6 +413,18 @@ class ReviewedKnowledge:
                 if not link_review_valid(row, require_current=False) or \
                         review.get("record_sha256") != record_fingerprint(row):
                     raise ValueError("knowledge link review invalid")
+        for key, by_id in entity_labels.items():
+            if len(by_id) < 2:
+                continue
+            identities = [item[0] for item in by_id.values()]
+            products = {item[1] for item in identities}
+            names = {item[0] for item in identities}
+            only_shared_product_key = all(
+                sources <= {'name', 'product'} and identity[1] == key
+                for identity, sources in by_id.values())
+            if any('id' in sources for _, sources in by_id.values()) or \
+                    len(products) > 1 or (len(names) > 1 and not only_shared_product_key):
+                raise ValueError('knowledge entity alias collision')
         if manifest.get("answerable_count") != answerable:
             raise ValueError("knowledge release answerable count invalid")
         if manifest["format_version"] == 2:

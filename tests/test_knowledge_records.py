@@ -301,6 +301,45 @@ def test_duplicate_name_with_same_selector_value_is_ambiguous():
     }
 
 
+def test_entity_alias_cannot_capture_another_products_public_key():
+    hub = _record(kind='entity', id='entity:hub',
+                  scope={'product': 'hub'},
+                  data={'name': '数采 HUB', 'entity_type': 'hub'})
+    other = _record(kind='entity', id='entity:ego-pro',
+                    scope={'product': 'ego-pro'},
+                    data={'name': 'EGO Pro', 'entity_type': 'device',
+                          'aliases': ['HUB']})
+    _, findings = validate_records([hub, other], SNAPSHOT)
+    assert 'entity_alias_collision' in {item['code'] for item in findings}
+
+
+def test_entity_alias_cannot_capture_a_sibling_canonical_id():
+    first = _record(kind='entity', id='entity:ego-1600',
+                    scope={'product': 'ego', 'required_selectors': ['resolution_variant'],
+                           'resolution_variant': '1600x1200'},
+                    data={'name': 'EGO', 'entity_type': 'variant',
+                          'aliases': ['entity:ego-1920']})
+    second = _record(kind='entity', id='entity:ego-1920',
+                     scope={'product': 'ego', 'required_selectors': ['resolution_variant'],
+                            'resolution_variant': '1920x1200'},
+                     data={'name': 'EGO', 'entity_type': 'variant'})
+    _, findings = validate_records([first, second], SNAPSHOT)
+    assert 'entity_alias_collision' in {item['code'] for item in findings}
+
+
+def test_entity_alias_collision_uses_lookup_normalization():
+    hub = _record(kind='entity', id='entity:hub',
+                  scope={'product': 'hub'},
+                  data={'name': '数采 HUB', 'entity_type': 'hub',
+                        'aliases': ['HUB 2x2']})
+    other = _record(kind='entity', id='entity:ego-pro',
+                    scope={'product': 'ego-pro'},
+                    data={'name': 'EGO Pro', 'entity_type': 'device',
+                          'aliases': ['HUB 2×2']})
+    _, findings = validate_records([hub, other], SNAPSHOT)
+    assert 'entity_alias_collision' in {item['code'] for item in findings}
+
+
 def test_unhashable_entity_reference_returns_finding():
     row = _record(data={"entity_id": [], "field": "horizontal_fov", "value": 165,
                         "unit": "deg", "conditions": {}})

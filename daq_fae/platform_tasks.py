@@ -157,17 +157,19 @@ class DaqTaskOrchestrator:
                         'attachment_dependency': prepared.schema.attachment_dependency,
                         'confidence': prepared.schema.confidence}
                        if prepared else {})))
+                allowed_tools = (allowed_tools_for(prepared.schema)
+                                 if prepared else None)
                 runtime = LoopRuntime(
                     adapter=self._adapter,
                     toolbox=DaqToolBox(context=plan.context.tool_context(),
                                        knowledge=self._knowledge, role=knowledge_role,
                                        requirements=plan.requirements, access_guard=guard,
-                                       allowed_tools=allowed_tools_for(prepared.schema)
-                                       if prepared else None),
+                                       allowed_tools=allowed_tools),
                     system_prompt_path=self._prompt_path,
                     evidence_policy=DaqEvidencePolicy(
                         service_contract=prepared.service_contract if prepared else None,
                         answer_language=prepared.schema.answer_language if prepared else 'zh',
+                        allowed_tools=allowed_tools,
                         allowed_chinese_terms=tuple({entity for goal in prepared.schema.goals
                                                      for entity in goal.entities
                                                      if any('\u3400' <= char <= '\u9fff'

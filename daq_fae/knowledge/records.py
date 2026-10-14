@@ -7,6 +7,7 @@ from datetime import date
 import hashlib
 import json
 import re
+import unicodedata
 from urllib.parse import urlsplit
 
 
@@ -56,11 +57,20 @@ def _nonempty(value: object) -> bool:
     return isinstance(value, str) and bool(value.strip())
 
 
+def _entity_label(value: str) -> str:
+    return re.sub(r'\s+', '', unicodedata.normalize('NFKC', value).casefold()
+                  .replace('×', 'x'))
+
+
 def _data_valid(kind: str, status: str, data: dict) -> bool:
     if kind == "entity":
+        aliases = data.get('aliases', [])
         return _nonempty(data.get("name")) and data.get("entity_type") in {
             "family", "device", "variant", "component", "kit", "hub",
-        }
+        } and isinstance(aliases, list) and all(_nonempty(alias) for alias in aliases) \
+            and len({_entity_label(alias) for alias in aliases}) == len(aliases) \
+            and _entity_label(data['name']) not in {
+                _entity_label(alias) for alias in aliases}
     if kind == "claim":
         value = data.get("value")
         return (isinstance(data.get("entity_id"), str) and
@@ -284,6 +294,36 @@ def validate_records(records: list[dict], snapshot: dict, *, require_current_lin
         normalized.append(row)
     entity_rows = {row["id"]: row for row in normalized
                    if row.get("kind") == "entity" and isinstance(row.get("id"), str)}
+    labels_by_key: dict[str, dict[str, tuple[dict, set[str]]]] = {}
+    for entity in entity_rows.values():
+        data = entity.get('data')
+        if not isinstance(data, dict) or not isinstance(data.get('name'), str):
+            continue
+        aliases = data.get('aliases') if isinstance(data.get('aliases'), list) else []
+        product = entity.get('scope', {}).get('product') if isinstance(
+            entity.get('scope'), dict) else None
+        for source, label in [('id', entity['id']), ('name', data['name']),
+                              *(("alias", alias) for alias in aliases),
+                              ('product', product)]:
+            if isinstance(label, str) and label.strip():
+                by_id = labels_by_key.setdefault(_entity_label(label), {})
+                if entity['id'] not in by_id:
+                    by_id[entity['id']] = (entity, set())
+                by_id[entity['id']][1].add(source)
+    for key, by_id in labels_by_key.items():
+        group = [item[0] for item in by_id.values()]
+        if len(group) < 2:
+            continue
+        names = {_entity_label(row['data']['name']) for row in group}
+        products = {_entity_label(str(row['scope'].get('product', '')))
+                    for row in group if isinstance(row.get('scope'), dict)}
+        only_shared_product_key = all(
+            sources <= {'name', 'product'}
+            and _entity_label(str(row['scope'].get('product', ''))) == key
+            for row, sources in by_id.values())
+        if any('id' in sources for _, sources in by_id.values()) or \
+                len(products) > 1 or (len(names) > 1 and not only_shared_product_key):
+            findings.extend(_finding(row['id'], 'entity_alias_collision') for row in group)
     entities_by_name: dict[str, list[dict]] = {}
     for entity in entity_rows.values():
         data = entity.get("data")

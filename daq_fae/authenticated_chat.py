@@ -223,11 +223,12 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
                 else:
                     assert plan is not None
                     assert_current_access()
+                    allowed_tools = (None if isinstance(adapter, OfflineAdapter)
+                                     else allowed_tools_for(prepared.schema))
                     toolbox = DaqToolBox(context=plan.context.tool_context(), knowledge=knowledge,
                                          role=binding["role"] if binding else None,
                                          requirements=plan.requirements, access_guard=assert_current_access,
-                                         allowed_tools=(None if isinstance(adapter, OfflineAdapter)
-                                                        else allowed_tools_for(prepared.schema)))
+                                         allowed_tools=allowed_tools)
                     if body.attachment_ids:
                         toolbox = extend_with_attachments(
                             toolbox, session=session, store=app.state.attachment_store,
@@ -240,6 +241,7 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
                         evidence_policy=DaqEvidencePolicy(
                             service_contract=prepared.service_contract,
                             answer_language=prepared.schema.answer_language,
+                            allowed_tools=allowed_tools,
                             allowed_chinese_terms=tuple({entity for goal in prepared.schema.goals
                                                          for entity in goal.entities
                                                          if any('\u3400' <= char <= '\u9fff'

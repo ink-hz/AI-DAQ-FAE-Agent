@@ -71,6 +71,197 @@ def test_reviewed_entity_scope_survives_followup_and_clears_on_topic_switch():
     assert 'resolution_variant' not in third.requirements[0]['conditions']
 
 
+def test_multi_entity_goals_do_not_share_one_grounded_entity_id():
+    from daq_fae.request_schema import DaqRequestSchema
+    question = 'UMI Finger 的 RGB 分辨率和 EGO 双目 1920×1200 版相比如何？'
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [
+            {'kind': 'product', 'capability': 'lookup_spec',
+             'entities': ['UMI Finger'], 'field': 'rgb_resolution'},
+            {'kind': 'product', 'capability': 'lookup_spec',
+             'entities': ['EGO 双目'], 'field': 'rgb_resolution',
+             'conditions': {'resolution_variant': '1920x1200'}},
+        ],
+    })
+    plan = prepare_turn(
+        question, request_schema=schema,
+        grounded_targets={'entities': ['entity:umi-finger'], 'conditions': {}},
+    )
+    assert [item['entities'] for item in plan.requirements] == [
+        ['UMI Finger'], ['EGO 双目'],
+    ]
+
+
+def test_combination_goal_keeps_every_member_when_one_entity_is_grounded():
+    from daq_fae.request_schema import DaqRequestSchema
+    question = 'EGO 双目 1600×1200 版和 WristCam 能同步吗？'
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [{
+            'kind': 'product', 'capability': 'inspect_topology',
+            'entities': ['EGO 双目', 'WristCam'],
+            'conditions': {'resolution_variant': '1600x1200'},
+        }],
+    })
+    plan = prepare_turn(question, request_schema=schema, grounded_targets={
+        'entities': ['entity:ego-1600'],
+        'conditions': {'resolution_variant': '1600x1200'},
+    })
+    assert plan.requirements[0]['entities'] == ['EGO 双目', 'WristCam']
+    assert plan.context.grounded_scope == {}
+
+
+def test_mixed_selector_goals_require_explicit_variant_constraints():
+    from daq_fae.request_schema import DaqRequestSchema, SchemaExtractionError
+    import pytest
+    question = 'EGO 双目旧版和 1600×1200 版怎么比较？'
+    candidate = {'confidence': 'high', 'goals': [
+        {'kind': 'product', 'capability': 'lookup_spec',
+         'entities': ['EGO 双目'], 'field': 'horizontal_fov'},
+        {'kind': 'product', 'capability': 'lookup_spec',
+         'entities': ['EGO 双目'], 'field': 'horizontal_fov',
+         'conditions': {'resolution_variant': '1600x1200'}},
+    ]}
+    with pytest.raises(SchemaExtractionError, match='schema_missing_variant_scope'):
+        DaqRequestSchema.from_candidate(question, candidate)
+    candidate['goals'][0]['conditions'] = {'resolution_variant': '1920x1200'}
+    schema = DaqRequestSchema.from_candidate(question, candidate,
+                                              prior_user_context='EGO 双目 1920×1200 版')
+    plan = prepare_turn(question, request_schema=schema, grounded_targets={
+        'entities': ['entity:ego-1600'],
+        'conditions': {'resolution_variant': '1600x1200'},
+    })
+    first, second = plan.requirements
+    assert first['entities'] == ['EGO 双目']
+    assert first['conditions']['resolution_variant'] == '1920x1200'
+    assert second['entities'] == ['EGO 双目']
+    assert second['conditions']['resolution_variant'] == '1600x1200'
+    assert plan.context.grounded_scope == {}
+
+
+def test_measurement_resolution_does_not_leak_into_other_variant_goal():
+    from daq_fae.request_schema import DaqRequestSchema
+
+    question = ('EGO 双目 1920×1200 版在 1920×1080 分辨率下 RGB 最高帧率是多少，'
+                '1600×1200 版在原生分辨率下 RGB 最高帧率是多少？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [
+            {'kind': 'product', 'capability': 'lookup_spec',
+             'entities': ['EGO 双目'], 'field': 'rgb_max_frame_rate',
+             'conditions': {'resolution_variant': '1920x1200',
+                            'resolution': '1920x1080'}},
+            {'kind': 'product', 'capability': 'lookup_spec',
+             'entities': ['EGO 双目'], 'field': 'rgb_max_frame_rate',
+             'conditions': {'resolution_variant': '1600x1200'}},
+        ],
+    })
+    plan = prepare_turn(question, request_schema=schema)
+    fps = [req for req in plan.requirements
+           if req.get('field') == 'rgb_max_frame_rate']
+    assert len(fps) == 2
+    conditions = {req['conditions']['resolution_variant']: req['conditions']
+                  for req in fps}
+    assert conditions == {
+        '1920x1200': {'resolution_variant': '1920x1200',
+                      'resolution': '1920x1080'},
+        '1600x1200': {'resolution_variant': '1600x1200'},
+    }
+    native = next(req for req in plan.requirements
+                  if req.get('field') == 'rgb_resolution'
+                  and req['conditions']['resolution_variant'] == '1600x1200')
+    assert 'resolution' not in native['conditions']
+    assert 'resolution' not in native.get('question_constraints', {})
+
+
+def test_aggregate_hub_power_condition_does_not_filter_port_count():
+    from daq_fae.request_schema import DaqRequestSchema
+
+    question = '数采 HUB 有几个下游端口？三个口同时用时总供电输出多少？'
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [
+            {'kind': 'product', 'capability': 'lookup_spec',
+             'entities': ['数采 HUB'], 'field': 'downstream_port_count',
+             'conditions': {}},
+            {'kind': 'product', 'capability': 'lookup_spec',
+             'entities': ['数采 HUB'], 'field': 'downstream_port_power_output',
+             'conditions': {'per_port': False}},
+        ],
+    })
+    plan = prepare_turn(question, request_schema=schema)
+    conditions = {req['field']: req['conditions'] for req in plan.requirements}
+    assert conditions['downstream_port_count'] == {}
+    assert conditions['total_downstream_port_power_output'] == {
+        'simultaneous_port_count': 3,
+    }
+
+
+def test_viewer_context_does_not_filter_unrelated_baseline_claim():
+    from daq_fae.request_schema import DaqRequestSchema
+
+    question = '我在用 EgoViewer 1.2.3。UMI Finger 的双目 Mono 基线是多少？'
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [{
+            'kind': 'product', 'capability': 'lookup_spec',
+            'entities': ['UMI Finger'], 'field': 'stereo_mono_baseline',
+            'conditions': {},
+        }],
+    })
+    plan = prepare_turn(question, request_schema=schema)
+    assert plan.context.get('viewer_version') == '1.2.3'
+    assert plan.requirements[0]['conditions'] == {}
+
+
+def test_capture_task_does_not_filter_entity_identity():
+    from daq_fae.request_schema import DaqRequestSchema
+
+    question = 'UMI Finger 做采集时这是什么产品？'
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [{
+            'kind': 'product', 'capability': 'resolve_entity',
+            'entities': ['UMI Finger'], 'conditions': {},
+        }],
+    })
+    plan = prepare_turn(question, request_schema=schema)
+    assert plan.context.get('task') == ['capture']
+    assert plan.requirements[0]['conditions'] == {}
+
+
+def test_comparison_does_not_inherit_old_device_selector_for_other_product():
+    from daq_fae.request_schema import DaqRequestSchema
+    previous = prepare_turn('设备是 EGO 双目 1920×1200 版', updates={
+        'equipment': ['EGO 双目'], 'resolution_variant': '1920x1200',
+    }).context.to_checkpoint()
+    question = 'UMI Finger 的 RGB 分辨率和 EGO 双目 1920×1200 版相比如何？'
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [
+            {'kind': 'product', 'capability': 'lookup_spec',
+             'entities': ['UMI Finger'], 'field': 'rgb_resolution'},
+            {'kind': 'product', 'capability': 'lookup_spec',
+             'entities': ['EGO 双目'], 'field': 'rgb_resolution',
+             'conditions': {'resolution_variant': '1920x1200'}},
+        ],
+    })
+    plan = prepare_turn(question, previous=previous, request_schema=schema)
+    assert plan.requirements[0]['entities'] == ['UMI Finger']
+    assert plan.requirements[0]['conditions'].get('resolution_variant') is None
+    assert plan.requirements[1]['conditions']['resolution_variant'] == '1920x1200'
+
+
+def test_resolution_output_target_does_not_filter_its_own_spec_claim():
+    from daq_fae.request_schema import DaqRequestSchema
+    question = 'EGO 双目 1920×1200 版的 RGB 原生分辨率是 1920×1200 吗？'
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [{
+            'kind': 'product', 'capability': 'lookup_spec',
+            'entities': ['EGO 双目'], 'field': 'rgb_resolution',
+            'conditions': {'resolution_variant': '1920x1200',
+                           'resolution': '1920x1200'},
+        }],
+    })
+    requirement = prepare_turn(question, request_schema=schema).requirements[0]
+    assert requirement['conditions'] == {'resolution_variant': '1920x1200'}
+    assert requirement['question_constraints'] == {'resolution': '1920x1200'}
+
+
 def test_context_inherits_setup_versions_and_attempted_steps_for_short_followup():
     first = prepare_turn('录制失败，SDK 报错', updates={
         'equipment': ['unit-a', 'wrist-b', 'hub-c'], 'variant': 'revision-2',

@@ -158,6 +158,20 @@ def test_source_checked_natural_variant_question_can_satisfy_dev_ledger():
     assert session.evaluate(AnswerSubmission(outcome="resolved", conclusion="1600×1200")).action == "allow"
 
 
+def test_candidate_preview_keeps_loose_public_key_discovery():
+    ref = {'path': 'hub.md', 'sha256': 'a' * 64,
+           'locator': {'kind': 'lines', 'start': 1, 'end': 1}}
+    entity = {'id': 'entity:hub', 'kind': 'entity', 'status': 'verified',
+              'scope': {'product': 'hub'},
+              'data': {'name': '数采 HUB', 'entity_type': 'hub'},
+              'source_refs': [ref]}
+    knowledge = DevCandidateKnowledge('candidate-dev-' + 'a' * 64, [], [entity], {})
+    result = DaqToolBox(knowledge=knowledge, role='internal_fae').dispatch(
+        'resolve_entity', {'text': 'HUB 同步中枢'})
+    assert result.status == 'ok'
+    assert result.content['matches'][0]['id'] == 'entity:hub'
+
+
 def test_candidate_preview_rejects_authenticated_mode_and_active_pointer(monkeypatch, tmp_path):
     from daq_fae.app import create_app
 

@@ -84,6 +84,53 @@ def test_published_module_entity_proves_its_own_module_scope_but_not_system_scop
     }).status == 'not_found'
 
 
+def test_missing_module_baseline_by_unique_reviewed_product_key_is_attributed():
+    root = Path(__file__).resolve().parents[1] / 'data/knowledge/published'
+    active = read_active_release(root)
+    view = ReviewedKnowledge.from_manifest(active['release_id'], active['manifest'])
+    requirements = [
+        {'id': 'module-baseline', 'capability': 'lookup_spec',
+         'field': 'stereo_mono_baseline', 'entities': ['UMI 视觉模块'],
+         'conditions': {}},
+        {'id': 'finger-baseline', 'capability': 'lookup_spec',
+         'field': 'stereo_mono_baseline', 'entities': ['UMI Finger'],
+         'conditions': {}},
+    ]
+    box = DaqToolBox(knowledge=view, role='internal_fae', requirements=requirements)
+    missing = box.dispatch('lookup_spec', {
+        'entity': 'umi-vision-module', 'field': 'stereo_mono_baseline',
+    })
+    assert missing.status == 'not_found'
+    assert missing.content['matched_requirement_ids'] == ['module-baseline']
+    assert box.dispatch('lookup_spec', {
+        'entity': 'umi-finger', 'field': 'stereo_mono_baseline',
+    }).content['matched_requirement_ids'] == ['finger-baseline']
+    unknown = box.dispatch('lookup_spec', {
+        'entity': 'umi-vision-module-other', 'field': 'stereo_mono_baseline',
+    })
+    assert unknown.content['matched_requirement_ids'] == []
+
+
+def test_equivalent_rgb_resolution_alias_keeps_missing_fps_goal_attribution():
+    root = Path(__file__).resolve().parents[1] / 'data/knowledge/published'
+    active = read_active_release(root)
+    view = ReviewedKnowledge.from_manifest(active['release_id'], active['manifest'])
+    requirement = {'id': 'fps1080', 'capability': 'lookup_spec',
+                   'field': 'rgb_max_frame_rate', 'entities': ['EGO'],
+                   'conditions': {'resolution_variant': '1920x1200',
+                                  'resolution': '1920x1080'}}
+    box = DaqToolBox(knowledge=view, role='internal_fae',
+                     requirements=[requirement])
+    for mode_key in ('resolution', 'rgb_resolution'):
+        result = box.dispatch('lookup_spec', {
+            'entity': 'entity:ego-1920', 'field': 'rgb_max_fps',
+            'conditions': {'resolution_variant': '1920x1200',
+                           mode_key: '1920x1080'},
+        })
+        assert result.status == 'not_found'
+        assert result.content['matched_requirement_ids'] == ['fps1080']
+
+
 def test_resolve_entity_does_not_promote_a_distinct_prefix_product_to_a_variant():
     root = Path(__file__).resolve().parents[1] / 'data/knowledge/published'
     active = read_active_release(root)
@@ -96,13 +143,46 @@ def test_resolve_entity_does_not_promote_a_distinct_prefix_product_to_a_variant(
         return {row['id'] for row in result.content['matches']}
 
     assert ids('EGO') == {'entity:ego-1600', 'entity:ego-1920'}
-    assert ids('EGO 双目') == {'entity:ego-1600', 'entity:ego-1920'}
-    assert ids('EGO 双目 1600×1200 版本') == {'entity:ego-1600'}
     assert ids('EGO Pro') == {'entity:ego-pro'}
+    assert ids('EGO Pro on Windows 11') == {'entity:ego-pro'}
+    assert ids('EGO Pro is connected to Windows') == {'entity:ego-pro'}
+    assert ids('EGO on a PC') == {'entity:ego-1600', 'entity:ego-1920'}
+    assert ids('EGO有1600×1200版本吗') == {'entity:ego-1600'}
+    assert box.dispatch('resolve_entity', {'text': 'EGO Max'}).status == 'not_found'
+    assert box.dispatch('resolve_entity', {'text': 'EGO P'}).status == 'not_found'
+    assert box.dispatch('resolve_entity', {'text': 'EGO 双目'}).status == 'not_found'
+    assert box.dispatch('resolve_entity', {'text': 'EGO 三目'}).status == 'not_found'
+    assert box.dispatch('resolve_entity', {'text': 'EGO 新款'}).status == 'not_found'
+    for unknown in ('UMI Finger pro on Windows', 'EGO Pro max on Windows',
+                    'EGO max on a PC', 'EGO 接口版'):
+        assert box.dispatch('resolve_entity', {'text': unknown}).status == 'not_found'
     assert ids('HUB') == {'entity:hub'}
     assert ids('HUB 接 PC') == {'entity:hub'}
+    assert ids('HUB to PC') == {'entity:hub'}
+    assert ids('HUB supports PC') == {'entity:hub'}
     assert box.dispatch('resolve_entity', {'text': 'EgoViewer'}).status == 'not_found'
     assert box.dispatch('resolve_entity', {'text': 'EGOViewer'}).status == 'not_found'
+    assert view.verified_variant_scopes('entity:ego-pro', 'rgb_resolution',
+                                        role='internal_fae') == {}
+    assert view.verified_variant_scopes('EGO Max', 'rgb_resolution',
+                                        role='internal_fae') == {}
+    assert view.verified_variant_scopes('EGO 双目', 'horizontal_fov',
+                                        role='internal_fae') == {}
+    assert box.dispatch('lookup_spec', {
+        'entity': 'EGO 双目', 'field': 'horizontal_fov'}).content['reason'] == \
+        'reviewed_evidence_unavailable'
+    assert box.dispatch('lookup_spec', {
+        'entity': 'EGO Pro', 'field': 'rgb_resolution'}).content['reason'] == \
+        'reviewed_field_unavailable'
+    assert box.dispatch('lookup_spec', {
+        'entity': 'EGO Max', 'field': 'rgb_resolution'}).content['reason'] == \
+        'reviewed_evidence_unavailable'
+    assert box.dispatch('lookup_spec', {
+        'entity': 'EGO Pro Max', 'field': 'rgb_resolution'}).content['reason'] == \
+        'reviewed_evidence_unavailable'
+    assert box.dispatch('lookup_spec', {
+        'entity': 'UMI Finger Pro', 'field': 'rgb_resolution'}).content['reason'] == \
+        'reviewed_evidence_unavailable'
 
 
 def _row(record_id, kind, data, *, view=("internal_fae",), forward=()):
@@ -207,6 +287,159 @@ def test_toolbox_returns_only_visible_matching_claim_with_governed_source(tmp_pa
     channel = DaqToolBox(knowledge=view, role="channel", requirements=requirements)
     assert channel.dispatch("lookup_spec", {"entity": "EGO 1600", "field": "resolution"}).status == "not_found"
     assert channel.dispatch("lookup_spec", {"entity": "EGO 1600", "field": "resolution"}).sources == []
+
+
+def test_spec_tool_distinguishes_unpublished_field_from_unknown_product(tmp_path):
+    release_id = publish_release(tmp_path, SNAPSHOT, _records(), None, RELEASE_REVIEW)
+    activate_release(tmp_path, release_id)
+    box = DaqToolBox(knowledge=load_fixture_active(tmp_path), role='internal_fae')
+    missing_field = box.dispatch('lookup_spec', {
+        'entity': 'EGO 1600', 'field': 'rgb_resolution'})
+    assert missing_field.status == 'not_found'
+    assert missing_field.content['reason'] == 'reviewed_field_unavailable'
+    assert missing_field.content['available_fields'] == ['resolution']
+    unknown_product = box.dispatch('lookup_spec', {
+        'entity': 'WristCam', 'field': 'rgb_resolution'})
+    assert unknown_product.content['reason'] == 'reviewed_evidence_unavailable'
+    hidden = DaqToolBox(knowledge=load_fixture_active(tmp_path), role='channel')
+    hidden_result = hidden.dispatch('lookup_spec', {
+        'entity': 'EGO 1600', 'field': 'rgb_resolution'})
+    assert hidden_result.content['reason'] == 'reviewed_evidence_unavailable'
+    assert 'available_fields' not in hidden_result.content
+
+
+def test_source_bound_entity_alias_resolves_and_obeys_role_visibility(tmp_path):
+    rows = _records()
+    rows[0]['data']['aliases'] = ['EGO 双目']
+    rows[0]['fact_review']['record_sha256'] = record_fingerprint(rows[0])
+    rows[0]['access_review']['record_sha256'] = access_fingerprint(rows[0])
+    release_id = publish_release(tmp_path, SNAPSHOT, rows, None, RELEASE_REVIEW)
+    activate_release(tmp_path, release_id)
+    view = load_fixture_active(tmp_path)
+    box = DaqToolBox(knowledge=view, role='internal_fae')
+    assert {row['id'] for row in box.dispatch(
+        'resolve_entity', {'text': 'EGO 双目'}).content['matches']} == {'entity:ego-1600'}
+    assert box.dispatch('lookup_spec', {
+        'entity': 'EGO 双目', 'field': 'resolution'}).status == 'ok'
+    assert box.dispatch('resolve_entity', {'text': 'EGO 三目'}).status == 'not_found'
+    assert box.dispatch('lookup_spec', {
+        'entity': 'EGO 三目', 'field': 'resolution'}).status == 'not_found'
+    hidden = DaqToolBox(knowledge=view, role='channel')
+    assert hidden.dispatch('resolve_entity', {'text': 'EGO 双目'}).status == 'not_found'
+    assert hidden.dispatch('lookup_spec', {
+        'entity': 'EGO 双目', 'field': 'resolution'}).status == 'not_found'
+
+
+def test_entity_alias_changes_require_review_and_cannot_cross_products(tmp_path):
+    rows = _records()
+    rows[0]['data']['aliases'] = ['EGO 双目']
+    with pytest.raises(ValueError):
+        publish_release(tmp_path / 'stale', SNAPSHOT, rows, None, RELEASE_REVIEW)
+    rows[0]['fact_review']['record_sha256'] = record_fingerprint(rows[0])
+    rows[0]['access_review']['record_sha256'] = access_fingerprint(rows[0])
+    other = _row('entity:other', 'entity', {
+        'name': 'Other', 'entity_type': 'device', 'aliases': ['EGO 双目']})
+    with pytest.raises(ValueError):
+        publish_release(tmp_path / 'collision', SNAPSHOT, [*rows, other],
+                        None, RELEASE_REVIEW)
+
+
+def test_runtime_rejects_malformed_or_colliding_reviewed_aliases(tmp_path):
+    rows = _records()
+    release_id = publish_release(tmp_path, SNAPSHOT, rows, None, RELEASE_REVIEW)
+    activate_release(tmp_path, release_id)
+    manifest = load_fixture_active(tmp_path).manifest
+    for invalid_aliases in ('EGO 双目', ['EGO 1600', 'EGO 双目'],
+                            ['EGO 双目', 'EGO双目']):
+        changed = deepcopy(manifest)
+        row = next(item for item in changed['records']
+                   if item['id'] == 'entity:ego-1600')
+        row['data']['aliases'] = invalid_aliases
+        row['fact_review']['record_sha256'] = record_fingerprint(row)
+        row['access_review']['record_sha256'] = access_fingerprint(row)
+        with pytest.raises(ValueError):
+            ReviewedKnowledge.from_manifest(release_id, changed)
+    active = read_active_release(Path(__file__).resolve().parents[1]
+                                 / 'data/knowledge/published')
+    changed = deepcopy(active['manifest'])
+    other = next(item for item in changed['records']
+                 if item['id'] == 'entity:ego-pro')
+    other['data']['aliases'] = ['EGO 双目']
+    other['fact_review']['record_sha256'] = record_fingerprint(other)
+    other['access_review']['record_sha256'] = access_fingerprint(other)
+    first = next(item for item in changed['records']
+                 if item['id'] == 'entity:ego-1600')
+    first['data']['aliases'] = ['EGO 双目']
+    first['fact_review']['record_sha256'] = record_fingerprint(first)
+    first['access_review']['record_sha256'] = access_fingerprint(first)
+    with pytest.raises(ValueError, match='alias collision'):
+        ReviewedKnowledge.from_manifest(active['release_id'], changed)
+    changed = deepcopy(active['manifest'])
+    for record_id, alias in [('entity:ego-pro', 'HUB 2×2'),
+                             ('entity:hub', 'HUB 2x2')]:
+        row = next(item for item in changed['records'] if item['id'] == record_id)
+        row['data']['aliases'] = [alias]
+        row['fact_review']['record_sha256'] = record_fingerprint(row)
+        row['access_review']['record_sha256'] = access_fingerprint(row)
+    forged = ReviewedKnowledge(active['release_id'], changed)
+    assert DaqToolBox(knowledge=forged, role='internal_fae').dispatch(
+        'lookup_spec', {'entity': 'HUB 2x2', 'field': 'rgb_camera_count'}
+    ).content['reason'] == 'ambiguous_entity_identity'
+    with pytest.raises(ValueError, match='alias collision'):
+        ReviewedKnowledge.from_manifest(active['release_id'], changed)
+    changed = deepcopy(active['manifest'])
+    first = next(item for item in changed['records']
+                 if item['id'] == 'entity:ego-1600')
+    first['data']['aliases'] = ['entity:ego-1920']
+    first['fact_review']['record_sha256'] = record_fingerprint(first)
+    first['access_review']['record_sha256'] = access_fingerprint(first)
+    with pytest.raises(ValueError, match='alias collision'):
+        ReviewedKnowledge.from_manifest(active['release_id'], changed)
+    changed = deepcopy(active['manifest'])
+    other = next(item for item in changed['records']
+                 if item['id'] == 'entity:ego-pro')
+    other['data']['aliases'] = ['HUB']
+    other['fact_review']['record_sha256'] = record_fingerprint(other)
+    other['access_review']['record_sha256'] = access_fingerprint(other)
+    with pytest.raises(ValueError, match='alias collision'):
+        ReviewedKnowledge.from_manifest(active['release_id'], changed)
+
+
+def test_spec_tool_resolves_scoped_alias_for_canonical_entity_id(tmp_path):
+    release_id = publish_release(tmp_path, SNAPSHOT, _records(), None, RELEASE_REVIEW)
+    activate_release(tmp_path, release_id)
+    view = load_fixture_active(tmp_path)
+    manifest = deepcopy(view.manifest)
+    manifest['review']['operator_release'] = {
+        'scoped_field_aliases': {'entity:ego-1600': {'pixel_total': 'resolution'}}}
+    alias_view = ReviewedKnowledge(view.release_id, manifest)
+    box = DaqToolBox(knowledge=alias_view, role='internal_fae')
+    for entity in ('entity:ego-1600', 'ENTITY:EGO-1600'):
+        result = box.dispatch('lookup_spec', {'entity': entity, 'field': 'pixel_total'})
+        assert result.status == 'ok'
+        assert result.content['matches'][0]['data']['value'] == '1600x1200'
+
+
+def test_spec_tool_does_not_report_selector_scoped_conflict_as_absent(tmp_path):
+    from daq_fae.knowledge.conflict_visibility import conflict_notice_fingerprint
+    from test_section_tools import make_view
+
+    view = make_view(tmp_path)
+    manifest = deepcopy(view.manifest)
+    entity = next(row for row in manifest['records'] if row['id'] == 'entity:ego-1600')
+    entity['scope']['required_selectors'] = ['variant']
+    conflict = next(row for row in manifest['records'] if row['id'] == 'claim:conflict')
+    conflict['scope']['required_selectors'] = ['variant']
+    conflict['conflict_notice_review'] = {
+        'reviewer': 'synthetic-permission-owner', 'reviewed_at': '2026-10-10',
+        'view_roles': ['internal_fae'], 'statement': 'conflict_exists',
+    }
+    conflict['conflict_notice_review']['sha256'] = conflict_notice_fingerprint(conflict)
+    scoped_view = ReviewedKnowledge(view.release_id, manifest)
+    result = DaqToolBox(knowledge=scoped_view, role='internal_fae').dispatch(
+        'lookup_spec', {'entity': 'EGO 1600', 'field': 'conflict_only'})
+    assert result.status == 'not_found'
+    assert result.content['reason'] != 'reviewed_field_unavailable'
 
 
 def test_link_needs_forward_permission_in_all_tool_paths(tmp_path):

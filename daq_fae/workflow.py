@@ -6,7 +6,8 @@ import time
 
 from src.agent.guardrails import categorize_refusal
 
-from daq_fae.request_schema import DaqRequestSchema, extract_request_schema
+from daq_fae.knowledge.reviewed_view import StaleVariantSelector
+from daq_fae.request_schema import DaqRequestSchema, SchemaExtractionError, extract_request_schema
 from daq_fae.service_contract import ServiceContract
 from daq_fae.task_context import DaqTaskContext, TurnPlan, explicit_topic_switch, prepare_turn
 
@@ -158,19 +159,47 @@ def prepare_workflow(message: str, *, adapter, runtime_release: str,
         attachment_present=bool(attachment_source_ids or image_source_ids),
         image_present=bool(image_source_ids),
         selected_answer_language=selected_answer_language,
+        knowledge=knowledge, role=role,
     )
+    rebound = None
     if knowledge is not None and hasattr(knowledge, 'ground_question'):
-        effective_grounding = (
-            knowledge.ground_question(schema.effective_question)
-            if getattr(knowledge, 'is_candidate_preview', False)
-            else knowledge.ground_question(schema.effective_question, role=role))
-        if effective_grounding.get('entities'):
+        candidate_preview = getattr(knowledge, 'is_candidate_preview', False)
+        if not candidate_preview:
+            # Production callers may precompute a name match before schema
+            # extraction. Re-evaluate it against the extracted goal here.
+            grounded_targets = None
+        current_grounding = (knowledge.ground_question(message) if candidate_preview
+                             else knowledge.ground_question(message, role=role))
+        if (not candidate_preview and current_grounding.get('entities')
+                and not knowledge.grounding_matches_goals(
+                    current_grounding, schema.goals, role=role)):
+            current_grounding = {}
+        try:
+            rebound = (knowledge.rebind_variant(
+                old.grounded_scope, schema.goals, role=role, current_question=message)
+                if old is not None and not candidate_preview
+                and hasattr(knowledge, 'rebind_variant') else None)
+        except StaleVariantSelector as exc:
+            raise SchemaExtractionError('stale_variant_selector') from exc
+        effective_grounding = (knowledge.ground_question(schema.effective_question)
+                               if candidate_preview else knowledge.ground_question(
+                                   schema.effective_question, role=role))
+        if (not candidate_preview and effective_grounding.get('entities')
+                and not knowledge.grounding_matches_goals(
+                    effective_grounding, schema.goals, role=role)):
+            effective_grounding = {}
+        if current_grounding.get('entities'):
+            grounded_targets = current_grounding
+        elif rebound is not None:
+            grounded_targets = rebound
+        elif effective_grounding.get('entities'):
             grounded_targets = effective_grounding
     contract = ServiceContract.for_release(
         knowledge, role=role, runtime_release=runtime_release)
     plan = prepare_turn(
         message, previous=previous, context_hints=context_hints,
         grounded_targets=grounded_targets, request_schema=schema,
+        clear_prior_grounding=rebound is not None,
         attachment_source_ids=attachment_source_ids,
         image_source_ids=image_source_ids,
     )
