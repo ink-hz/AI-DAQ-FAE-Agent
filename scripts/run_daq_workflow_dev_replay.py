@@ -105,6 +105,10 @@ def main() -> int:
                         help='Frozen JSONL question suite when --suite=file')
     parser.add_argument('--release-root', type=Path, default=RELEASE_ROOT,
                         help='Local Dev knowledge release root')
+    parser.add_argument('--sdk-catalog-dir', type=Path,
+                        help='Source checked SDK usage catalog for isolated Dev replay')
+    parser.add_argument('--sdk-archive', type=Path,
+                        help='Verified original archive required with --sdk-catalog-dir')
     parser.add_argument('--case-ids', default='')
     parser.add_argument('--response-language', choices=('zh-CN', 'en-US'),
                         help='Explicit browser language selection for every replayed turn')
@@ -112,6 +116,8 @@ def main() -> int:
     parser.add_argument('--concurrency-probe', action='store_true',
                         help='Run exactly two independent one-turn cases concurrently')
     args = parser.parse_args()
+    if bool(args.sdk_catalog_dir) != bool(args.sdk_archive):
+        raise SystemExit('SDK catalog and archive must be supplied together')
     selected = set(filter(None, args.case_ids.split(',')))
     cases = [case for case in _cases(args.suite, suite_file=args.suite_file)
              if not selected or case['id'] in selected]
@@ -152,6 +158,7 @@ def main() -> int:
         if not (os.environ['DAQ_ANTHROPIC_AUTH_TOKEN'] or os.environ['DAQ_ANTHROPIC_API_KEY']):
             raise SystemExit('Dev model credential unavailable')
         from daq_fae.app import _anthropic_dev_adapter, _daq_vision_adapter, create_app
+        from daq_fae.knowledge.sdk_catalog import SdkCatalog
         from daq_fae.durable_state import DaqDurableState
         from daq_fae.authenticated_persistence import _FailClosedFeedbackWriter
         from src.platform_identity.service import InMemoryAuthenticatedSessionRepository
@@ -176,8 +183,11 @@ def main() -> int:
             os.environ['DAQ_KNOWLEDGE_ENTITLEMENTS_FILE'] = str(role_path)
             codec = ConversationContentCodec.from_file(env['DAQ_AUTHENTICATED_CONTENT_KEYRING_FILE'])
             image_cases = any(case.get('fixture') == 'current_turn_image' for case in cases)
+            sdk_catalog = (SdkCatalog.load(args.sdk_catalog_dir, args.sdk_archive)
+                           if args.sdk_catalog_dir else None)
             app = create_app(
                 provider_mode='anthropic', adapter=_anthropic_dev_adapter(),
+                sdk_catalog=sdk_catalog,
                 vision_adapter=_daq_vision_adapter() if image_cases else None,
                 attachment_dir=workspace / 'attachments',
                 knowledge_release_root=args.release_root,
@@ -193,6 +203,8 @@ def main() -> int:
                 'suite_file_sha256': _sha(args.suite_file) if args.suite_file else None,
                 'old_suite_sha256': [_sha(path) for path in OLD_SUITES],
                 'knowledge_release': active['release_id'],
+                'sdk_catalog_sha256': sdk_catalog.manifest['records_sha256']
+                if sdk_catalog is not None else None,
                 'runtime_release': runtime_release,
                 'daq_code_sha256': _daq_code_sha(),
                 'upstream_revision': json.loads((ROOT / 'upstream-source.json').read_text())['revision'],

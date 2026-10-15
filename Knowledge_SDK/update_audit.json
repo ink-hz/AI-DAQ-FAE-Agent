@@ -1,0 +1,153 @@
+{
+  "archive_manifest_sha256": "56b3c4411956290c3d9bc1dacbccc228e97f489feae649f9389a8a09303bd211",
+  "builds": [
+    {
+      "change_from_previous": {
+        "added": [],
+        "changed": [],
+        "removed": []
+      },
+      "drop": "20260910",
+      "member_count": 8,
+      "members": {
+        "6.ego/CMakeLists.txt": "49e0d2547f3b9f5e215dabc8210232c7aae1c7c5fb42111bad899aff2d27ba27",
+        "6.ego/ego_audio_playback.cpp": "589552e70d1dcf0d22d5a595c5a4d4370e0031a982a45bf22e99b93202358883",
+        "6.ego/ego_auto_test.cpp": "935b1c3c540e7ab061fc0e7fd2edd99b4370c26e48687afd52c3bc743a94aee6",
+        "6.ego/ego_direction_key.cpp": "6d729380c80adbe4ebf9fabca35c54ab51f7478b1a55e28e8622dbb78092082d",
+        "6.ego/ego_fw_log_export.cpp": "790cf46242e6cf8570ee554a1c0141f383eac0d1df1bdee7eac3e56d6a7e15be",
+        "6.ego/ego_recording_directory.cpp": "4702d491d624022b4d4f8880eea36ad5cb5acdf69a8968efa2beea4c3ce2c8cb",
+        "6.ego/ego_sample.cpp": "7cefea6e76ce1e1ca2b90914434a70e61e49a3cc3149578339f10a5e916a10ed",
+        "6.ego/ego_state.cpp": "593c7550ef856fdcb9c584e6012bf000a4b96c0cda828ccd51cabb4d227fcab4"
+      },
+      "package_path": "SDK/SDK&OrbbecViewer_v2.9.0_20260910/linux/OrbbecSDK_v2.9.0_202609091445_d6ce737_linux_x86_64.tar.gz"
+    },
+    {
+      "change_from_previous": {
+        "added": [
+          "6.ego/ego_calib_yaml_export.cpp"
+        ],
+        "changed": [
+          "6.ego/CMakeLists.txt",
+          "6.ego/ego_auto_test.cpp"
+        ],
+        "removed": []
+      },
+      "drop": "20260917",
+      "member_count": 9,
+      "members": {
+        "6.ego/CMakeLists.txt": "b4b14bbdd1267bfa9f8f6305ad1f3229be73b76d6ba371cabaffb9fe2e7faebc",
+        "6.ego/ego_audio_playback.cpp": "589552e70d1dcf0d22d5a595c5a4d4370e0031a982a45bf22e99b93202358883",
+        "6.ego/ego_auto_test.cpp": "994ca155a8eaadd78a7416b9102b6c0d760df0291ee909ba533427e57a1c13fc",
+        "6.ego/ego_calib_yaml_export.cpp": "97134112a9618fc04312d78ef9d56ecd0388c606f24d0fe49fe4d997bc03cc42",
+        "6.ego/ego_direction_key.cpp": "6d729380c80adbe4ebf9fabca35c54ab51f7478b1a55e28e8622dbb78092082d",
+        "6.ego/ego_fw_log_export.cpp": "790cf46242e6cf8570ee554a1c0141f383eac0d1df1bdee7eac3e56d6a7e15be",
+        "6.ego/ego_recording_directory.cpp": "4702d491d624022b4d4f8880eea36ad5cb5acdf69a8968efa2beea4c3ce2c8cb",
+        "6.ego/ego_sample.cpp": "7cefea6e76ce1e1ca2b90914434a70e61e49a3cc3149578339f10a5e916a10ed",
+        "6.ego/ego_state.cpp": "593c7550ef856fdcb9c584e6012bf000a4b96c0cda828ccd51cabb4d227fcab4"
+      },
+      "package_path": "SDK/SDK&OrbbecViewer_v2.9.0_20260917/linux/OrbbecSDK_v2.9.0_202609161744_48734e8_linux_x86_64.tar.gz"
+    },
+    {
+      "change_from_previous": {
+        "added": [
+          "6.ego/ego_sdcard_file_service.cpp",
+          "6.ego/mag_encoder.cpp",
+          "6.ego/magnetometer.cpp",
+          "7.net.ego_depth/CMakeLists.txt",
+          "7.net.ego_depth/net_ego_depth.cpp"
+        ],
+        "changed": [
+          "6.ego/CMakeLists.txt",
+          "6.ego/ego_auto_test.cpp",
+          "6.ego/ego_recording_directory.cpp",
+          "6.ego/ego_sample.cpp"
+        ],
+        "removed": []
+      },
+      "drop": "20260921",
+      "member_count": 14,
+      "members": {
+        "6.ego/CMakeLists.txt": "6663f9e96b8284bb1c0c39ae5bdd16de87d2b48f197c465f1736177077fd8f49",
+        "6.ego/ego_audio_playback.cpp": "589552e70d1dcf0d22d5a595c5a4d4370e0031a982a45bf22e99b93202358883",
+        "6.ego/ego_auto_test.cpp": "1df45ec4a3c7e2262d6b24d732a9042c55ab10807c427d9b90838c9e9c46aea9",
+        "6.ego/ego_calib_yaml_export.cpp": "97134112a9618fc04312d78ef9d56ecd0388c606f24d0fe49fe4d997bc03cc42",
+        "6.ego/ego_direction_key.cpp": "6d729380c80adbe4ebf9fabca35c54ab51f7478b1a55e28e8622dbb78092082d",
+        "6.ego/ego_fw_log_export.cpp": "790cf46242e6cf8570ee554a1c0141f383eac0d1df1bdee7eac3e56d6a7e15be",
+        "6.ego/ego_recording_directory.cpp": "9c4fb1b7d59f3423a2eb19779914f76aa51ea24c4cdbc31045b775e78a247bcc",
+        "6.ego/ego_sample.cpp": "b6d5b295b1b7d536a0d5bfa960f1e7c124cb053aebbfc055c81f9ff2b4fb4968",
+        "6.ego/ego_sdcard_file_service.cpp": "9b719a02416605805fb0eeb2e0ca65bfa7a3312dee79a7c92d61fee60f822719",
+        "6.ego/ego_state.cpp": "593c7550ef856fdcb9c584e6012bf000a4b96c0cda828ccd51cabb4d227fcab4",
+        "6.ego/mag_encoder.cpp": "25498f1f2db4b588057e8050d6ca1b301f0c8b2e737da1c7d6f45d0f66573e92",
+        "6.ego/magnetometer.cpp": "21145f6ad6ae194065323cd8160bbacdbe12f213a040d51506aba3d6da392cef",
+        "7.net.ego_depth/CMakeLists.txt": "7a9a8c046802a01c71967dbc68fd13c7f448e87cb11c98d77cd85004173ae748",
+        "7.net.ego_depth/net_ego_depth.cpp": "2ff48944df28efe085919fca3fda4a1b7d4cb8e04ba53a111f21774a82a78a09"
+      },
+      "package_path": "SDK/SDK&OrbbecViewer_v2.9.0_20260921/linux/OrbbecSDK_v2.9.0_202609211510_eec405a8_linux_x86_64.tar.gz"
+    },
+    {
+      "change_from_previous": {
+        "added": [
+          "6.ego/ego_net_uid_hotplug.cpp"
+        ],
+        "changed": [
+          "6.ego/CMakeLists.txt"
+        ],
+        "removed": []
+      },
+      "drop": "20260923",
+      "member_count": 15,
+      "members": {
+        "6.ego/CMakeLists.txt": "2ab3dc47822ea444b2989c3b7e988b3d038ad84cd772b2d651dc6a690551995c",
+        "6.ego/ego_audio_playback.cpp": "589552e70d1dcf0d22d5a595c5a4d4370e0031a982a45bf22e99b93202358883",
+        "6.ego/ego_auto_test.cpp": "1df45ec4a3c7e2262d6b24d732a9042c55ab10807c427d9b90838c9e9c46aea9",
+        "6.ego/ego_calib_yaml_export.cpp": "97134112a9618fc04312d78ef9d56ecd0388c606f24d0fe49fe4d997bc03cc42",
+        "6.ego/ego_direction_key.cpp": "6d729380c80adbe4ebf9fabca35c54ab51f7478b1a55e28e8622dbb78092082d",
+        "6.ego/ego_fw_log_export.cpp": "790cf46242e6cf8570ee554a1c0141f383eac0d1df1bdee7eac3e56d6a7e15be",
+        "6.ego/ego_net_uid_hotplug.cpp": "1e7d9db9d0bdfe6e9da3f702ad50b6ffab128e34da649b1639be30efe3c4ab66",
+        "6.ego/ego_recording_directory.cpp": "9c4fb1b7d59f3423a2eb19779914f76aa51ea24c4cdbc31045b775e78a247bcc",
+        "6.ego/ego_sample.cpp": "b6d5b295b1b7d536a0d5bfa960f1e7c124cb053aebbfc055c81f9ff2b4fb4968",
+        "6.ego/ego_sdcard_file_service.cpp": "9b719a02416605805fb0eeb2e0ca65bfa7a3312dee79a7c92d61fee60f822719",
+        "6.ego/ego_state.cpp": "593c7550ef856fdcb9c584e6012bf000a4b96c0cda828ccd51cabb4d227fcab4",
+        "6.ego/mag_encoder.cpp": "25498f1f2db4b588057e8050d6ca1b301f0c8b2e737da1c7d6f45d0f66573e92",
+        "6.ego/magnetometer.cpp": "21145f6ad6ae194065323cd8160bbacdbe12f213a040d51506aba3d6da392cef",
+        "7.net.ego_depth/CMakeLists.txt": "7a9a8c046802a01c71967dbc68fd13c7f448e87cb11c98d77cd85004173ae748",
+        "7.net.ego_depth/net_ego_depth.cpp": "2ff48944df28efe085919fca3fda4a1b7d4cb8e04ba53a111f21774a82a78a09"
+      },
+      "package_path": "SDK/SDK&OrbbecViewer_v2.9.0_20260923/linux/OrbbecSDK_v2.9.0_202609231413_4ee95581_linux_x86_64.tar.gz"
+    },
+    {
+      "change_from_previous": {
+        "added": [
+          "6.ego/ego_multi_device_sync.cpp"
+        ],
+        "changed": [
+          "6.ego/CMakeLists.txt",
+          "6.ego/ego_sdcard_file_service.cpp"
+        ],
+        "removed": []
+      },
+      "drop": "20260929",
+      "member_count": 16,
+      "members": {
+        "6.ego/CMakeLists.txt": "e1337da0838740a51bf1db0ba9b3e8dd0f1b30de715995af341346059b020593",
+        "6.ego/ego_audio_playback.cpp": "589552e70d1dcf0d22d5a595c5a4d4370e0031a982a45bf22e99b93202358883",
+        "6.ego/ego_auto_test.cpp": "1df45ec4a3c7e2262d6b24d732a9042c55ab10807c427d9b90838c9e9c46aea9",
+        "6.ego/ego_calib_yaml_export.cpp": "97134112a9618fc04312d78ef9d56ecd0388c606f24d0fe49fe4d997bc03cc42",
+        "6.ego/ego_direction_key.cpp": "6d729380c80adbe4ebf9fabca35c54ab51f7478b1a55e28e8622dbb78092082d",
+        "6.ego/ego_fw_log_export.cpp": "790cf46242e6cf8570ee554a1c0141f383eac0d1df1bdee7eac3e56d6a7e15be",
+        "6.ego/ego_multi_device_sync.cpp": "26fa19b2f19bd745021bd7d0eb5a679049a17d8f5449e3f573f953cf0a9c4a84",
+        "6.ego/ego_net_uid_hotplug.cpp": "1e7d9db9d0bdfe6e9da3f702ad50b6ffab128e34da649b1639be30efe3c4ab66",
+        "6.ego/ego_recording_directory.cpp": "9c4fb1b7d59f3423a2eb19779914f76aa51ea24c4cdbc31045b775e78a247bcc",
+        "6.ego/ego_sample.cpp": "b6d5b295b1b7d536a0d5bfa960f1e7c124cb053aebbfc055c81f9ff2b4fb4968",
+        "6.ego/ego_sdcard_file_service.cpp": "7f1abecb029acf3f0312bd2905de5f841567b1535528b689609ea086a2420b79",
+        "6.ego/ego_state.cpp": "593c7550ef856fdcb9c584e6012bf000a4b96c0cda828ccd51cabb4d227fcab4",
+        "6.ego/mag_encoder.cpp": "25498f1f2db4b588057e8050d6ca1b301f0c8b2e737da1c7d6f45d0f66573e92",
+        "6.ego/magnetometer.cpp": "21145f6ad6ae194065323cd8160bbacdbe12f213a040d51506aba3d6da392cef",
+        "7.net.ego_depth/CMakeLists.txt": "7a9a8c046802a01c71967dbc68fd13c7f448e87cb11c98d77cd85004173ae748",
+        "7.net.ego_depth/net_ego_depth.cpp": "2ff48944df28efe085919fca3fda4a1b7d4cb8e04ba53a111f21774a82a78a09"
+      },
+      "package_path": "SDK/SDK&OrbbecViewer_v2.9.0_20260929/linux/OrbbecSDK_v2.9.0_202609291326_7947205a_linux_x86_64.tar.gz"
+    }
+  ],
+  "format_version": "daq-sdk-update-audit/v1"
+}

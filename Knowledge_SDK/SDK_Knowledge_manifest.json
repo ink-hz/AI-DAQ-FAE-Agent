@@ -1,0 +1,33 @@
+{
+  "archive_manifest_sha256": "56b3c4411956290c3d9bc1dacbccc228e97f489feae649f9389a8a09303bd211",
+  "format_version": "daq-sdk-source-checked/v1",
+  "packages": {
+    "device_c_20260909": {
+      "archive_path": "SDK/设备端SDK-四目EGO使用/四目设备SDK/libobkit.20260909_6a23309c.tar.gz",
+      "build": "20260909",
+      "sha256": "e8fdac744765f18f37b9c82168cdce2c97ca102f3ad8a00e99731f1f0e4f0692",
+      "version": "20260909"
+    },
+    "host_cpp_20260921": {
+      "archive_path": "SDK/SDK&OrbbecViewer_v2.9.0_20260921/linux/OrbbecSDK_v2.9.0_202609211510_eec405a8_linux_x86_64.tar.gz",
+      "build": "20260921",
+      "sha256": "5ad27197725480ce86332c3cc6ca01eef3676eab5a7a04b474741c501423bf6d",
+      "version": "2.9.0"
+    },
+    "host_cpp_20260923": {
+      "archive_path": "SDK/SDK&OrbbecViewer_v2.9.0_20260923/linux/OrbbecSDK_v2.9.0_202609231413_4ee95581_linux_x86_64.tar.gz",
+      "build": "20260923",
+      "sha256": "95f599b936c3875cbb15aed055607f8d0658bd4a592b44f0a1eb014cafd0685c",
+      "version": "2.9.0"
+    },
+    "host_cpp_20260929": {
+      "archive_path": "SDK/SDK&OrbbecViewer_v2.9.0_20260929/linux/OrbbecSDK_v2.9.0_202609291326_7947205a_linux_x86_64.tar.gz",
+      "build": "20260929",
+      "sha256": "1f44085be2283d41fc295b3c804cd89a2c856ad343d11f6dc674d64cf04a90f9",
+      "version": "2.9.0"
+    }
+  },
+  "record_count": 15,
+  "records_sha256": "220a7aa608a21877b883dac342549ae24f7e4060803c68c50ff37961bb03daaa",
+  "source_ref_count": 42
+}

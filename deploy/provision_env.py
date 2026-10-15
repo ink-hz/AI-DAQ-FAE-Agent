@@ -83,6 +83,7 @@ def provision(camera_env: Path, output_root: Path, subject_ids: list[str], runti
         'DAQ_AUTHENTICATED_CONTENT_KEYRING_FILE': '/run/daq-secrets/content-keyring.json',
         'DAQ_KNOWLEDGE_ENTITLEMENTS_FILE': '/run/daq-secrets/entitlements.json',
         'DAQ_KNOWLEDGE_RELEASE_ROOT': '/app/data/knowledge/published',
+        'DAQ_SDK_RELEASE_ROOT': '/app/data/knowledge/sdk-published',
         'DAQ_TRACE_LOG_PATH': '/app/data/daq_traces.jsonl',
         'DAQ_ATTACHMENT_STORAGE_DIR': '/app/data/attachments',
         'DAQ_PLATFORM_TASK_ENABLED': 'false',

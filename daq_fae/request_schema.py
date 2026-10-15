@@ -27,7 +27,7 @@ _ATTACHMENT = {'search_attachments', 'analyze_image'}
 _CONDITIONS = {
     'variant', 'resolution_variant', 'hardware_revision', 'resolution',
     'platform', 'connection', 'connection_mode', 'viewer_version',
-    'sdk_version', 'firmware_version', 'task', 'per_port', 'power',
+    'sdk', 'sdk_name', 'sdk_version', 'sdk_release_date', 'language', 'language_binding', 'api', 'feature', 'export_files', 'firmware_version', 'task', 'per_port', 'power',
     'recording_format', 'storage', 'simultaneous_port_count',
     'scope', 'sensor', 'camera_type', 'camera_config', 'stereo_pair',
     'lens_type', 'port',
@@ -581,6 +581,11 @@ class DaqRequestSchema:
                 elif conditions['scope'] not in explicit_scopes:
                     raise SchemaExtractionError('condition_scope_ambiguous')
             for key, value in conditions.items():
+                if (capability == 'sdk_evidence' and key == 'platform'
+                        and isinstance(value, str) and (
+                            (value == 'device_side' and re.search(r'设备端|device.side', user_words, re.I))
+                            or (value == 'host_side' and re.search(r'主机侧|host.side', user_words, re.I)))):
+                    continue
                 if key == 'scope':
                     if not isinstance(value, str) or value not in {
                             'whole_system', 'module', 'component', 'device'}:

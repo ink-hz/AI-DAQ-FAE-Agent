@@ -1,0 +1,651 @@
+[
+  {
+    "kb_id": "daq-sdk-device-build-012",
+    "package": "device_c_20260909",
+    "sdk_layer": "device_c",
+    "doc_type": "build",
+    "title": "libobkit 示例交叉编译与运行目录",
+    "question_patterns": [
+      "libobkit 怎么编译 sample",
+      "四目 EGO 设备端 SDK 用什么工具链",
+      "libobkit 找不到动态库怎么办"
+    ],
+    "answer": "包内 README 要求 AArch64 Linux/RK3576 环境和匹配的交叉编译工具链；可调整 Makefile 的 TOOLCHAIN_DIR 后 make。示例运行时依赖 bin 与 lib 的相对目录，RPATH 指向相邻 lib；实际部署还需核对配套整机镜像及平台库。README 中示例解压命令沿用旧包名，应以所持包实际文件名为准。",
+    "symbols": [
+      "TOOLCHAIN_DIR",
+      "make",
+      "RPATH"
+    ],
+    "topics": [
+      "build",
+      "toolchain",
+      "runtime_library"
+    ],
+    "source_refs": [
+      {
+        "member_suffix": "libobkit/README.md",
+        "start_line": 78,
+        "end_line": 121
+      }
+    ],
+    "usage_tasks": [
+      "compile_and_deploy_example",
+      "build"
+    ]
+  },
+  {
+    "kb_id": "daq-sdk-device-capture-013",
+    "package": "device_c_20260909",
+    "sdk_layer": "device_c",
+    "doc_type": "example",
+    "title": "libobkit 相机、IMU、音频采集生命周期",
+    "question_patterns": [
+      "libobkit 怎么配置四目采集",
+      "ob_capture_configure 和 ob_capture_start 顺序",
+      "设备端相机 IMU 音频回调怎么用"
+    ],
+    "answer": "设备端 C 示例先 ob_event_init、ob_capture_init，注册 OB_EVT_ERROR，再填 ob_capture_config_t（相机、IMU、音频 enable_mask 与回调），依次 ob_capture_configure、ob_capture_start、ob_capture_stop；退出时关闭输出文件、ob_event_unregister、ob_capture_deinit、ob_event_deinit。示例中的 1600x1200 等配置是示例输入，不是所有硬件的可用规格；启动前须确认配套镜像与具体能力。",
+    "symbols": [
+      "ob_capture_init",
+      "ob_capture_configure",
+      "ob_capture_start",
+      "ob_capture_stop",
+      "ob_capture_deinit",
+      "ob_capture_config_t",
+      "enable_mask",
+      "ob_event_init",
+      "ob_event_register",
+      "ob_event_unregister",
+      "ob_event_deinit"
+    ],
+    "topics": [
+      "capture",
+      "camera",
+      "imu",
+      "audio",
+      "lifecycle"
+    ],
+    "source_refs": [
+      {
+        "member_suffix": "libobkit/include/ob_capture.h",
+        "start_line": 5,
+        "end_line": 10
+      },
+      {
+        "member_suffix": "libobkit/include/ob_capture.h",
+        "start_line": 141,
+        "end_line": 179
+      },
+      {
+        "member_suffix": "libobkit/samples/sample_capture.c",
+        "start_line": 191,
+        "end_line": 316
+      }
+    ],
+    "usage_tasks": [
+      "capture",
+      "startup"
+    ]
+  },
+  {
+    "kb_id": "daq-sdk-device-scope-011",
+    "package": "device_c_20260909",
+    "sdk_layer": "device_c",
+    "doc_type": "install",
+    "title": "libobkit 设备端 SDK 与整机镜像绑定",
+    "question_patterns": [
+      "libobkit 是什么 SDK",
+      "四目 EGO 设备端 SDK 能单独运行吗",
+      "libobkit 与固件镜像关系"
+    ],
+    "answer": "libobkit 是用于已烧录配套整机镜像的 RK3576 设备端二次开发 C 库。包内 README 明确称 libobkit.so 与交付的整机更新镜像强绑定，目标环境是 AArch64 Linux；没有对应镜像版本的核对记录时，不能据包名判断运行兼容。",
+    "symbols": [
+      "libobkit.so",
+      "RK3576"
+    ],
+    "topics": [
+      "device_side",
+      "image_binding",
+      "compatibility"
+    ],
+    "source_refs": [
+      {
+        "member_suffix": "libobkit/README.md",
+        "start_line": 1,
+        "end_line": 10
+      },
+      {
+        "member_suffix": "libobkit/README.md",
+        "start_line": 78,
+        "end_line": 88
+      }
+    ],
+    "usage_tasks": [
+      "sdk_scope"
+    ]
+  },
+  {
+    "kb_id": "daq-sdk-host-audio-007",
+    "package": "host_cpp_20260929",
+    "sdk_layer": "host_cpp",
+    "doc_type": "example",
+    "title": "EGO 音频文件播放与停止",
+    "question_patterns": [
+      "EGO SDK 怎么播放 WAV",
+      "playAudioFile 和 stopAudioPlayback 怎么用",
+      "连续播放音频"
+    ],
+    "answer": "音频播放示例通过 USB 或网络打开设备并转换为 DataAcquisitionDevice，提示输入 16 kHz 单声道 16-bit PCM WAV 文件；调用 playAudioFile 播放，stopAudioPlayback 用于主动中断。连续播放时示例保留自然结束后的输出会话，避免每次重启。需先确认设备和固件有相应能力。",
+    "symbols": [
+      "playAudioFile",
+      "stopAudioPlayback",
+      "DataAcquisitionDevice::fromDevice"
+    ],
+    "topics": [
+      "audio",
+      "playback"
+    ],
+    "source_refs": [
+      {
+        "member_suffix": "examples/src/6.ego/ego_audio_playback.cpp",
+        "start_line": 149,
+        "end_line": 170
+      },
+      {
+        "member_suffix": "examples/src/6.ego/ego_audio_playback.cpp",
+        "start_line": 186,
+        "end_line": 213
+      }
+    ],
+    "usage_tasks": [
+      "audio_playback"
+    ]
+  },
+  {
+    "kb_id": "daq-sdk-host-build-010",
+    "package": "host_cpp_20260929",
+    "sdk_layer": "host_cpp",
+    "doc_type": "build",
+    "title": "EGO C++ 示例目标与构建选项",
+    "question_patterns": [
+      "EGO SDK 有哪些 C++ 示例",
+      "怎么编译 ego_multi_device_sync",
+      "EGO SDK CMake 示例目标"
+    ],
+    "answer": "2026-09-29 主机侧 SDK 包在 examples/src/6.ego 的 CMakeLists 中定义了 EGO 采集、固件日志、录制目录、多设备同步、状态、按键、标定 YAML、SD 卡等示例目标，并链接 ob SDK 与 examples utils；音频播放在非 Windows 下按 ALSA 是否存在启用相关编译定义。仅说明该包内的示例构建配置。",
+    "symbols": [
+      "ob_ego_sample",
+      "ob_ego_multi_device_sync",
+      "ob_ego_calib_yaml_export",
+      "CMakeLists.txt"
+    ],
+    "topics": [
+      "build",
+      "examples",
+      "cmake"
+    ],
+    "source_refs": [
+      {
+        "member_suffix": "examples/src/6.ego/CMakeLists.txt",
+        "start_line": 5,
+        "end_line": 63
+      }
+    ],
+    "usage_tasks": [
+      "build_examples"
+    ]
+  },
+  {
+    "kb_id": "daq-sdk-host-calib-002",
+    "package": "host_cpp_20260929",
+    "sdk_layer": "host_cpp",
+    "doc_type": "example",
+    "title": "导出 EGO 对齐与 IMU 标定 YAML",
+    "question_patterns": [
+      "EGO 怎么导出 align_calib.yaml",
+      "IMU 标定 YAML 怎么从设备取",
+      "getRawData 标定数据"
+    ],
+    "answer": "C++ 示例先检查两个原始数据属性的读权限，再用 getRawData 分块回调按 offset 拼接，分别把 OB_RAW_DATA_ALIGN_CALIB_YAML 与 OB_RAW_DATA_IMU_CALIB_YAML 原始字节保存为 align_calib.yaml 和 imu_calib.yaml；SDK 不解析 YAML。设备是否提供这两个属性须在现场查询。",
+    "symbols": [
+      "getRawData",
+      "OB_RAW_DATA_ALIGN_CALIB_YAML",
+      "OB_RAW_DATA_IMU_CALIB_YAML"
+    ],
+    "topics": [
+      "calibration",
+      "imu",
+      "export"
+    ],
+    "source_refs": [
+      {
+        "member_suffix": "examples/src/6.ego/ego_calib_yaml_export.cpp",
+        "start_line": 4,
+        "end_line": 8
+      },
+      {
+        "member_suffix": "examples/src/6.ego/ego_calib_yaml_export.cpp",
+        "start_line": 24,
+        "end_line": 65
+      },
+      {
+        "member_suffix": "examples/src/6.ego/ego_calib_yaml_export.cpp",
+        "start_line": 98,
+        "end_line": 111
+      }
+    ],
+    "usage_tasks": [
+      "calibration_export",
+      "export"
+    ],
+    "outputs": [
+      "align_calib.yaml",
+      "imu_calib.yaml"
+    ]
+  },
+  {
+    "kb_id": "daq-sdk-host-depth-009",
+    "package": "host_cpp_20260929",
+    "sdk_layer": "host_cpp",
+    "doc_type": "example",
+    "title": "EGO Depth 网络预设与流 Profile 查询",
+    "question_patterns": [
+      "EGO Depth SDK 怎么切换预设",
+      "net_ego_depth 如何查询流 profile",
+      "EGO-D3B 网络取流能力查询"
+    ],
+    "answer": "网络 EGO Depth 示例用 createNetDevice 打开 IP 与端口，先查询可用预设并调用 loadPreset，再读取当前传感器和各自的 StreamProfile。示例说明切换预设会重建设备树，因此应在切换后查询 profile；它不保证某个设备一定提供特定分辨率或帧率。",
+    "symbols": [
+      "createNetDevice",
+      "getAvailablePresetList",
+      "loadPreset",
+      "getStreamProfileList"
+    ],
+    "topics": [
+      "depth",
+      "network",
+      "preset",
+      "profile"
+    ],
+    "source_refs": [
+      {
+        "member_suffix": "examples/src/7.net.ego_depth/net_ego_depth.cpp",
+        "start_line": 4,
+        "end_line": 19
+      },
+      {
+        "member_suffix": "examples/src/7.net.ego_depth/net_ego_depth.cpp",
+        "start_line": 152,
+        "end_line": 214
+      },
+      {
+        "member_suffix": "examples/src/7.net.ego_depth/net_ego_depth.cpp",
+        "start_line": 69,
+        "end_line": 83
+      }
+    ],
+    "usage_tasks": [
+      "preset_profile"
+    ]
+  },
+  {
+    "kb_id": "daq-sdk-host-fwlog-003",
+    "package": "host_cpp_20260929",
+    "sdk_layer": "host_cpp",
+    "doc_type": "example",
+    "title": "导出 EGO 固件日志",
+    "question_patterns": [
+      "EGO SDK 怎么导出固件日志",
+      "startFirmwareLogExport 用法"
+    ],
+    "answer": "示例把枚举到的设备转换为 DataAcquisitionDevice，在日志输出目录注册 startFirmwareLogExport 分块回调，等待完成信号后调用 stopFirmwareLogExport 并关闭文件。需要处理分块状态与失败结果；示例本身不证明所有固件可导出。",
+    "symbols": [
+      "DataAcquisitionDevice::fromDevice",
+      "startFirmwareLogExport",
+      "stopFirmwareLogExport"
+    ],
+    "topics": [
+      "firmware_log",
+      "diagnostics"
+    ],
+    "source_refs": [
+      {
+        "member_suffix": "examples/src/6.ego/ego_fw_log_export.cpp",
+        "start_line": 107,
+        "end_line": 137
+      }
+    ],
+    "usage_tasks": [
+      "firmware_log_export"
+    ]
+  },
+  {
+    "kb_id": "daq-sdk-host-key-008",
+    "package": "host_cpp_20260929",
+    "sdk_layer": "host_cpp",
+    "doc_type": "example",
+    "title": "注册 EGO 方向键事件回调",
+    "question_patterns": [
+      "EGO 方向键 SDK 回调",
+      "setDirectionKeyCallback 怎么用"
+    ],
+    "answer": "方向键示例通过 USB 或网络打开设备，调用 setDirectionKeyCallback 接收方向与短按、长按、双击等状态；退出时调用 clearDirectionKeyCallback。是否有该按键及对应事件须看具体硬件和固件。",
+    "symbols": [
+      "setDirectionKeyCallback",
+      "clearDirectionKeyCallback"
+    ],
+    "topics": [
+      "key",
+      "callback"
+    ],
+    "source_refs": [
+      {
+        "member_suffix": "examples/src/6.ego/ego_direction_key.cpp",
+        "start_line": 84,
+        "end_line": 132
+      }
+    ],
+    "usage_tasks": [
+      "direction_key"
+    ]
+  },
+  {
+    "kb_id": "daq-sdk-host-record-dir-004",
+    "package": "host_cpp_20260929",
+    "sdk_layer": "host_cpp",
+    "doc_type": "example",
+    "title": "设置并回读 EGO 录制目录",
+    "question_patterns": [
+      "EGO SDK 怎么设置录制目录",
+      "setFwRecordingDirectory 怎么验证",
+      "录制文件名 API"
+    ],
+    "answer": "录制目录示例用 DataAcquisitionDevice::setFwRecordingDirectory 设置路径，再用 getFwRecordingDirectory 回读比对；同时演示 getFwRecordingFileName 与录制目的地、动作属性。目录长度边界是该示例的测试输入，不能据此推断全部固件接受同样路径。",
+    "symbols": [
+      "setFwRecordingDirectory",
+      "getFwRecordingDirectory",
+      "getFwRecordingFileName"
+    ],
+    "topics": [
+      "recording",
+      "directory",
+      "readback"
+    ],
+    "source_refs": [
+      {
+        "member_suffix": "examples/src/6.ego/ego_recording_directory.cpp",
+        "start_line": 16,
+        "end_line": 20
+      },
+      {
+        "member_suffix": "examples/src/6.ego/ego_recording_directory.cpp",
+        "start_line": 51,
+        "end_line": 83
+      },
+      {
+        "member_suffix": "examples/src/6.ego/ego_recording_directory.cpp",
+        "start_line": 165,
+        "end_line": 178
+      }
+    ],
+    "usage_tasks": [
+      "recording_directory"
+    ]
+  },
+  {
+    "kb_id": "daq-sdk-host-sdcard-005",
+    "package": "host_cpp_20260929",
+    "sdk_layer": "host_cpp",
+    "doc_type": "example",
+    "title": "通过网络列出和下载 EGO SD 卡文件",
+    "question_patterns": [
+      "EGO SDK 如何列出 SD 卡文件",
+      "downloadSdcardFile 怎么下载",
+      "SD 卡文件服务需要什么连接"
+    ],
+    "answer": "SD 卡文件服务示例要求输入设备 IP，通过 createNetDevice(ip, 8090) 打开网络设备并转换为 DataAcquisitionDevice；用 getSdcardFileList 列目录，用 downloadSdcardFile 下载本地文件或通过逐文件 URL 上传，并提供取消操作。示例中云端上传的演示凭据不能直接用于实际业务。",
+    "symbols": [
+      "createNetDevice",
+      "getSdcardFileList",
+      "downloadSdcardFile",
+      "cancelSdcardFileOperation"
+    ],
+    "topics": [
+      "sdcard",
+      "download",
+      "network"
+    ],
+    "source_refs": [
+      {
+        "member_suffix": "examples/src/6.ego/ego_sdcard_file_service.cpp",
+        "start_line": 4,
+        "end_line": 30
+      },
+      {
+        "member_suffix": "examples/src/6.ego/ego_sdcard_file_service.cpp",
+        "start_line": 370,
+        "end_line": 389
+      },
+      {
+        "member_suffix": "examples/src/6.ego/ego_sdcard_file_service.cpp",
+        "start_line": 320,
+        "end_line": 331
+      },
+      {
+        "member_suffix": "examples/src/6.ego/ego_sdcard_file_service.cpp",
+        "start_line": 603,
+        "end_line": 606
+      },
+      {
+        "member_suffix": "include/libobsensor/hpp/DataAcquisitionDevice.hpp",
+        "start_line": 174,
+        "end_line": 191
+      },
+      {
+        "member_suffix": "include/libobsensor/hpp/DataAcquisitionDevice.hpp",
+        "start_line": 204,
+        "end_line": 212
+      }
+    ],
+    "usage_tasks": [
+      "sdcard_file_service",
+      "download"
+    ]
+  },
+  {
+    "kb_id": "daq-sdk-host-sdcard-20260921",
+    "package": "host_cpp_20260921",
+    "sdk_layer": "host_cpp",
+    "doc_type": "example",
+    "title": "2026-09-21 构建的 EGO SD 卡文件服务",
+    "question_patterns": [
+      "20260921 OrbbecSDK downloadSdcardFile",
+      "2026-09-21 EGO SD 卡文件下载 API"
+    ],
+    "answer": "2026-09-21 的 OrbbecSDK 2.9.0 Linux x86_64 包内，公开 C++ 头文件 DataAcquisitionDevice.hpp 已声明 downloadSdcardFile，EGO SD 卡文件服务示例也实际调用它：可通过网络 IP:8090 打开设备并下载文件到本地或按逐文件 URL 上传。可以确认这个构建包提供该 API；不能据此推断具体设备与固件组合已实测可用。",
+    "symbols": [
+      "createNetDevice",
+      "getSdcardFileList",
+      "downloadSdcardFile",
+      "cancelSdcardFileOperation"
+    ],
+    "topics": [
+      "sdcard",
+      "download",
+      "network"
+    ],
+    "source_refs": [
+      {
+        "member_suffix": "examples/src/6.ego/ego_sdcard_file_service.cpp",
+        "start_line": 4,
+        "end_line": 12
+      },
+      {
+        "member_suffix": "examples/src/6.ego/ego_sdcard_file_service.cpp",
+        "start_line": 310,
+        "end_line": 320
+      },
+      {
+        "member_suffix": "examples/src/6.ego/ego_sdcard_file_service.cpp",
+        "start_line": 360,
+        "end_line": 378
+      },
+      {
+        "member_suffix": "include/libobsensor/hpp/DataAcquisitionDevice.hpp",
+        "start_line": 158,
+        "end_line": 175
+      },
+      {
+        "member_suffix": "include/libobsensor/hpp/DataAcquisitionDevice.hpp",
+        "start_line": 188,
+        "end_line": 196
+      }
+    ],
+    "usage_tasks": [
+      "sdcard_file_service",
+      "download"
+    ]
+  },
+  {
+    "kb_id": "daq-sdk-host-sdcard-20260923",
+    "package": "host_cpp_20260923",
+    "sdk_layer": "host_cpp",
+    "doc_type": "example",
+    "title": "2026-09-23 构建的 EGO SD 卡文件服务",
+    "question_patterns": [
+      "20260923 OrbbecSDK downloadSdcardFile",
+      "2026-09-23 EGO SD 卡文件下载 API"
+    ],
+    "answer": "2026-09-23 的 OrbbecSDK 2.9.0 Linux x86_64 包内，公开 C++ 头文件 DataAcquisitionDevice.hpp 已声明 downloadSdcardFile，EGO SD 卡文件服务示例也实际调用它：可通过网络 IP:8090 打开设备并下载文件到本地或按逐文件 URL 上传。可以确认这个构建包提供该 API；不能据此推断具体设备与固件组合已实测可用。",
+    "symbols": [
+      "createNetDevice",
+      "getSdcardFileList",
+      "downloadSdcardFile",
+      "cancelSdcardFileOperation"
+    ],
+    "topics": [
+      "sdcard",
+      "download",
+      "network"
+    ],
+    "source_refs": [
+      {
+        "member_suffix": "examples/src/6.ego/ego_sdcard_file_service.cpp",
+        "start_line": 4,
+        "end_line": 12
+      },
+      {
+        "member_suffix": "examples/src/6.ego/ego_sdcard_file_service.cpp",
+        "start_line": 310,
+        "end_line": 320
+      },
+      {
+        "member_suffix": "examples/src/6.ego/ego_sdcard_file_service.cpp",
+        "start_line": 360,
+        "end_line": 378
+      },
+      {
+        "member_suffix": "include/libobsensor/hpp/DataAcquisitionDevice.hpp",
+        "start_line": 158,
+        "end_line": 175
+      },
+      {
+        "member_suffix": "include/libobsensor/hpp/DataAcquisitionDevice.hpp",
+        "start_line": 188,
+        "end_line": 196
+      }
+    ],
+    "usage_tasks": [
+      "sdcard_file_service",
+      "download"
+    ]
+  },
+  {
+    "kb_id": "daq-sdk-host-state-006",
+    "package": "host_cpp_20260929",
+    "sdk_layer": "host_cpp",
+    "doc_type": "example",
+    "title": "查询 EGO 状态并监听状态回调",
+    "question_patterns": [
+      "EGO SDK 如何查询当前状态",
+      "setEgoStateCallback 怎么用",
+      "录制状态怎么监听"
+    ],
+    "answer": "状态示例先检查 OB_STRUCT_EGO_STATE_REPORT 读权限，再注册 setEgoStateCallback；也可调用 getEgoState 主动读取，并通过 getRecordingSessionResult 查询录制会话结果。回调注册可能失败，示例单独捕获错误。",
+    "symbols": [
+      "setEgoStateCallback",
+      "getEgoState",
+      "getRecordingSessionResult",
+      "OB_STRUCT_EGO_STATE_REPORT"
+    ],
+    "topics": [
+      "state",
+      "recording",
+      "callback"
+    ],
+    "source_refs": [
+      {
+        "member_suffix": "examples/src/6.ego/ego_state.cpp",
+        "start_line": 179,
+        "end_line": 234
+      },
+      {
+        "member_suffix": "examples/src/6.ego/ego_state.cpp",
+        "start_line": 84,
+        "end_line": 94
+      }
+    ],
+    "usage_tasks": [
+      "state_callback"
+    ]
+  },
+  {
+    "kb_id": "daq-sdk-host-sync-001",
+    "package": "host_cpp_20260929",
+    "sdk_layer": "host_cpp",
+    "doc_type": "example",
+    "title": "EGO 多设备主从同步模式检查与设置",
+    "question_patterns": [
+      "EGO SDK 怎么设置 PRIMARY SECONDARY 主从同步",
+      "多机同步模式如何检查固件支持",
+      "getSupportedMultiDeviceSyncModeBitmap 怎么用"
+    ],
+    "answer": "在 2026-09-29 的 OrbbecSDK 2.9.0 C++ 示例中，先通过 USB 枚举或网络 IP:8090 打开设备，检查 OB_STRUCT_MULTI_DEVICE_SYNC_CONFIG 的读写权限，再读 getSupportedMultiDeviceSyncModeBitmap 返回的 uint16_t 位图；仅当位图包含 PRIMARY 和 SECONDARY 时，示例才调用 setMultiDeviceSyncMode。示例提示固件至少 1.1.9，但具体设备与固件组合仍需单独验证。",
+    "symbols": [
+      "getSupportedMultiDeviceSyncModeBitmap",
+      "setMultiDeviceSyncMode",
+      "OB_STRUCT_MULTI_DEVICE_SYNC_CONFIG"
+    ],
+    "topics": [
+      "sync",
+      "multi_device",
+      "firmware_gate"
+    ],
+    "source_refs": [
+      {
+        "member_suffix": "examples/src/6.ego/ego_multi_device_sync.cpp",
+        "start_line": 88,
+        "end_line": 125
+      },
+      {
+        "member_suffix": "examples/src/6.ego/ego_multi_device_sync.cpp",
+        "start_line": 62,
+        "end_line": 65
+      },
+      {
+        "member_suffix": "examples/src/6.ego/ego_multi_device_sync.cpp",
+        "start_line": 139,
+        "end_line": 148
+      },
+      {
+        "member_suffix": "include/libobsensor/hpp/Device.hpp",
+        "start_line": 622,
+        "end_line": 628
+      }
+    ],
+    "usage_tasks": [
+      "multi_device_sync_mode_check_and_set",
+      "sync"
+    ]
+  }
+]

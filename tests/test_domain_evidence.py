@@ -286,6 +286,46 @@ def test_answer_must_keep_internal_provenance_out_of_prose():
     )).action == "allow"
 
 
+def test_sdk_output_filenames_are_allowed_but_source_member_paths_are_not():
+    session = DaqEvidencePolicy(allow_dev_source_check=True).begin({"requirements": [
+        {"id": "sdk", "capability": "sdk_evidence"},
+    ]})
+    session.observe("sdk_evidence", ToolResult(
+        status="ok", content={"matched_requirement_ids": ["sdk"], "matches": []},
+        sources=[{"type": "daq_sdk_source_checked", "verification_status": "source_checked",
+                  "release_id": "dev-sdk", "source_id": "sdk-calib",
+                  "source_refs": [{"member": "pkg/examples/ego_calib_yaml_export.cpp",
+                                   "member_sha256": "a" * 64}]}],
+    ))
+    assert session.evaluate(AnswerSubmission(
+        outcome="resolved", conclusion="导出 align_calib.yaml 和 imu_calib.yaml。"
+    )).action == "allow"
+    decision = session.evaluate(AnswerSubmission(
+        outcome="resolved", conclusion="请查看 ego_calib_yaml_export.cpp。"
+    ))
+    assert decision.reason_code == "daq_internal_provenance_in_answer"
+
+
+def test_public_sdk_symbols_are_allowed_in_sdk_usage_answer():
+    session = DaqEvidencePolicy(allow_dev_source_check=True).begin({"requirements": [
+        {"id": "sdk", "capability": "sdk_evidence"},
+    ]})
+    session.observe("sdk_evidence", ToolResult(
+        status="ok", content={"matched_requirement_ids": ["sdk"], "matches": [
+            {"symbols": ["OB_RAW_DATA_ALIGN_CALIB_YAML", "ob_capture_configure"],
+             "code_tokens": ["ob_capture_config_t", "enable_mask"]},
+        ]}, sources=[{"type": "daq_sdk_source_checked",
+                     "verification_status": "source_checked",
+                     "release_id": "dev-sdk", "source_id": "sdk-calib"}],
+    ))
+    assert session.evaluate(AnswerSubmission(
+        outcome="resolved", conclusion="检查 OB_RAW_DATA_ALIGN_CALIB_YAML，再用 ob_capture_config_t 的 enable_mask 调用 ob_capture_configure。"
+    )).action == "allow"
+    assert session.evaluate(AnswerSubmission(
+        outcome="resolved", conclusion="调用 invented_private_api。"
+    )).reason_code == "daq_internal_provenance_in_answer"
+
+
 def test_english_provenance_repair_notice_uses_selected_answer_language():
     session = DaqEvidencePolicy(answer_language='en').begin({'requirements': [
         {'id': 'identity', 'capability': 'resolve_entity'},

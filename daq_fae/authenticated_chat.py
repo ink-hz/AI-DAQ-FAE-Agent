@@ -239,6 +239,8 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
                         system_prompt_path=root / "prompts" / (
                             "reviewed_knowledge_system.md" if knowledge is not None else "empty_knowledge_system.md"),
                         evidence_policy=DaqEvidencePolicy(
+                            allow_dev_source_check=(getattr(knowledge, 'sdk_catalog', None) is not None
+                                                    and not getattr(knowledge.sdk_catalog, 'published', False)),
                             service_contract=prepared.service_contract,
                             answer_language=prepared.schema.answer_language,
                             allowed_tools=allowed_tools,

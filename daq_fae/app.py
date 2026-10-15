@@ -126,7 +126,8 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                platform_client=None, identity_repository=None,
                conversation_repository=None, feedback_store=None, review_store=None,
                durable_state=None, archive_repository=None,
-               task_store=None, task_verifier=None, task_worker=None) -> FastAPI:
+               task_store=None, task_verifier=None, task_worker=None,
+               sdk_catalog=None) -> FastAPI:
     environment = os.getenv("DAQ_ENVIRONMENT", "development")
     if environment not in {"development", "production"}:
         raise ValueError("daq_environment_invalid")
@@ -198,6 +199,23 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
         raise ValueError('daq_nonempty_knowledge_requires_authenticated_mode')
     if environment == "production" and knowledge is None:
         raise ValueError("daq_production_knowledge_release_missing")
+    if sdk_catalog is not None:
+        if environment != "development" or knowledge is None:
+            raise ValueError("daq_sdk_catalog_preview_requires_dev_knowledge")
+        knowledge.sdk_catalog = sdk_catalog
+    elif os.getenv("DAQ_SDK_RELEASE_ROOT"):
+        from daq_fae.knowledge.sdk_release import load_active_sdk_release
+        published_sdk = load_active_sdk_release(
+            Path(os.environ["DAQ_SDK_RELEASE_ROOT"]),
+            runtime_release=runtime_release,
+            upstream_sha=json.loads((_ROOT / 'upstream-source.json').read_text())['revision'],
+        )
+        if published_sdk is None and environment == "production":
+            raise ValueError("daq_sdk_release_missing")
+        if published_sdk is not None:
+            if knowledge is None:
+                raise ValueError("daq_sdk_release_requires_main_knowledge")
+            knowledge.sdk_catalog = published_sdk
     entitlements = None
     if auth_mode and knowledge is not None:
         entitlement_path = os.getenv("DAQ_KNOWLEDGE_ENTITLEMENTS_FILE")
@@ -283,6 +301,8 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
             "environment": environment,
             "agent_id": AGENT_ID,
             "knowledge_release": knowledge_release,
+            "sdk_knowledge_release": getattr(
+                getattr(knowledge, "sdk_catalog", None), "release_id", None),
             "knowledge_status": (
                 "candidate_dev_only" if candidate_mode else
                 "owner_source_checked_pilot" if knowledge is not None and
@@ -543,7 +563,8 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                                 else "empty_knowledge_system.md"
                             ),
                             evidence_policy=DaqEvidencePolicy(
-                                allow_dev_source_check=candidate_mode,
+                                allow_dev_source_check=candidate_mode or (sdk_catalog is not None
+                                    and not getattr(sdk_catalog, 'published', False)),
                                 service_contract=prepared.service_contract if prepared else None,
                                 answer_language=prepared.schema.answer_language if prepared else 'zh',
                                 allowed_tools=base_toolbox.allowed_tools,

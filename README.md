@@ -36,19 +36,23 @@ npm --prefix webui run build
 `.env.example` 默认离线空知识。真实模型回放只在 Dev 运行；生产只做不触发模型的身份、健康、路由与隔离烟测。Dev 真实资料候选视图使用 `DAQ_DEV_CANDIDATE_MODE=true` 及 `DAQ_DEV_CANDIDATE_*`、`DAQ_DEV_SOURCE_CHECK_FILE`，仅绑定 loopback，不能进入认证模式。候选章节只帮助定位缺口，不允许作为 `resolved` 证据。
 
 ```bash
-.venv/bin/python -m pytest -q tests
+DAQ_KNOWLEDGE_RELEASE_ROOT="$(mktemp -d)" .venv/bin/python -m pytest -q tests
 .venv/bin/python scripts/verify_upstream_snapshot.py --upstream ../AI-FAE-Agent
 npm --prefix webui test
 npm --prefix webui run build
 ```
 
-最新本机验证为 Python 1109 题、WebUI 246 题通过，WebUI 构建通过。共享 `src/` 没有本轮改动；本轮没有执行生产模型评测。[Dev 复核](docs/reviews/2026-10-14-daq-alias-variant-dev-review.md)记录完整题集逐题范围、独立语义审查和时延。最终发布绑定的补充冒烟曾失败，见[暂缓记录](docs/reviews/2026-10-14-daq-final-release-hold.md)；2026-10-15 两题重试、独立复审及生产切换结果见[发布记录](docs/reviews/2026-10-15-daq-field-qa-production-release.md)。
+最新本机验证为 Python 1125 题、WebUI 246 题通过，WebUI 构建通过。共享 `src/` 没有本轮改动；本轮没有执行生产模型评测。[Dev 复核](docs/reviews/2026-10-14-daq-alias-variant-dev-review.md)记录完整题集逐题范围、独立语义审查和时延。最终发布绑定的补充冒烟曾失败，见[暂缓记录](docs/reviews/2026-10-14-daq-final-release-hold.md)；2026-10-15 两题重试、独立复审及生产切换结果见[发布记录](docs/reviews/2026-10-15-daq-field-qa-production-release.md)。
 
 ## 知识更新
 
 原件仍留在 `data/knowledge/local_archive/`，不提交 Git，也不从未核验的 `tmp/` 直接发布。高频更新时先逐文件校验哈希，再对来源、实体、变体、字段、测量条件和依赖关系做增量差异；改变或撤回的事实自动失去旧审核状态。新的规格须在 Dev 完成来源核对、真实模型回放和独立答案复核，再生成不可变发布包并切换活动指针。知识发布不改变相机服务。
 
 清洗与增量设计见[知识专项任务书](docs/superpowers/plans/2026-10-10-daq-knowledge-workstream-task-brief.md)、[逐项状态](docs/reviews/2026-10-10-daq-knowledge-workstream-status.md)和[完整设计](docs/2026-10-08-数采FAE完整设计.md)。生产只包含上述 23 条；其余 742 条候选图记录及软件/链接/组合资料仍待后续核对。
+
+## SDK 资料开发
+
+本机 `Knowledge_SDK/` 已从 2026-10-15 原件归档构建首批 SDK 用法事实：15 条记录、42 处精确源码引用，覆盖 OrbbecSDK 2.9.0 的 EGO Linux x86_64 C++ 示例与 RK3576 设备端 libobkit C 示例。`sdk_evidence` 只解释对应构建包中的 API、示例和编译方法；设备、固件与整机镜像的实际兼容性仍须由 `check_software_support` 的精确证据确认。快速更新流程会核对原件哈希、构建日期、成员增删改、源码行与独立 Dev 问答复审。归档内其他平台、Android、BLE 和 Viewer 包仍未形成可回答事实，见 [SDK 覆盖审计](Knowledge_SDK/audit/coverage_gaps.md)及 [SDK Dev 问答复审](docs/reviews/2026-10-15-daq-sdk-dev-review.md)。这批 SDK 资料当前仅接入本机 Dev 测试；生产 `/daq/` 仍运行上述已发布版本。
 
 ## 接口边界
 

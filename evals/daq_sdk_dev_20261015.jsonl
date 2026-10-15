@@ -1,0 +1,6 @@
+{"id":"SDK_HOST_SYNC","question":"用 2026-09-29 的 OrbbecSDK 2.9.0 C++ 示例，EGO 多设备主从同步模式应该怎样检查并设置？"}
+{"id":"SDK_HOST_CALIB","question":"EGO 的 align_calib.yaml 和 imu_calib.yaml 怎么从 SDK 导出？"}
+{"id":"SDK_DEVICE_BUILD","question":"四目 EGO 设备端 libobkit 示例怎么编译和部署？它能和任意整机镜像搭配吗？"}
+{"id":"SDK_DEVICE_CAPTURE","question":"libobkit 的相机、IMU 和音频采集，在 C 示例里按什么顺序初始化和启动？"}
+{"id":"SDK_NEGATIVE_FW","question":"我的 EGO 固件是 1.1.8，可以肯定支持 SDK 多设备主从同步吗？"}
+{"id":"SDK_OLD_BUILD_SDCARD","question":"2026-09-23 的 OrbbecSDK 包里，EGO SD 卡文件服务是否已经提供 downloadSdcardFile？"}

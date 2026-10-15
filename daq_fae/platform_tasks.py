@@ -167,6 +167,8 @@ class DaqTaskOrchestrator:
                                        allowed_tools=allowed_tools),
                     system_prompt_path=self._prompt_path,
                     evidence_policy=DaqEvidencePolicy(
+                        allow_dev_source_check=(getattr(self._knowledge, 'sdk_catalog', None) is not None
+                                                and not getattr(self._knowledge.sdk_catalog, 'published', False)),
                         service_contract=prepared.service_contract if prepared else None,
                         answer_language=prepared.schema.answer_language if prepared else 'zh',
                         allowed_tools=allowed_tools,

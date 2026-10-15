@@ -33,7 +33,7 @@ def _entries(root: Path, *, enforce_modes: bool = False) -> list[tuple[str, Path
     files = []
 
     def walk(directory: Path) -> None:
-        if enforce_modes and stat.S_IMODE(directory.stat(follow_symlinks=False).st_mode) != 0o500:
+        if enforce_modes and stat.S_IMODE(directory.lstat().st_mode) != 0o500:
             raise ValueError("directory mode mismatch")
         with os.scandir(directory) as scanner:
             for entry in scanner:
@@ -63,7 +63,7 @@ def _safe_relative(name: str) -> Path:
 def verify_archive(destination: Path, expected_manifest_sha256: str | None = None) -> dict:
     if destination.is_symlink() or not destination.is_dir():
         raise ValueError("archive must be a real directory")
-    if stat.S_IMODE(destination.stat(follow_symlinks=False).st_mode) != 0o500:
+    if stat.S_IMODE(destination.lstat().st_mode) != 0o500:
         raise ValueError("archive mode mismatch")
     manifest_path = destination / "manifest.json"
     files_root = destination / "files"
@@ -71,7 +71,7 @@ def verify_archive(destination: Path, expected_manifest_sha256: str | None = Non
         raise ValueError("archive manifest missing or linked")
     if files_root.is_symlink() or not files_root.is_dir():
         raise ValueError("archive files directory missing or linked")
-    if stat.S_IMODE(manifest_path.stat(follow_symlinks=False).st_mode) != 0o400:
+    if stat.S_IMODE(manifest_path.lstat().st_mode) != 0o400:
         raise ValueError("manifest mode mismatch")
     if {path.name for path in destination.iterdir()} != {"manifest.json", "files"}:
         raise ValueError("unexpected archive root entry")

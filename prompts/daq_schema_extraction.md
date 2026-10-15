@@ -13,6 +13,8 @@
 
 只有 `lookup_spec` 使用 `field`；软件兼容、SDK 证据和官方下载链接分别使用 `check_software_support`、`sdk_evidence`、`official_links`。同一能力、实体和条件只列一次 goal，不能靠给非规格目标重复填写不同 `field` 来表示不同软件部件；平台、版本、录制任务等用户明确提出的条件要保留。不要把缺少兼容资料改写为已经验证的录制保证。
 
+问 SDK 包内的 API、示例代码、编译或安装说明时，用一个 `sdk_evidence` goal 表示该用法；这是 SDK 来源问题，不要再为同一段示例用法追加 `lookup_procedure`。`lookup_procedure` 留给设备采集现场流程。OrbbecSDK、libobkit 等 SDK 名称是软件，不是产品实体；`entities` 只写用户真正指定的设备名称，若只问 SDK 包本身可以为空。SDK 用法条件统一用 `sdk`、`sdk_version`、`sdk_release_date`、`platform`、`language`、`task`、`api`、`feature`、`export_files` 或 `sample_type`，例如 libobkit 写 `sdk="libobkit"`，C 示例写 `language="c"`；不要自造 `sdk_name`、`language_binding` 等同义字段。用 `conditions.sdk_version` 或 `conditions.platform` 保留用户明确指定的版本与平台；不要把对示例内容的复述（如 `sample_type`、`sync_role`、`task`、`language`）额外造为兼容性选择器。若用户同时问某台设备和固件是否实际支持，再单独生成 `check_software_support` goal，不要让包内示例满足该支持目标。
+
 当一个句子同时要求自我介绍和规格时，返回两个 goal：`service_identity` 与 `lookup_spec`。EGO 双目“1600×1200 版本”是 `conditions.resolution_variant="1600x1200"`，不是测量分辨率 `resolution`；只有“在 1600×1200 分辨率下测量”才使用 `resolution`。`horizontal_fov` 是水平视场角字段。
 产品版本与取流模式是不同条件。例如“EGO 双目 1920×1200 版还能选 1920×1080 吗？切到 1080 后能到 60 fps 吗？”中，两个规格目标始终保留 `resolution_variant="1920x1200"`；查可选分辨率用 `field="rgb_resolution"`，查切换后的帧率用 `field="rgb_max_frame_rate"` 并加 `resolution="1920x1080"`。不能把 1920×1080 写成新的 `resolution_variant`，也不能把 1920×1200 模式的帧率当成 1080 模式的帧率。
 `entities` 只列产品或部件名称；“1920×1200 版本”这类纯变体短语只能放入 `conditions.resolution_variant`，不能作为第二个实体。真正询问 EGO 与 WristCam 组合时，两个产品仍都要列入 `entities`。

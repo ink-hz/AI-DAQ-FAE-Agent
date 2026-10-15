@@ -1,0 +1,51 @@
+# SDK symbol index
+
+Generated from `SDK_Knowledge.jsonl`; source scope is recorded in each row.
+
+- **cancelSdcardFileOperation**: daq-sdk-host-sdcard-005, daq-sdk-host-sdcard-20260921, daq-sdk-host-sdcard-20260923
+- **clearDirectionKeyCallback**: daq-sdk-host-key-008
+- **CMakeLists.txt**: daq-sdk-host-build-010
+- **createNetDevice**: daq-sdk-host-depth-009, daq-sdk-host-sdcard-005, daq-sdk-host-sdcard-20260921, daq-sdk-host-sdcard-20260923
+- **DataAcquisitionDevice::fromDevice**: daq-sdk-host-audio-007, daq-sdk-host-fwlog-003
+- **downloadSdcardFile**: daq-sdk-host-sdcard-005, daq-sdk-host-sdcard-20260921, daq-sdk-host-sdcard-20260923
+- **enable_mask**: daq-sdk-device-capture-013
+- **getAvailablePresetList**: daq-sdk-host-depth-009
+- **getEgoState**: daq-sdk-host-state-006
+- **getFwRecordingDirectory**: daq-sdk-host-record-dir-004
+- **getFwRecordingFileName**: daq-sdk-host-record-dir-004
+- **getRawData**: daq-sdk-host-calib-002
+- **getRecordingSessionResult**: daq-sdk-host-state-006
+- **getSdcardFileList**: daq-sdk-host-sdcard-005, daq-sdk-host-sdcard-20260921, daq-sdk-host-sdcard-20260923
+- **getStreamProfileList**: daq-sdk-host-depth-009
+- **getSupportedMultiDeviceSyncModeBitmap**: daq-sdk-host-sync-001
+- **libobkit.so**: daq-sdk-device-scope-011
+- **loadPreset**: daq-sdk-host-depth-009
+- **make**: daq-sdk-device-build-012
+- **ob_capture_config_t**: daq-sdk-device-capture-013
+- **ob_capture_configure**: daq-sdk-device-capture-013
+- **ob_capture_deinit**: daq-sdk-device-capture-013
+- **ob_capture_init**: daq-sdk-device-capture-013
+- **ob_capture_start**: daq-sdk-device-capture-013
+- **ob_capture_stop**: daq-sdk-device-capture-013
+- **ob_ego_calib_yaml_export**: daq-sdk-host-build-010
+- **ob_ego_multi_device_sync**: daq-sdk-host-build-010
+- **ob_ego_sample**: daq-sdk-host-build-010
+- **ob_event_deinit**: daq-sdk-device-capture-013
+- **ob_event_init**: daq-sdk-device-capture-013
+- **ob_event_register**: daq-sdk-device-capture-013
+- **ob_event_unregister**: daq-sdk-device-capture-013
+- **OB_RAW_DATA_ALIGN_CALIB_YAML**: daq-sdk-host-calib-002
+- **OB_RAW_DATA_IMU_CALIB_YAML**: daq-sdk-host-calib-002
+- **OB_STRUCT_EGO_STATE_REPORT**: daq-sdk-host-state-006
+- **OB_STRUCT_MULTI_DEVICE_SYNC_CONFIG**: daq-sdk-host-sync-001
+- **playAudioFile**: daq-sdk-host-audio-007
+- **RK3576**: daq-sdk-device-scope-011
+- **RPATH**: daq-sdk-device-build-012
+- **setDirectionKeyCallback**: daq-sdk-host-key-008
+- **setEgoStateCallback**: daq-sdk-host-state-006
+- **setFwRecordingDirectory**: daq-sdk-host-record-dir-004
+- **setMultiDeviceSyncMode**: daq-sdk-host-sync-001
+- **startFirmwareLogExport**: daq-sdk-host-fwlog-003
+- **stopAudioPlayback**: daq-sdk-host-audio-007
+- **stopFirmwareLogExport**: daq-sdk-host-fwlog-003
+- **TOOLCHAIN_DIR**: daq-sdk-device-build-012

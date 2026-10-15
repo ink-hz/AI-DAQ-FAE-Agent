@@ -27,7 +27,7 @@ _TOOLS: dict[str, tuple[str, dict[str, dict], tuple[str, ...]]] = {
     "check_software_support": ("Check exact product, revision, connection, platform, software version and capability; include variant selectors in conditions.", {"entity": {"type": "string"}, "software": {"type": "string"}, "platform": {"type": "string"}, "version": {"type": "string"}, "hardware_revision": {"type": "string"}, "connection_mode": {"type": "string"}, "capability": {"type": "string"}, "conditions": {"type": "object"}}, ("entity", "software", "platform", "version", "hardware_revision", "connection_mode", "capability")),
     "read_doc": ("Read one authorized reviewed section by section_id; preserve its scope and conditions.", {"section_id": {"type": "string"}}, ("section_id",)),
     "search_knowledge": ("Find authorized reviewed sections and uncovered records by natural-language query; use read_doc for a full section. Retrieval relevance does not certify a typed fact.", {"query": {"type": "string"}}, ("query",)),
-    "sdk_evidence": ("Find reviewed SDK evidence for DAQ products and combinations.", {"query": {"type": "string"}}, ("query",)),
+    "sdk_evidence": ("Find source-checked SDK API and example usage. Usage evidence does not certify a device or firmware combination; exact support requires all software selectors and device tests.", {"query": {"type": "string"}}, ("query",)),
     "official_links": ("Find authorized and verified official DAQ links.", {"query": {"type": "string"}}, ("query",)),
     "experience": ("Find reviewed field cases and diagnostic experience; not product specifications.", {"query": {"type": "string"}}, ("query",)),
     "risk": ("Find reviewed operating and data integrity risks for an acquisition setup.", {"query": {"type": "string"}}, ("query",)),
@@ -37,6 +37,31 @@ _TOOLS: dict[str, tuple[str, dict[str, dict], tuple[str, ...]]] = {
 
 def _identity_text(value: str) -> str:
     return re.sub(r'\s+', '', unicodedata.normalize('NFKC', value).casefold().replace('×', 'x'))
+
+
+def _sdk_usage_descriptor_matches(value: str, row: dict) -> bool:
+    """Match a descriptive SDK goal against source reviewed tags and API names."""
+    labels = [str(item) for key in ("usage_tasks", "topics", "symbols")
+              for item in row.get(key, []) if isinstance(item, str)]
+    def normalized(text: str) -> str:
+        return re.sub(r"\bsd[_\s-]?card(?![a-z])", "sdcard", text.casefold())
+    if _identity_text(normalized(value)) in {
+            _identity_text(normalized(label)) for label in labels}:
+        return True
+    aliases = {
+        "initialization": "init", "initialize": "init", "initialise": "init",
+        "initializing": "init", "startup": "start", "starting": "start",
+        "stopping": "stop", "configuration": "config", "configure": "config",
+        "compilation": "build", "compile": "build",
+    }
+    ignored = {"and", "the", "of", "order", "sequence", "how", "to", "example", "sample"}
+    def tokens(text: str) -> set[str]:
+        return {aliases.get(token, token) for token in re.findall(r"[a-z0-9]+", normalized(text))
+                if token not in ignored}
+    wanted = tokens(value)
+    known = tokens(" ".join(labels))
+    overlap = wanted & known
+    return len(wanted) >= 2 and len(overlap) >= 2 and len(overlap) * 5 >= len(wanted) * 3
 
 
 def _entity_identity_labels(row: dict) -> set[str]:
@@ -177,6 +202,41 @@ class DaqToolBox:
                 "reason": "empty_knowledge_release", "query": dict(arguments),
                 "claim_status": "unknown", "matches": [],
             })
+        if name == "sdk_evidence" and getattr(self.knowledge, "sdk_catalog", None) is not None \
+                and not all(arguments.get(key) for key in (
+                    "entity", "software", "platform", "version", "hardware_revision",
+                    "connection_mode", "capability")):
+            query = arguments.get("query")
+            if not isinstance(query, str) or not query.strip() or len(query) > MAX_QUERY_CHARS:
+                return ToolResult(status="tool_error", content={"error": "invalid_tool_arguments"})
+            matches = self.knowledge.sdk_catalog.search(self.question or query, self.role)
+            if not matches:
+                return ToolResult(status="not_found", content={
+                    "release_id": self.knowledge.release_id,
+                    "reason": "source_checked_sdk_usage_unavailable",
+                    "claim_status": "unknown", "device_support": "unknown",
+                    "matches": [], "matched_requirement_ids": [],
+                })
+            return ToolResult(status="ok", content={
+                "release_id": self.knowledge.release_id,
+                "sdk_catalog_sha256": self.knowledge.sdk_catalog.manifest["records_sha256"],
+                "evidence_scope": "sdk_usage_only", "device_support": "unknown",
+                "matches": [{key: row[key] for key in (
+                    "kb_id", "title", "answer", "sdk_layer", "doc_type", "version",
+                    "build", "platform", "symbols", "code_tokens", "confidence", "last_verified")}
+                    for row in matches],
+                "matched_requirement_ids": self._sdk_usage_requirement_ids(matches),
+            }, sources=[{
+                "type": "daq_governed_sdk" if getattr(
+                    self.knowledge.sdk_catalog, "published", False)
+                    else "daq_sdk_source_checked",
+                "verification_status": "verified" if getattr(
+                    self.knowledge.sdk_catalog, "published", False)
+                    else "source_checked",
+                "release_id": getattr(self.knowledge.sdk_catalog, "release_id",
+                                      self.knowledge.release_id),
+                "source_id": row["kb_id"], "source_refs": row["source_refs"],
+            } for row in matches])
         scope_normalized = False
         completed_claim_conditions = {}
         question_targets = {}
@@ -783,6 +843,98 @@ class DaqToolBox:
             if name in {"lookup_spec", "check_software_support", "lookup_procedure"} or \
                     str(arguments.get("query") or arguments.get("text") or "").strip():
                 ids.append(requirement["id"])
+        return sorted(set(ids))
+
+    def _sdk_usage_requirement_ids(self, matches: list[dict]) -> list[str]:
+        """Certify only exact SDK usage scopes, never device support selectors."""
+        ids = []
+        for requirement in self.requirements:
+            if not isinstance(requirement, dict) or requirement.get("capability") != "sdk_evidence":
+                continue
+            if requirement.get("conditions_authority") == "platform_context_unverified" or \
+                    requirement.get("reason") == "intent_or_entity_not_grounded":
+                continue
+            raw_conditions = requirement.get("conditions") or {}
+            if not isinstance(raw_conditions, dict):
+                continue
+            aliases = {
+                "sdk_name": "sdk", "software": "sdk",
+                "language_binding": "language", "sdk_language": "language",
+                "binding_language": "language", "sdk_build": "sdk_release_date",
+                "build_date": "sdk_release_date",
+            }
+            conditions = {}
+            for key, value in raw_conditions.items():
+                canonical = aliases.get(key, key)
+                if canonical in conditions and conditions[canonical] != value:
+                    conditions = None
+                    break
+                conditions[canonical] = value
+            if conditions is None or set(conditions) - {
+                    "sdk_version", "sdk_release_date", "platform", "language", "sample_type",
+                    "sdk", "task", "api", "export_files", "feature",
+            }:
+                continue
+            entities = requirement.get("entities") or []
+            if not isinstance(entities, list):
+                continue
+            for row in matches:
+                labels = ({"ego", "orbbecsdk", "orbbecsdk2.9.0"}
+                          if row["sdk_layer"] == "host_cpp" else
+                          {"四目ego", "libobkit", "rk3576"})
+                if any(_identity_text(str(entity)) not in labels for entity in entities):
+                    continue
+                if ("sdk_version" in conditions and
+                        str(conditions["sdk_version"]) != row["version"] and
+                        re.sub(r"\D", "", str(conditions["sdk_version"])) != row["build"]):
+                    continue
+                if ("sdk_release_date" in conditions and
+                        re.sub(r"\D", "", str(conditions["sdk_release_date"])) != row["build"]):
+                    continue
+                if ("platform" in conditions and
+                        _identity_text(str(conditions["platform"])) not in
+                        _identity_text(row["platform"]) and not (
+                            str(conditions["platform"]) == "device_side" and
+                            row["sdk_layer"] == "device_c") and not (
+                            str(conditions["platform"]) == "host_side" and
+                            row["sdk_layer"] == "host_cpp")):
+                    continue
+                expected_sdk = "orbbecsdk" if row["sdk_layer"] == "host_cpp" else "libobkit"
+                sdk_name = _identity_text(str(conditions.get("sdk", "")))
+                if sdk_name and sdk_name != expected_sdk:
+                    continue
+                if ("api" in conditions and
+                        _identity_text(str(conditions["api"])) not in {
+                            _identity_text(symbol) for symbol in row.get("symbols", [])}):
+                    continue
+                if ("feature" in conditions and not _sdk_usage_descriptor_matches(
+                        str(conditions["feature"]), row)):
+                    continue
+                export_files = conditions.get("export_files", [])
+                if (not isinstance(export_files, list) or
+                        any(not isinstance(name, str) or name not in row.get("outputs", [])
+                            for name in export_files)):
+                    continue
+                requested_tasks = conditions.get("task", [])
+                requested_tasks = ([requested_tasks] if isinstance(requested_tasks, str)
+                                   else requested_tasks)
+                if (not isinstance(requested_tasks, list) or
+                        any(not isinstance(task, str) or
+                            not _sdk_usage_descriptor_matches(task, row)
+                            for task in requested_tasks)):
+                    continue
+                language = _identity_text(str(conditions.get("language", "")))
+                if language in {"c++", "cxx", "cplusplus"}:
+                    language = "cpp"
+                if language and language != ("cpp" if row["sdk_layer"] == "host_cpp" else "c"):
+                    continue
+                if ("sample_type" in conditions and
+                        (conditions["sample_type"] != "official_example"
+                         or row["doc_type"] != "example")):
+                    continue
+                if isinstance(requirement.get("id"), str):
+                    ids.append(requirement["id"])
+                break
         return sorted(set(ids))
 
     @staticmethod

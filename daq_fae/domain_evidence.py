@@ -104,6 +104,7 @@ class DaqEvidenceSession:
         self.variant_selector_missing = False
         self._observed_user_sources = {item.id: set() for item in requirements}
         self._internal_provenance: set[str] = set()
+        self._public_sdk_symbols: set[str] = set()
         self.allow_dev_source_check = allow_dev_source_check
         self.answer_language = answer_language
         self.allowed_chinese_terms = allowed_chinese_terms
@@ -137,6 +138,17 @@ class DaqEvidenceSession:
         if result.status == "ok":
             for match in content.get("matches", []):
                 if isinstance(match, dict):
+                    if tool_name == "sdk_evidence":
+                        sdk_tokens = []
+                        for field in ("symbols", "code_tokens"):
+                            values = match.get(field, [])
+                            if isinstance(values, list):
+                                sdk_tokens.extend(values)
+                        self._public_sdk_symbols.update(
+                            symbol.casefold() for symbol in sdk_tokens
+                            if isinstance(symbol, str) and
+                            re.fullmatch(r"[A-Za-z][A-Za-z0-9_:]*", symbol)
+                        )
                     for value in (match.get("id"), (match.get("data") or {}).get("field")):
                         if isinstance(value, str) and value:
                             self._internal_provenance.add(value.casefold())
@@ -150,8 +162,12 @@ class DaqEvidenceSession:
                 if isinstance(release_id, str) and release_id:
                     self._internal_provenance.add(release_id.casefold())
                 for ref in source.get("source_refs", []):
-                    if isinstance(ref, dict) and isinstance(ref.get("path"), str):
-                        self._internal_provenance.add(ref["path"].casefold())
+                    if isinstance(ref, dict):
+                        if isinstance(ref.get("path"), str):
+                            self._internal_provenance.add(ref["path"].casefold())
+                        if isinstance(ref.get("member"), str):
+                            self._internal_provenance.add(ref["member"].casefold())
+                            self._internal_provenance.add(ref["member"].rsplit("/", 1)[-1].casefold())
         matched = content.get("matched_requirement_ids", [])
         matched_ids = set(matched) if isinstance(matched, list) and all(
             isinstance(value, str) for value in matched
@@ -226,7 +242,11 @@ class DaqEvidenceSession:
             submission.next_steps, submission.missing, submission.pending_confirmation,
             submission.handoff_reason, submission.unresolved_constraints,
         ) if value).casefold()
-        if (re.search(r'\b[a-z]+(?:_[a-z]+)+\b', prose)
+        code_scan = prose
+        for symbol in sorted(self._public_sdk_symbols, key=len, reverse=True):
+            code_scan = re.sub(r'(?<![a-z0-9_])' + re.escape(symbol) +
+                               r'(?![a-z0-9_])', '', code_scan)
+        if (re.search(r'\b[a-z]+(?:_[a-z]+)+\b(?!\.[a-z0-9]+)', code_scan)
                 or re.search(r'\b(?:claim|entity|topology|procedure|software|link):[a-z0-9_.:-]+', prose)
                 or any(token in prose for token in self._internal_provenance)):
             return EvidenceDecision(
@@ -307,9 +327,10 @@ class DaqEvidenceSession:
 def _has_governed_source(result: ToolResult, *, allow_dev_source_check: bool = False) -> bool:
     return any(
         isinstance(source, dict)
-        and ((source.get("type") == "daq_governed_claim"
+        and ((source.get("type") in {"daq_governed_claim", "daq_governed_sdk"}
               and source.get("verification_status") == "verified")
-             or (allow_dev_source_check and source.get("type") == "daq_dev_source_checked_claim"
+             or (allow_dev_source_check and source.get("type") in {
+                 "daq_dev_source_checked_claim", "daq_sdk_source_checked"}
                  and source.get("verification_status") == "source_checked"))
         and isinstance(source.get("release_id"), str)
         and bool(source["release_id"].strip())
