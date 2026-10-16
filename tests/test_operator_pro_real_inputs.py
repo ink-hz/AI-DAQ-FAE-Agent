@@ -39,9 +39,9 @@ def _json(path: Path) -> dict:
 def test_current_25_records_and_pro_rows_formal_loader_static_sentinel(tmp_path):
     assert PRO_BASELINE_RELEASE == CURRENT_PROD_RELEASE
     paths = (ORIGIN, ARCHIVE / 'manifest.json',
-             PRIVATE / 'pro-offline-reviewed-graph-v4/dependency-bundle.json',
-             PRIVATE / 'v4-pro-reviewed-records-prod-ee908.json',
-             PRIVATE / 'dev-source-checked-pro-offline-v4.json')
+             PRIVATE / 'pro-offline-reviewed-graph-v5/dependency-bundle.json',
+             PRIVATE / 'v5-pro-reviewed-records-prod-ee908.json',
+             PRIVATE / 'dev-source-checked-pro-offline-v5.json')
     if any(not path.is_file() for path in paths):
         pytest.skip('private reviewed originals absent from this checkout')
     origin = _json(ORIGIN)
@@ -51,6 +51,8 @@ def test_current_25_records_and_pro_rows_formal_loader_static_sentinel(tmp_path)
     assert len(prep['records']) == 2
     topology = next(row for row in prep['records'] if row['kind'] == 'topology')
     assert topology['data']['sync_target'] == 'unknown'
+    assert any('外部移动电源' in connection and 'Device' in connection
+               for connection in topology['data']['connections'])
     procedure = next(row for row in prep['records'] if row['kind'] == 'procedure')
     steps = '\n'.join(procedure['data']['steps'])
     assert '设备已就绪 / Device ready' in steps

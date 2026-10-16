@@ -24,7 +24,7 @@ MODE_PRO_V2 = 'owner_directed_source_checked_v2'
 PRO_BASELINE_RELEASE = 'ee9083f9891630f6727766c276e6dc123ab0b6b79641dada133159871eeaacdb'
 PRO_BASELINE_COUNT = 25
 PRO_RECORD_FINGERPRINTS = {
-    'topology:ego-pro-standalone': 'a83ad704af0da3877648f40d2f41df781c4aa3d402ee86ae0235f39a5da61bee',
+    'topology:ego-pro-standalone': '95807c6f34035c01da25a060cb149d4c02176a993ede0c804ac0ff62cb79fb76',
     'procedure:ego-pro-standalone': '95ae04f96d4a248c3ce2d22366095aa4eae138e3be44d43b167acc85908eee80',
 }
 PRO_SOURCE_REF = {
