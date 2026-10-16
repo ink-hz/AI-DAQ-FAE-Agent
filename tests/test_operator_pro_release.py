@@ -23,13 +23,55 @@ def _proposal(tmp_path, monkeypatch):
     previous = op.stage_operator_release(root, refreshed, archive, old_report,
                                          runtime_release='fae-runtime-2', upstream_sha='a' * 40)
     releases._write_active_pointer(root, previous)
-    prep_path = (Path(__file__).resolve().parents[1] /
-                 'data/knowledge/curated/topology-procedure-review-20261016/'
-                 'v4-pro-reviewed-records-prod-ee908.json')
-    if not prep_path.is_file():
-        pytest.skip('private reviewed Pro records absent from this checkout')
-    prep = json.loads(prep_path.read_text())
-    added = deepcopy(prep['records'])
+    # Purely synthetic rows keep the release contract covered in clean CI.
+    # The separate real-input sentinel binds the private Pro source and hash.
+    added = [
+        {
+            'id': 'topology:ego-pro-standalone', 'kind': 'topology',
+            'status': 'verified',
+            'scope': {'product': 'ego-1600', 'mode': 'standalone',
+                      'firmware_version': 'unknown'},
+            'source_refs': [],
+            'data': {
+                'members': ['entity:ego-1600'],
+                'roles': {'entity:ego-1600': 'recorder'},
+                'connections': [], 'power': {'entity:ego-1600': 'internal battery'},
+                'platform': 'standalone', 'sync_target': 'unknown',
+                'storage': 'EGO 1600 TF card',
+                'firmware_version': 'unknown',
+                'retrieval_aliases': ['单机独立采集', 'standalone'],
+                'evidence_conditions': {
+                    'host_connection': 'none', 'standalone': True,
+                    'task': 'standalone_capture',
+                    'topology_aspects': ['power', 'connection', 'storage'],
+                },
+            },
+        },
+        {
+            'id': 'procedure:ego-pro-standalone', 'kind': 'procedure',
+            'status': 'verified',
+            'scope': {'product': 'ego-1600', 'mode': 'standalone',
+                      'firmware_version': 'unknown'},
+            'source_refs': [],
+            'data': {
+                'task': '录制单机 EGO Pro 数据',
+                'topology_id': 'topology:ego-pro-standalone',
+                'prerequisites': ['设备断电时插入 TF 卡'],
+                'steps': ['断电插卡', '开机', '开始录制', '停止录制'],
+                'checks': ['停止后确认保存'], 'failure_branches': [],
+                'firmware_version': 'unknown',
+                'retrieval_aliases': ['本机 TF 卡独立录制', '独立录制'],
+                'task_intents': ['recording', 'local_recording'],
+                'evidence_conditions': {
+                    'host_connection': 'none', 'standalone': True,
+                    'recording_mode': 'local_tf_card', 'storage': 'tf_card',
+                    'steps': ['insert_card_power_off', 'power_on',
+                              'start_recording', 'stop_recording'],
+                    'indicators': ['voice_prompt', 'green_led'],
+                },
+            },
+        },
+    ]
     for row in added:
         row['source_refs'] = [deepcopy(base['records'][0]['source_refs'][0])]
     added[0]['data']['members'] = ['entity:ego-1600']
@@ -37,6 +79,12 @@ def _proposal(tmp_path, monkeypatch):
     added[0]['data']['power'] = {'entity:ego-1600': 'internal battery'}
     added[1]['data']['topology_id'] = added[0]['id']
     for row in added:
+        row['fact_review'] = {'reviewer': 'synthetic-source-review',
+                              'reviewed_at': '2026-10-16'}
+        row['access_review'] = {'reviewer': 'synthetic-access-review',
+                                'reviewed_at': '2026-10-16',
+                                'view_roles': ['internal_fae'],
+                                'forward_roles': ['internal_fae']}
         row['fact_review']['record_sha256'] = record_fingerprint(row)
         row['access_review']['record_sha256'] = access_fingerprint(row)
     fingerprints = {row['id']: record_fingerprint(row) for row in added}
