@@ -2,14 +2,17 @@
 
 Generated from `SDK_Knowledge.jsonl`; source scope is recorded in each row.
 
+- **android**: daq-sdk-android-fwlog-017, daq-sdk-android-record-state-019, daq-sdk-android-sdcard-018
 - **audio**: daq-sdk-device-capture-013, daq-sdk-host-audio-007
+- **ble**: daq-sdk-ble-linux-install-021, daq-sdk-ble-windows-install-020
 - **build**: daq-sdk-device-build-012, daq-sdk-host-build-010
 - **calibration**: daq-sdk-host-calib-002
-- **callback**: daq-sdk-host-key-008, daq-sdk-host-state-006
+- **callback**: daq-sdk-android-fwlog-017, daq-sdk-android-record-state-019, daq-sdk-host-key-008, daq-sdk-host-net-uid-hotplug-016, daq-sdk-host-state-006
 - **camera**: daq-sdk-device-capture-013
 - **capture**: daq-sdk-device-capture-013
 - **cmake**: daq-sdk-host-build-010
 - **compatibility**: daq-sdk-device-scope-011
+- **demo**: daq-sdk-ble-linux-install-021
 - **depth**: daq-sdk-host-depth-009
 - **device_side**: daq-sdk-device-scope-011
 - **diagnostics**: daq-sdk-host-fwlog-003
@@ -17,21 +20,31 @@ Generated from `SDK_Knowledge.jsonl`; source scope is recorded in each row.
 - **download**: daq-sdk-host-sdcard-005, daq-sdk-host-sdcard-20260921, daq-sdk-host-sdcard-20260923
 - **examples**: daq-sdk-host-build-010
 - **export**: daq-sdk-host-calib-002
+- **file_transfer**: daq-sdk-android-sdcard-018
 - **firmware_gate**: daq-sdk-host-sync-001
-- **firmware_log**: daq-sdk-host-fwlog-003
+- **firmware_log**: daq-sdk-android-fwlog-017, daq-sdk-host-fwlog-003
+- **framework**: daq-sdk-ios-framework-022
+- **hotplug**: daq-sdk-host-net-uid-hotplug-016
 - **image_binding**: daq-sdk-device-scope-011
 - **imu**: daq-sdk-device-capture-013, daq-sdk-host-calib-002
+- **install**: daq-sdk-ble-linux-install-021, daq-sdk-ble-windows-install-020, daq-sdk-ios-framework-022
+- **ios**: daq-sdk-ios-framework-022
 - **key**: daq-sdk-host-key-008
 - **lifecycle**: daq-sdk-device-capture-013
+- **link**: daq-sdk-ble-windows-install-020
+- **linux**: daq-sdk-ble-linux-install-021
 - **multi_device**: daq-sdk-host-sync-001
-- **network**: daq-sdk-host-depth-009, daq-sdk-host-sdcard-005, daq-sdk-host-sdcard-20260921, daq-sdk-host-sdcard-20260923
+- **network**: daq-sdk-host-depth-009, daq-sdk-host-net-uid-hotplug-016, daq-sdk-host-sdcard-005, daq-sdk-host-sdcard-20260921, daq-sdk-host-sdcard-20260923
 - **playback**: daq-sdk-host-audio-007
 - **preset**: daq-sdk-host-depth-009
 - **profile**: daq-sdk-host-depth-009
 - **readback**: daq-sdk-host-record-dir-004
-- **recording**: daq-sdk-host-record-dir-004, daq-sdk-host-state-006
+- **recording**: daq-sdk-android-record-state-019, daq-sdk-host-record-dir-004, daq-sdk-host-state-006
 - **runtime_library**: daq-sdk-device-build-012
-- **sdcard**: daq-sdk-host-sdcard-005, daq-sdk-host-sdcard-20260921, daq-sdk-host-sdcard-20260923
-- **state**: daq-sdk-host-state-006
+- **sdcard**: daq-sdk-android-sdcard-018, daq-sdk-host-sdcard-005, daq-sdk-host-sdcard-20260921, daq-sdk-host-sdcard-20260923
+- **simulator**: daq-sdk-ios-framework-022
+- **state**: daq-sdk-android-record-state-019, daq-sdk-host-state-006
 - **sync**: daq-sdk-host-sync-001
 - **toolchain**: daq-sdk-device-build-012
+- **uid**: daq-sdk-host-net-uid-hotplug-016
+- **windows**: daq-sdk-ble-windows-install-020

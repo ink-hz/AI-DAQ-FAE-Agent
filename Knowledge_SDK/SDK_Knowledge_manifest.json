@@ -2,6 +2,24 @@
   "archive_manifest_sha256": "56b3c4411956290c3d9bc1dacbccc228e97f489feae649f9389a8a09303bd211",
   "format_version": "daq-sdk-source-checked/v1",
   "packages": {
+    "android_java_20260929": {
+      "archive_path": "SDK/SDK&OrbbecViewer_v2.9.0_20260929/Android/OrbbecSDK-Android-Wrapper-beta2.2.5-202609292240.zip",
+      "build": "20260929",
+      "sha256": "8a64e45abd85dada803b2ef03356779883f4f7b53cb21cecb3721596063d9642",
+      "version": "beta2.2.5"
+    },
+    "ble_linux_20260929": {
+      "archive_path": "SDK/SDK&OrbbecViewer_v2.9.0_20260929/linux/EgoLowBle-linux-x64-1.1.8.zip",
+      "build": "20260929",
+      "sha256": "437b93e55296288fba76777a504741b1c477dc597975e123acf6c11d3dd32cb4",
+      "version": "1.1.8"
+    },
+    "ble_windows_20260929": {
+      "archive_path": "SDK/SDK&OrbbecViewer_v2.9.0_20260929/windows/EgoLowBle-windows-x64-1.1.8.zip",
+      "build": "20260929",
+      "sha256": "92e6eb637d663ff92f184c8f68142102acd1302425eee49ea7df09def6525b36",
+      "version": "1.1.8"
+    },
     "device_c_20260909": {
       "archive_path": "SDK/设备端SDK-四目EGO使用/四目设备SDK/libobkit.20260909_6a23309c.tar.gz",
       "build": "20260909",
@@ -25,9 +43,15 @@
       "build": "20260929",
       "sha256": "1f44085be2283d41fc295b3c804cd89a2c856ad343d11f6dc674d64cf04a90f9",
       "version": "2.9.0"
+    },
+    "ios_framework_20260929": {
+      "archive_path": "SDK/SDK&OrbbecViewer_v2.9.0_20260929/ios/OrbbecSDK_v2.9.0_202609292146_7947205ab_iOS_OS64.tar.gz",
+      "build": "20260929",
+      "sha256": "9ecdcb604a44c82878bf01a3b7a5242de0c406a0478e94d28458ec902b242668",
+      "version": "2.9.0"
     }
   },
-  "record_count": 15,
-  "records_sha256": "220a7aa608a21877b883dac342549ae24f7e4060803c68c50ff37961bb03daaa",
-  "source_ref_count": 42
+  "record_count": 22,
+  "records_sha256": "414756403d3e87b34dc0f94d6c7f697ecd097aa76535c12b9f2382dd0b896627",
+  "source_ref_count": 55
 }

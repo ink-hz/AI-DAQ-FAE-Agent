@@ -185,6 +185,43 @@ def test_peer_variant_is_not_copied_to_other_product_or_comparison():
         })
 
 
+def test_generic_ego_output_modes_do_not_become_reviewed_variant_selectors():
+    from daq_fae.task_context import prepare_turn
+    question = ('泛称 EGO 是否支持 1600×1300@30？能否因此说它只支持 '
+                '1600×1200？请按已核对的机型、变体、固件与构建范围回答。')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'medium', 'goals': [
+            {'kind': 'product', 'capability': 'lookup_spec',
+             'entities': ['EGO'], 'field': 'rgb_max_frame_rate',
+             'conditions': {'resolution_variant': '1600x1300'}},
+            {'kind': 'product', 'capability': 'lookup_spec',
+             'entities': ['EGO'], 'field': 'resolution_options',
+             'conditions': {}},
+        ],
+    })
+    assert len(schema.goals) == 2
+    assert schema.goals[0].condition_map()['resolution_variant'] == '1600x1300'
+    assert 'resolution_variant' in schema.goals[0].unmapped_condition_keys
+    assert schema.goals[1].condition_map() == {}
+    assert prepare_turn(question, request_schema=schema).requirements[0]['reason'] == \
+        'unmapped_condition_unverified'
+
+
+def test_generic_ego_output_mode_cannot_borrow_published_1200_variant():
+    question = 'EGO 只支持 1600×1200 吗？1600×1300@30 能不能用？'
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'medium', 'goals': [
+            {'kind': 'product', 'capability': 'lookup_spec',
+             'entities': ['EGO'], 'field': 'rgb_max_frame_rate',
+             'conditions': {'resolution_variant': '1600x1200'}},
+            {'kind': 'product', 'capability': 'lookup_spec',
+             'entities': ['EGO'], 'field': 'resolution_options',
+             'conditions': {}},
+        ],
+    })
+    assert 'resolution_variant' in schema.goals[0].unmapped_condition_keys
+
+
 def test_single_ego_variant_does_not_scope_unrelated_umi_goal():
     question = ('EGO 双目 1920×1200 版的水平视角和帧率是多少？'
                 'UMI Finger 的双目 Mono 分辨率呢？')
@@ -1530,3 +1567,75 @@ def test_schema_retry_is_bounded_and_invalid_candidate_is_not_hidden():
     with pytest.raises(SchemaExtractionError, match='schema_goals_invalid'):
         extract_request_schema('EgoViewer 是什么？', adapter=invalid)
     assert len(invalid.calls) == 2
+
+
+def test_schema_retries_uncontrolled_topology_key_then_keeps_evidence_debt():
+    question = 'EGO Pro 单机采集的供电拓扑是什么？'
+    def event(conditions):
+        return [{'type': 'tool_call', 'name': 'submit_daq_request_schema',
+                 'arguments': {'confidence': 'high', 'goals': [{
+                     'kind': 'product', 'capability': 'inspect_topology',
+                     'entities': ['EGO Pro'], 'conditions': conditions}]}}]
+    adapter = SequencedSchemaAdapter([
+        event({'scene_mode': 'standalone'}),
+        event({'standalone': True, 'topology_aspects': ['power']}),
+    ])
+    schema = extract_request_schema(question, adapter=adapter)
+    assert len(adapter.calls) == 2
+    assert '未受控的条件键' in adapter.calls[1][0][0]['content']
+    correction = adapter.calls[1][0][0]['content'].split('上一次使用了未受控的条件键。', 1)[1]
+    assert 'sdk_version' in correction
+    assert schema.goals[0].unmapped_condition_keys == ()
+    repeated = SequencedSchemaAdapter([
+        event({'scene_mode': 'standalone'}),
+        event({'scene_mode': 'standalone'}),
+    ])
+    unresolved = extract_request_schema(question, adapter=repeated)
+    assert len(repeated.calls) == 2
+    assert unresolved.goals[0].unmapped_condition_keys == ('scene_mode',)
+    from daq_fae.task_context import prepare_turn
+    assert prepare_turn(question, request_schema=unresolved).requirements[0]['reason'] == \
+        'unmapped_condition_unverified'
+
+
+def test_schema_step_codes_keep_uncovered_procedures_expressible_and_retry_once():
+    from daq_fae.request_schema import _SCHEMA_TOOL
+    step_schema = _SCHEMA_TOOL['function']['parameters']['properties']['goals'][
+        'items']['properties']['conditions']['properties']['steps']
+    assert step_schema['items']['type'] == 'string'
+    assert 'enum' not in step_schema['items']
+    question = 'EGO Pro 单机录制时，断电插卡、开机、开始和停止录制的步骤是什么？'
+    def event(steps):
+        return [{'type': 'tool_call', 'name': 'submit_daq_request_schema',
+                 'arguments': {'confidence': 'high', 'goals': [{
+                     'kind': 'product', 'capability': 'lookup_procedure',
+                     'entities': ['EGO Pro'], 'conditions': {'steps': steps},
+                 }]}}]
+    adapter = SequencedSchemaAdapter([
+        event(['insert_card_while_on']),
+        event(['insert_card_power_off', 'power_on',
+               'start_recording', 'stop_recording']),
+    ])
+    schema = extract_request_schema(question, adapter=adapter)
+    assert len(adapter.calls) == 2
+    correction = adapter.calls[1][0][0]['content'].split('步骤值未通过核验。', 1)[1]
+    assert 'insert_card_power_off' in correction
+    assert '其他设备' in correction
+    assert schema.goals[0].unmapped_condition_keys == ()
+    repeated = SequencedSchemaAdapter([
+        event(['insert_card_while_on']), event(['insert_card_while_on']),
+    ])
+    unresolved = extract_request_schema(question, adapter=repeated)
+    assert len(repeated.calls) == 2
+    assert unresolved.goals[0].unmapped_condition_keys == ('steps',)
+    combo = DaqRequestSchema.from_candidate(
+        'EGO 和 WristCam 通过 HUB 时，怎样配对并启动组开流？', {
+            'confidence': 'high', 'goals': [{
+                'kind': 'product', 'capability': 'lookup_procedure',
+                'entities': ['EGO', 'WristCam', 'HUB'],
+                'conditions': {'steps': ['pair_wristcam', 'start_group_stream']},
+            }],
+        })
+    assert combo.goals[0].condition_map()['steps'] == [
+        'pair_wristcam', 'start_group_stream']
+    assert combo.goals[0].unmapped_condition_keys == ('steps',)

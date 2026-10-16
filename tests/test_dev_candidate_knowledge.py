@@ -8,6 +8,7 @@ from daq_fae.domain_evidence import DaqEvidencePolicy, question_requirements
 from daq_fae.domain_tools import DaqToolBox
 from daq_fae.knowledge.dev_candidate import DevCandidateKnowledge
 from daq_fae.knowledge.records import record_fingerprint
+from daq_fae.request_schema import DaqRequestSchema
 from daq_fae.task_context import prepare_turn
 from src.agent.loop.answer_contract import AnswerSubmission
 
@@ -172,6 +173,336 @@ def test_candidate_preview_keeps_loose_public_key_discovery():
     assert result.content['matches'][0]['id'] == 'entity:hub'
 
 
+def test_source_checked_standalone_tools_accept_natural_pro_queries_without_combo_leak():
+    ref = {'path': 'pro.md', 'sha256': 'a' * 64,
+           'locator': {'kind': 'lines', 'start': 54, 'end': 90}}
+    entity = {'id': 'entity:ego-pro', 'kind': 'entity', 'status': 'verified',
+              'scope': {'product': 'ego-pro'},
+              'data': {'name': 'EGO Pro', 'entity_type': 'device'}, 'source_refs': [ref]}
+    topology = {'id': 'topology:ego-pro-standalone', 'kind': 'topology',
+                'status': 'verified', 'scope': {'product': 'ego-pro', 'mode': 'standalone'},
+                'data': {'members': [entity['id']], 'roles': {entity['id']: 'recorder'},
+                         'connections': [], 'power': {entity['id']: 'internal battery'},
+                         'platform': 'standalone', 'sync_target': 'local streams',
+                         'storage': 'TF card',
+                         'evidence_conditions': {
+                             'host_connection': 'none', 'standalone': True,
+                             'topology_aspects': ['power', 'connection', 'storage']},
+                         'retrieval_aliases': ['单机独立采集', '不连接电脑或手机']},
+                'source_refs': [ref]}
+    procedure = {'id': 'procedure:ego-pro-standalone', 'kind': 'procedure',
+                 'status': 'verified', 'scope': topology['scope'],
+                 'data': {'task': '录制单机 EGO Pro 数据', 'topology_id': topology['id'],
+                          'prerequisites': ['断电插卡'], 'steps': ['开机', '录制', '停止'],
+                          'checks': ['绿灯常亮'], 'failure_branches': [],
+                          'evidence_conditions': {
+                              'recording_mode': 'local_tf_card',
+                              'standalone': True, 'storage': 'tf_card',
+                              'steps': ['insert_card_power_off', 'power_on',
+                                        'start_recording', 'stop_recording'],
+                              'indicators': ['voice_prompt', 'green_led']},
+                          'retrieval_aliases': ['本机 TF 卡独立录制'],
+                          'task_intents': ['recording', 'capture', 'local_recording']},
+                 'source_refs': [ref]}
+    knowledge = DevCandidateKnowledge('candidate-dev-' + 'a' * 64, [],
+                                      [entity, topology, procedure], {},
+                                      candidate_entities=[
+                                          {'id': 'entity:hub', 'kind': 'entity',
+                                           'scope': {'product': 'hub'},
+                                           'data': {'name': '数采 HUB', 'aliases': []}},
+                                          {'id': 'entity:wristcam', 'kind': 'entity',
+                                           'scope': {'product': 'wristcam'},
+                                           'data': {'name': 'WristCam', 'aliases': []}},
+                                      ])
+    box = DaqToolBox(knowledge=knowledge, role='internal_fae')
+    topology_query = 'EGO Pro 四目 standalone 不连接电脑或手机 单机独立采集 供电 连接 存储拓扑'
+    topology_result = box.dispatch('inspect_topology', {'query': topology_query})
+    assert topology_result.status == 'ok'
+    assert [row['id'] for row in topology_result.content['matches']] == [topology['id']]
+    procedure_result = box.dispatch('lookup_procedure', {
+        'task': '本机 TF 卡独立录制（断电插卡、开机、开始/停止录制、语音与绿灯状态核对）',
+        'entity': 'EGO Pro',
+    })
+    assert procedure_result.status == 'ok'
+    assert [row['id'] for row in procedure_result.content['matches']] == [procedure['id']]
+    trace_input = {
+        'task': '本机 TF 卡独立录制：断电插卡、开机、开始录制、停止录制，语音与绿灯状态核对',
+        'entity': 'EGO Pro 四目',
+    }
+    trace_result = box.dispatch('lookup_procedure', trace_input)
+    assert [row['id'] for row in trace_result.content['matches']] == [procedure['id']]
+    assert box.dispatch('lookup_procedure', {
+        **trace_input, 'entity': 'EGO Pro 四目与 HUB',
+    }).status == 'not_found'
+    assert box.dispatch('lookup_procedure', {
+        **trace_input, 'task': trace_input['task'] + '，另接 WristCam',
+    }).status == 'not_found'
+    assert box.dispatch('lookup_procedure', {
+        **trace_input, 'task': trace_input['task'] + '，固件 v1.1.6',
+    }).status == 'not_found'
+    assert box.dispatch('inspect_topology', {
+        'query': 'EGO Pro 与左右 WristCam 经 HUB 组合采集',
+    }).status == 'not_found'
+    assert box.dispatch('inspect_topology', {
+        'query': 'EGO Pro 与 HUB 不连接电脑或手机的单机独立采集',
+    }).status == 'not_found'
+    assert box.dispatch('inspect_topology', {
+        'query': 'EGO Pro 与 WristCam 不连接电脑或手机的单机独立采集',
+    }).status == 'not_found'
+    assert box.dispatch('inspect_topology', {
+        'query': 'EGO Pro 连接电脑做单机独立采集',
+    }).status == 'not_found'
+    assert box.dispatch('lookup_procedure', {
+        'task': '升级 EGO Pro 固件', 'entity': 'EGO Pro',
+    }).status == 'not_found'
+    assert box.dispatch('inspect_topology', {
+        'query': 'EGO Pro standalone 固件 v1.1.6 的单机独立采集拓扑',
+    }).status == 'not_found'
+    assert box.dispatch('inspect_topology', {
+        'query': 'EGO Pro 1600×1200 单机独立采集拓扑',
+    }).status == 'not_found'
+    assert DaqToolBox(knowledge=knowledge, role='channel').dispatch(
+        'inspect_topology', {'query': topology_query}).status == 'not_found'
+    topology_schema = DaqRequestSchema.from_candidate(topology_query, {
+        'confidence': 'high', 'goals': [{
+            'kind': 'product', 'capability': 'inspect_topology',
+            'entities': ['EGO Pro'],
+            'conditions': topology['data']['evidence_conditions'],
+        }],
+    })
+    topology_plan = prepare_turn(topology_query, request_schema=topology_schema,
+                                 grounded_targets=knowledge.ground_question(topology_query))
+    assert 'task' not in topology_plan.requirements[0]['conditions']
+    scoped = DaqToolBox(question=topology_query, knowledge=knowledge,
+                        role='internal_fae', requirements=topology_plan.requirements)
+    scoped_result = scoped.dispatch('inspect_topology', {'query': topology_query})
+    assert scoped_result.content['matched_requirement_ids'] == [
+        item['id'] for item in topology_plan.requirements]
+    topology_session = DaqEvidencePolicy(allow_dev_source_check=True).begin(
+        topology_plan.evidence_requirements())
+    topology_session.observe('inspect_topology', scoped_result)
+    assert set(topology_session.snapshot().requirement_status.values()) == {'satisfied'}
+    trace_question = ('一台 EGO Pro 不连接电脑或手机时，单机独立采集的'
+                      '供电、连接与存储拓扑是什么？')
+    trace_schema = DaqRequestSchema.from_candidate(trace_question, {
+        'confidence': 'high', 'goals': [{
+            'kind': 'product', 'capability': 'inspect_topology',
+            'entities': ['EGO Pro'], 'conditions': {
+                'usage_context': 'standalone_no_host',
+                'power': True, 'connection': True, 'storage': True},
+        }],
+    })
+    trace_plan = prepare_turn(trace_question, request_schema=trace_schema,
+                              grounded_targets=knowledge.ground_question(trace_question))
+    trace_result = DaqToolBox(
+        question=trace_question, knowledge=knowledge, role='internal_fae',
+        requirements=trace_plan.requirements).dispatch(
+            'inspect_topology', {'query': trace_question})
+    assert trace_result.content['matched_requirement_ids'] == [
+        item['id'] for item in trace_plan.requirements]
+    trace_session = DaqEvidencePolicy(allow_dev_source_check=True).begin(
+        trace_plan.evidence_requirements())
+    trace_session.observe('inspect_topology', trace_result)
+    assert set(trace_session.snapshot().requirement_status.values()) == {'satisfied'}
+    without_scope = {**topology, 'data': {key: value for key, value in
+                                        topology['data'].items()
+                                        if key != 'evidence_conditions'}}
+    unbound = DevCandidateKnowledge('candidate-dev-' + 'b' * 64, [],
+                                    [entity, without_scope, procedure], {})
+    unbound_result = DaqToolBox(question=topology_query, knowledge=unbound,
+                                role='internal_fae',
+                                requirements=topology_plan.requirements).dispatch(
+        'inspect_topology', {'query': topology_query})
+    assert unbound_result.status == 'ok'
+    assert unbound_result.content['matched_requirement_ids'] == []
+
+
+def test_candidate_combo_requires_each_positive_member_and_vetoes_negation():
+    ref = {'path': 'combo.md', 'sha256': 'a' * 64,
+           'locator': {'kind': 'lines', 'start': 1, 'end': 3}}
+    pro = {'id': 'entity:pro', 'kind': 'entity', 'status': 'verified',
+           'scope': {'product': 'ego-pro'},
+           'data': {'name': 'EGO Pro', 'entity_type': 'device'},
+           'source_refs': [ref]}
+    wrist = {'id': 'entity:wrist', 'kind': 'entity', 'status': 'verified',
+             'scope': {'product': 'wristcam'},
+             'data': {'name': 'WristCam', 'entity_type': 'device'},
+             'source_refs': [ref]}
+    combo = {'id': 'topology:pro-wrist', 'kind': 'topology', 'status': 'verified',
+             'scope': {'product': 'pro-wrist', 'mode': 'combination'},
+             'data': {'members': [pro['id'], wrist['id']],
+                      'roles': {pro['id']: 'recorder', wrist['id']: 'camera'},
+                      'connections': [], 'power': {}, 'platform': 'standalone',
+                      'sync_target': 'local streams', 'storage': 'TF card',
+                      'retrieval_aliases': ['组合采集']},
+             'source_refs': [ref]}
+    knowledge = DevCandidateKnowledge('candidate-dev-' + 'a' * 64, [],
+                                      [pro, wrist, combo], {})
+    box = DaqToolBox(knowledge=knowledge, role='internal_fae')
+    assert box.dispatch('inspect_topology', {
+        'query': 'EGO Pro 与 WristCam 组合采集'}).status == 'ok'
+    assert box.dispatch('inspect_topology', {
+        'query': 'EGO Pro 组合采集'}).status == 'not_found'
+    assert box.dispatch('inspect_topology', {
+        'query': 'EGO Pro 组合采集，不接 WristCam'}).status == 'not_found'
+
+
+def test_candidate_scope_versions_are_exact_and_bound_to_semantic_field():
+    from daq_fae.domain_tools import _candidate_query_scope_safe
+    row = {'scope': {'product': 'ego-pro', 'firmware_version': '1.0.30',
+                     'resolution_variant': '1600x1200'}}
+    assert _candidate_query_scope_safe(row, 'EGO Pro 固件 v1.0.30 1600×1200')
+    assert not _candidate_query_scope_safe(row, 'EGO Pro 固件 v1.0.3 1600×1200')
+    assert not _candidate_query_scope_safe(row, 'EGO Pro Viewer v1.0.30 1600×1200')
+    assert not _candidate_query_scope_safe(row, 'EGO Pro 固件 v1.0.30 1600×1300')
+
+
+def test_source_checked_natural_retrieval_uses_reviewed_aliases_for_other_devices():
+    ref = {'path': 'umi.md', 'sha256': 'b' * 64,
+           'locator': {'kind': 'lines', 'start': 1, 'end': 8}}
+    entity = {'id': 'entity:umi-finger', 'kind': 'entity', 'status': 'verified',
+              'scope': {'product': 'umi-finger'},
+              'data': {'name': 'UMI Finger', 'entity_type': 'device'},
+              'source_refs': [ref]}
+    topology = {'id': 'topology:umi-finger-local', 'kind': 'topology',
+                'status': 'verified', 'scope': {'product': 'umi-finger', 'mode': 'local'},
+                'data': {'members': [entity['id']], 'roles': {entity['id']: 'recorder'},
+                         'connections': [], 'power': {}, 'platform': 'local',
+                         'sync_target': 'none', 'storage': 'local',
+                         'retrieval_aliases': ['本机离线采集']},
+                'source_refs': [ref]}
+    procedure = {'id': 'procedure:umi-finger-local', 'kind': 'procedure',
+                 'status': 'verified', 'scope': topology['scope'],
+                 'data': {'task': 'UMI Finger 本机录制',
+                          'topology_id': topology['id'], 'prerequisites': [],
+                          'steps': ['准备', '录制'], 'checks': ['检查'],
+                          'failure_branches': [],
+                          'retrieval_aliases': ['本机离线录制'],
+                          'task_intents': ['recording']},
+                 'source_refs': [ref]}
+    knowledge = DevCandidateKnowledge('candidate-dev-' + 'a' * 64, [],
+                                      [entity, topology, procedure], {})
+    box = DaqToolBox(knowledge=knowledge, role='internal_fae')
+    assert box.dispatch('inspect_topology', {
+        'query': 'UMI Finger 的本机离线采集：供电、存储拓扑',
+    }).status == 'ok'
+    assert box.dispatch('lookup_procedure', {
+        'entity': 'UMI Finger', 'task': '本机离线录制时怎么准备和检查？',
+    }).status == 'ok'
+
+
+def test_source_checked_procedure_covers_recording_intent_in_candidate_preview():
+    ref = {'path': 'pro.md', 'sha256': 'a' * 64,
+           'locator': {'kind': 'lines', 'start': 54, 'end': 90}}
+    entity = {'id': 'entity:ego-pro', 'kind': 'entity', 'status': 'verified',
+              'scope': {'product': 'ego-pro'},
+              'data': {'name': 'EGO Pro', 'entity_type': 'device'}, 'source_refs': [ref]}
+    topology = {'id': 'topology:ego-pro-standalone', 'kind': 'topology',
+                'status': 'verified', 'scope': {'product': 'ego-pro', 'mode': 'standalone'},
+                'data': {'members': [entity['id']], 'roles': {entity['id']: 'recorder'},
+                         'connections': [], 'power': {}, 'platform': 'standalone',
+                         'sync_target': 'local streams', 'storage': 'TF card'},
+                'source_refs': [ref]}
+    procedure = {'id': 'procedure:ego-pro-standalone', 'kind': 'procedure',
+                 'status': 'verified', 'scope': topology['scope'],
+                 'data': {'task': '录制单机 EGO Pro 数据', 'topology_id': topology['id'],
+                          'prerequisites': ['断电插卡'], 'steps': ['开机', '录制', '停止'],
+                          'checks': ['绿灯常亮'], 'failure_branches': [],
+                          'evidence_conditions': {
+                              'recording_mode': 'local_tf_card',
+                              'standalone': True, 'storage': 'tf_card',
+                              'steps': ['insert_card_power_off', 'power_on',
+                                        'start_recording', 'stop_recording'],
+                              'indicators': ['voice_prompt', 'green_led']},
+                          'task_intents': ['recording', 'capture', 'local_recording']},
+                 'source_refs': [ref]}
+    knowledge = DevCandidateKnowledge('candidate-dev-' + 'a' * 64, [],
+                                      [entity, topology, procedure], {})
+    question = '一台 EGO Pro 用本机 TF 卡独立录制，怎么操作？'
+    plan = prepare_turn(question, grounded_targets=knowledge.ground_question(question))
+    requirement_ids = {row['id'] for row in plan.requirements
+                       if row['capability'] == 'lookup_procedure'}
+    assert requirement_ids
+    result = DaqToolBox(question=question, requirements=plan.requirements,
+                        knowledge=knowledge, role='internal_fae').dispatch(
+        'lookup_procedure', {'task': '录制单机 EGO Pro 数据', 'entity': 'EGO Pro'})
+    assert result.status == 'ok'
+    assert set(result.content['matched_requirement_ids']) == requirement_ids
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [{
+            'kind': 'product', 'capability': 'lookup_procedure',
+            'entities': ['EGO Pro'],
+            'conditions': {'recording_mode': 'local_tf_card',
+                           'task': ['recording']},
+        }],
+    })
+    scoped_plan = prepare_turn(question, request_schema=schema,
+                               grounded_targets=knowledge.ground_question(question))
+    scoped_result = DaqToolBox(question=question, requirements=scoped_plan.requirements,
+                               knowledge=knowledge, role='internal_fae').dispatch(
+        'lookup_procedure', {'task': '录制单机 EGO Pro 数据', 'entity': 'EGO Pro'})
+    assert scoped_result.content['matched_requirement_ids'] == [
+        item['id'] for item in scoped_plan.requirements]
+    detailed_question = ('一台 EGO Pro 用本机 TF 卡独立录制：从断电插卡、开机到开始和停止录制，'
+                         '应按什么顺序操作？各步的语音和绿灯状态如何核对？')
+    detailed_schema = DaqRequestSchema.from_candidate(detailed_question, {
+        'confidence': 'high', 'goals': [{
+            'kind': 'product', 'capability': 'lookup_procedure',
+            'entities': ['EGO Pro'], 'conditions': {
+                'indicators': ['voice_prompt', 'green_led'],
+                'steps': ['insert_card_power_off', 'power_on',
+                          'start_recording', 'stop_recording'],
+                'storage': 'tf_card', 'task': 'local_recording',
+                'standalone': True,
+            },
+        }],
+    })
+    detailed_plan = prepare_turn(detailed_question, request_schema=detailed_schema,
+                                 grounded_targets=knowledge.ground_question(detailed_question))
+    detailed_box = DaqToolBox(question=detailed_question, knowledge=knowledge,
+                              role='internal_fae', requirements=detailed_plan.requirements)
+    natural = detailed_box.dispatch('lookup_procedure', {
+        'task': 'local_recording', 'entity': 'EGO Pro'})
+    assert natural.status == 'ok'
+    assert natural.content['matched_requirement_ids'] == [
+        item['id'] for item in detailed_plan.requirements]
+    procedure_session = DaqEvidencePolicy(allow_dev_source_check=True).begin(
+        detailed_plan.evidence_requirements())
+    procedure_session.observe('lookup_procedure', natural)
+    assert set(procedure_session.snapshot().requirement_status.values()) == {'satisfied'}
+    missing = {**procedure, 'data': {**procedure['data']}}
+    missing['data'].pop('evidence_conditions')
+    unbound = DevCandidateKnowledge('candidate-dev-' + 'c' * 64, [],
+                                    [entity, topology, missing], {})
+    unbound_result = DaqToolBox(question=detailed_question, knowledge=unbound,
+                                role='internal_fae',
+                                requirements=detailed_plan.requirements).dispatch(
+        'lookup_procedure', {'task': 'local_recording', 'entity': 'EGO Pro'})
+    assert unbound_result.status == 'ok'
+    assert unbound_result.content['matched_requirement_ids'] == []
+    wrong_order = [{**detailed_plan.requirements[0],
+                    'conditions': {**detailed_plan.requirements[0]['conditions'],
+                                   'steps': ['stop_recording', 'start_recording']}}]
+    order_result = DaqToolBox(question=detailed_question, knowledge=knowledge,
+                              role='internal_fae', requirements=wrong_order).dispatch(
+        'lookup_procedure', {'task': 'local_recording', 'entity': 'EGO Pro'})
+    assert order_result.status == 'ok'
+    assert order_result.content['matched_requirement_ids'] == []
+    no_green = {**procedure, 'data': {**procedure['data'],
+                                     'evidence_conditions': {
+                                         **procedure['data']['evidence_conditions'],
+                                         'indicators': ['voice_prompt']}}}
+    no_green_knowledge = DevCandidateKnowledge('candidate-dev-' + 'd' * 64, [],
+                                               [entity, topology, no_green], {})
+    no_green_result = DaqToolBox(question=detailed_question,
+                                 knowledge=no_green_knowledge,
+                                 role='internal_fae',
+                                 requirements=detailed_plan.requirements).dispatch(
+        'lookup_procedure', {'task': 'local_recording', 'entity': 'EGO Pro'})
+    assert no_green_result.status == 'ok'
+    assert no_green_result.content['matched_requirement_ids'] == []
+
+
 def test_candidate_preview_rejects_authenticated_mode_and_active_pointer(monkeypatch, tmp_path):
     from daq_fae.app import create_app
 
@@ -223,6 +554,172 @@ def test_generic_variant_spec_reports_checked_scopes_without_answering():
         "resolution_variant": ["1600x1200", "1920x1200"]}
     assert result.content["matches"] == []
     assert result.sources == []
+
+
+def test_generic_ego_resolution_questions_do_not_select_a_variant():
+    ref = {'path': 'guide.md', 'sha256': 'a' * 64,
+           'locator': {'kind': 'lines', 'start': 1, 'end': 1}}
+    rows = []
+    for variant in ('1600x1200', '1920x1200'):
+        entity_id = 'entity:ego-' + variant[:4]
+        scope = {'product': 'ego', 'required_selectors': ['resolution_variant'],
+                 'resolution_variant': variant}
+        rows.extend([
+            {'id': entity_id, 'kind': 'entity', 'status': 'verified',
+             'scope': scope, 'data': {'name': 'EGO', 'entity_type': 'variant'},
+             'source_refs': [ref]},
+            {'id': 'claim:' + entity_id + ':rgb_resolution', 'kind': 'claim',
+             'status': 'verified', 'scope': scope,
+             'data': {'entity_id': entity_id, 'field': 'rgb_resolution',
+                      'value': variant, 'unit': 'px', 'conditions': {}},
+             'source_refs': [ref]},
+        ])
+    knowledge = DevCandidateKnowledge('candidate-dev-' + 'a' * 64, [], rows,
+                                      {'rgb分辨率': 'rgb_resolution'})
+    unknown = DaqToolBox(question='泛称 EGO 能录 1600×1300 吗？',
+                         knowledge=knowledge, role='internal_fae').dispatch(
+        'lookup_spec', {'entity': 'EGO', 'field': 'rgb_resolution'})
+    assert unknown.status == 'not_found'
+    assert unknown.content['reason'] == 'variant_selector_required'
+    assert unknown.content['matches'] == []
+    only = DaqToolBox(question='泛称 EGO 是否只支持 1600×1200？',
+                      knowledge=knowledge, role='internal_fae').dispatch(
+        'lookup_spec', {'entity': 'EGO', 'field': 'rgb_resolution'})
+    assert only.status == 'ok'
+    assert [row['scope']['resolution_variant']
+            for row in only.content['matches']] == ['1600x1200']
+    assert only.content['variant_scopes_exhaustive'] is False
+
+
+def test_source_checked_mode_conditions_require_explicit_user_language():
+    question = '一台 EGO Pro 不连接电脑或手机，单机采集的供电、连接与存储拓扑是什么？'
+    conditions = {'host_connection': 'none', 'standalone': True,
+                  'topology_aspects': ['power', 'connection', 'storage']}
+    candidate = {'confidence': 'high', 'goals': [{
+        'kind': 'product', 'capability': 'inspect_topology',
+        'entities': ['EGO Pro'], 'conditions': conditions,
+    }]}
+    schema = DaqRequestSchema.from_candidate(question, candidate)
+    assert schema.goals[0].unmapped_condition_keys == ()
+    ungrounded = DaqRequestSchema.from_candidate('EGO Pro 拓扑是什么？', candidate)
+    assert set(ungrounded.goals[0].unmapped_condition_keys) == set(conditions)
+
+
+def test_source_checked_recording_mode_condition_requires_explicit_tf_card():
+    candidate = {'confidence': 'high', 'goals': [{
+        'kind': 'product', 'capability': 'lookup_procedure',
+        'entities': ['EGO Pro'],
+        'conditions': {'recording_mode': 'local_tf_card', 'task': ['recording']},
+    }]}
+    question = '一台 EGO Pro 用本机 TF 卡独立录制时怎么操作？'
+    schema = DaqRequestSchema.from_candidate(question, candidate)
+    assert schema.goals[0].unmapped_condition_keys == ()
+    ungrounded = DaqRequestSchema.from_candidate('EGO Pro 怎么操作？', candidate)
+    assert set(ungrounded.goals[0].unmapped_condition_keys) == {
+        'recording_mode', 'task'}
+
+
+def test_model_topology_condition_aliases_preserve_explicit_scope():
+    candidate = {'confidence': 'high', 'goals': [{
+        'kind': 'product', 'capability': 'inspect_topology',
+        'entities': ['EGO Pro'], 'conditions': {
+            'host': 'none', 'connection_mode': 'standalone',
+            'aspects': ['power_supply', 'connectivity', 'storage'],
+            'task': 'standalone_capture',
+        },
+    }]}
+    question = '一台 EGO Pro 不连接电脑或手机时，单机独立采集的供电、连接与存储拓扑是什么？'
+    goal = DaqRequestSchema.from_candidate(question, candidate).goals[0]
+    assert goal.unmapped_condition_keys == ()
+    assert goal.condition_map() == {
+        'host_connection': 'none', 'standalone': True,
+        'topology_aspects': ['power', 'connection', 'storage'],
+        'task': 'standalone_capture',
+    }
+    ungrounded = DaqRequestSchema.from_candidate(
+        'EGO Pro 拓扑是什么？', candidate).goals[0]
+    assert ungrounded.unmapped_condition_keys
+
+
+def test_model_usage_context_alias_requires_explicit_standalone_and_no_host():
+    candidate = {'confidence': 'high', 'goals': [{
+        'kind': 'product', 'capability': 'inspect_topology',
+        'entities': ['EGO Pro'],
+        'conditions': {'usage_context': 'standalone_no_host',
+                       'power': True, 'connection': True, 'storage': True},
+    }]}
+    question = '一台 EGO Pro 不连接电脑或手机时，单机独立采集的供电、连接与存储拓扑是什么？'
+    goal = DaqRequestSchema.from_candidate(question, candidate).goals[0]
+    assert goal.unmapped_condition_keys == ()
+    assert goal.condition_map() == {
+        'standalone': True, 'host_connection': 'none',
+        'topology_aspects': ['power', 'connection', 'storage'],
+    }
+    no_host_unasked = DaqRequestSchema.from_candidate(
+        'EGO Pro 单机采集的供电、连接与存储拓扑是什么？', candidate).goals[0]
+    assert 'host_connection' in no_host_unasked.unmapped_condition_keys
+    unasked_aspects = DaqRequestSchema.from_candidate(
+        'EGO Pro 不连接电脑或手机时，单机采集拓扑是什么？', candidate).goals[0]
+    assert 'topology_aspects' in unasked_aspects.unmapped_condition_keys
+    unknown_value = {**candidate, 'goals': [{
+        **candidate['goals'][0],
+        'conditions': {'usage_context': 'standalone_with_hub'},
+    }]}
+    assert DaqRequestSchema.from_candidate(question, unknown_value).goals[0].unmapped_condition_keys
+    extra_device = {**candidate, 'goals': [{
+        **candidate['goals'][0], 'entities': ['EGO Pro', 'HUB'],
+    }]}
+    with pytest.raises(ValueError, match='entity_not_grounded'):
+        DaqRequestSchema.from_candidate(question, extra_device)
+
+
+def test_model_procedure_conditions_keep_step_order_and_indicators():
+    candidate = {'confidence': 'high', 'goals': [{
+        'kind': 'product', 'capability': 'lookup_procedure',
+        'entities': ['EGO Pro'], 'conditions': {
+            'indicators': ['voice_prompt', 'green_led'],
+            'steps': ['insert_card_power_off', 'power_on',
+                      'start_recording', 'stop_recording'],
+            'storage': 'tf_card', 'task': 'local_recording',
+            'standalone': True,
+        },
+    }]}
+    question = ('一台 EGO Pro 用本机 TF 卡独立录制：从断电插卡、开机到开始和停止录制，'
+                '应按什么顺序操作？各步的语音和绿灯状态如何核对？')
+    goal = DaqRequestSchema.from_candidate(question, candidate).goals[0]
+    assert goal.unmapped_condition_keys == ()
+    assert goal.condition_map()['steps'] == [
+        'insert_card_power_off', 'power_on', 'start_recording', 'stop_recording']
+    ungrounded = DaqRequestSchema.from_candidate(
+        'EGO Pro 怎么操作？', candidate).goals[0]
+    assert ungrounded.unmapped_condition_keys
+
+
+def test_model_step_value_alias_is_exact_and_does_not_add_unasked_steps():
+    question = ('一台 EGO Pro 用本机 TF 卡独立录制：从断电插卡、开机到开始和停止录制，'
+                '应按什么顺序操作？各步的语音和绿灯状态如何核对？')
+    def goal(steps):
+        return DaqRequestSchema.from_candidate(question, {
+            'confidence': 'high', 'goals': [{
+                'kind': 'product', 'capability': 'lookup_procedure',
+                'entities': ['EGO Pro'], 'conditions': {'steps': steps},
+            }],
+        }).goals[0]
+    aliased = goal(['power_off_insert_card', 'power_on',
+                    'start_recording', 'stop_recording'])
+    assert aliased.unmapped_condition_keys == ()
+    assert aliased.condition_map()['steps'][0] == 'insert_card_power_off'
+    assert goal(['attach_hub', 'power_on']).unmapped_condition_keys == ('steps',)
+    assert goal(['stop_recording', 'start_recording']).condition_map()['steps'] == [
+        'stop_recording', 'start_recording']
+    unasked = DaqRequestSchema.from_candidate('EGO Pro 怎样录制？', {
+        'confidence': 'high', 'goals': [{
+            'kind': 'product', 'capability': 'lookup_procedure',
+            'entities': ['EGO Pro'],
+            'conditions': {'steps': ['power_off_insert_card']},
+        }],
+    }).goals[0]
+    assert unasked.unmapped_condition_keys == ('steps',)
 
 
 def test_explicit_single_port_scope_reaches_source_checked_power_rating():

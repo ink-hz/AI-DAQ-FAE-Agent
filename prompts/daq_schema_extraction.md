@@ -32,6 +32,8 @@ HUB `downstream_port_power_output` 仅表示单口规格；明确问“每口”
 
 `conditions.scope` 仅在用户明确说整机、模块、部件或设备时使用。普通产品名不等于额外的 `device` 条件。拓扑的设备数、连接关系、软件平台、任务步骤可保留为独立语义条件；若没有已定义的证据字段，本轮仍须保留问题并交给后续证据账本标缺口，不要改成产品规格或省略子目标。
 
+单机采集的拓扑条件使用受控键：用户明确说单机或独立时用 `standalone=true`；明确说不接电脑、手机或主机时再用 `host_connection="none"`；明确问供电、连接、存储中的哪些方面，用 `topology_aspects` 数组填写 `power`、`connection`、`storage`。不要自造 `usage_context`、`scene_mode` 或把这些方面写成布尔条件。流程目标中，本机 TF 卡录制用 `recording_mode="local_tf_card"`。已核对的 EGO Pro 四目单机录制动作可表示为 `insert_card_power_off`（断电插卡）、`power_on`（开机）、`start_recording`（开始录制）、`stop_recording`（停止录制）；若用户询问其他设备或流程步骤，仍保留其原意对应的短码，由后续来源门判定能否回答，不能套用 Pro 的四步或省略未覆盖步骤。`steps` 按用户所问顺序排列；`indicators` 可使用 `voice_prompt`、`green_led`，其他提示种类照原意保留。`steps` 与 `indicators` 只列用户明确问到的步骤和提示种类，不能由“怎么录制”自行补全。产品变体、固件、Viewer 版本没有在用户输入中出现时保持未知，不得为满足记录而猜测。
+
 `entities` 只能来自本轮问题或历史中用户明确提供的名称；不要从常识补产品。`conditions` 只能来自相同的用户输入，不得把模型推测、Platform 摘录或附件当作官方事实。字段用短英文机器名。短追问如果依赖历史用户条件，可提出 `effective_question`；显式换题须设 `topic_switch=true` 并清除旧主题。低置信度如实标 `low`。不要输出任何来源、产品数值、兼容结论或答案。
 
 如果用户只交代设备或场景、还没有提出问题，可同时给 `resolve_entity` 和 `unknown/clarify`。`unknown/clarify` 不附 `entities`、`field` 或 `conditions`；用户交代的设备条件仍由独立上下文保存。不要把图片观察写成产品规格目标。

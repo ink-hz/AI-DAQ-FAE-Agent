@@ -204,11 +204,14 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
             raise ValueError("daq_sdk_catalog_preview_requires_dev_knowledge")
         knowledge.sdk_catalog = sdk_catalog
     elif os.getenv("DAQ_SDK_RELEASE_ROOT"):
+        from daq_fae.knowledge.code_identity import daq_code_sha
         from daq_fae.knowledge.sdk_release import load_active_sdk_release
         published_sdk = load_active_sdk_release(
             Path(os.environ["DAQ_SDK_RELEASE_ROOT"]),
             runtime_release=runtime_release,
             upstream_sha=json.loads((_ROOT / 'upstream-source.json').read_text())['revision'],
+            daq_code_sha256=daq_code_sha(),
+            knowledge_release=knowledge.release_id if knowledge is not None else None,
         )
         if published_sdk is None and environment == "production":
             raise ValueError("daq_sdk_release_missing")
@@ -307,7 +310,10 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                 "candidate_dev_only" if candidate_mode else
                 "owner_source_checked_pilot" if knowledge is not None and
                 knowledge.manifest.get('review', {}).get('operator_release', {}).get('mode') ==
-                'owner_directed_source_checked_v1' else "reviewed_or_empty"),
+                'owner_directed_source_checked_v1' else
+                "owner_source_checked_pro_v2" if knowledge is not None and
+                knowledge.manifest.get('review', {}).get('operator_release', {}).get('mode') ==
+                'owner_directed_source_checked_v2' else "reviewed_or_empty"),
             "source_checked_records": knowledge.manifest.get("source_checked_count", 0)
             if candidate_mode else 0,
             "runtime_release": runtime_release,

@@ -647,5 +647,284 @@
       "multi_device_sync_mode_check_and_set",
       "sync"
     ]
+  },
+  {
+    "kb_id": "daq-sdk-host-net-uid-hotplug-016",
+    "package": "host_cpp_20260929",
+    "sdk_layer": "host_cpp",
+    "doc_type": "example",
+    "title": "EGO 网络设备 UID 热插拔回调核对",
+    "question_patterns": [
+      "OrbbecSDK 网络设备 UID 热插拔移除回调怎么核对",
+      "createNetDevice 后如何对比设备移除 UID",
+      "网络设备移除回调中的 UID"
+    ],
+    "answer": "2026-09-29 Linux x86_64 C++ 示例先启用网络设备枚举，注册设备变化回调，再用 createNetDevice 打开给定 IP 和端口；读取所建 DeviceInfo 的 UID，与移除事件 DeviceList 中的 UID 比较。示例结束时停止 Pipeline 并注销回调，异常路径也注销回调。这是示例调用顺序，不证明指定设备、固件或网络拓扑经过实测。",
+    "symbols": [
+      "enableNetDeviceEnumeration",
+      "registerDeviceChangedCallback",
+      "createNetDevice",
+      "getUid",
+      "unregisterDeviceChangedCallback"
+    ],
+    "topics": [
+      "network",
+      "uid",
+      "hotplug",
+      "callback"
+    ],
+    "source_refs": [
+      {
+        "member_suffix": "examples/src/6.ego/ego_net_uid_hotplug.cpp",
+        "start_line": 42,
+        "end_line": 95
+      },
+      {
+        "member_suffix": "examples/src/6.ego/ego_net_uid_hotplug.cpp",
+        "start_line": 118,
+        "end_line": 125
+      }
+    ],
+    "usage_tasks": [
+      "network_uid_hotplug",
+      "device_removal_callback",
+      "uid_check"
+    ]
+  },
+  {
+    "kb_id": "daq-sdk-android-fwlog-017",
+    "package": "android_java_20260929",
+    "sdk_layer": "android_java",
+    "doc_type": "api",
+    "last_verified": "2026-10-16",
+    "title": "Android Java 导出 EGO 固件日志的任务与回调",
+    "question_patterns": [
+      "Android Wrapper exportFirmwareLogs 如何导出固件日志",
+      "Android Java 固件日志导出回调和取消怎么用"
+    ],
+    "answer": "在 Android Wrapper beta2.2.5 的 Java API 中，已打开 Device 后可向应用目录调用 exportFirmwareLogs(outputDirectory, callback)；返回 FirmwareLogExportTask 用于查询或取消。进度、成功和失败回调在主线程；同一 Device 同时只能进行一项导出，目录不可写会失败。文档限定为具备固件日志导出能力的 EGO 设备，不能据此确认具体设备或固件支持。",
+    "symbols": [
+      "exportFirmwareLogs",
+      "FirmwareLogExportTask",
+      "ALREADY_RUNNING"
+    ],
+    "topics": [
+      "android",
+      "firmware_log",
+      "callback"
+    ],
+    "source_refs": [
+      {
+        "member_suffix": "doc/EgoFirmwareLogExportExample.md",
+        "start_line": 20,
+        "end_line": 95
+      },
+      {
+        "member_suffix": "obsensor/Device.java",
+        "start_line": 1294,
+        "end_line": 1315
+      }
+    ],
+    "usage_tasks": [
+      "firmware_log_export"
+    ]
+  },
+  {
+    "kb_id": "daq-sdk-android-sdcard-018",
+    "package": "android_java_20260929",
+    "sdk_layer": "android_java",
+    "doc_type": "api",
+    "last_verified": "2026-10-16",
+    "title": "Android Java 网络设备 SD 卡文件信息和下载",
+    "question_patterns": [
+      "Android Wrapper getSdcardFileInfo 和 downloadSdcardFile 如何用",
+      "Android Java EGO SD 卡文件服务",
+      "网络 EGO 的 SD 卡文件信息与本地下载"
+    ],
+    "answer": "Android Wrapper beta2.2.5 的文档要求先用 createNetDevice 创建并保持网络 Device；设备端路径是 SD 卡相对路径。可先用 getSdcardFileInfo 查询文件，再用 downloadSdcardFile 的 LOCAL 目标异步下载；需保持 Device 有效直到 DONE、FAILED 或 CANCELLED。文档明确固件、设备能力或当前状态不满足时可抛 OBException；这里不证明某设备或 Android 存储权限配置实际可用。",
+    "symbols": [
+      "createNetDevice",
+      "getSdcardFileInfo",
+      "downloadSdcardFile",
+      "SdcardDownloadDestination.LOCAL",
+      "OBException"
+    ],
+    "topics": [
+      "android",
+      "sdcard",
+      "file_transfer"
+    ],
+    "source_refs": [
+      {
+        "member_suffix": "doc/EgoSdcardFileServiceApiGuide.md",
+        "start_line": 16,
+        "end_line": 66
+      },
+      {
+        "member_suffix": "obsensor/Device.java",
+        "start_line": 327,
+        "end_line": 340
+      }
+    ],
+    "usage_tasks": [
+      "sdcard_file_service",
+      "file_download",
+      "network_ego_sd_card_file_access",
+      "sd_card_file_info_and_local_download"
+    ]
+  },
+  {
+    "kb_id": "daq-sdk-android-record-state-019",
+    "package": "android_java_20260929",
+    "sdk_layer": "android_java",
+    "doc_type": "api",
+    "last_verified": "2026-10-16",
+    "title": "Android Java 录制状态和结果回调的区分",
+    "question_patterns": [
+      "Android setEgoRecordingResultCallback 和 setEgoStateCallback 区别",
+      "SAVING 与 RECORD_SAVED 什么时候算保存完成"
+    ],
+    "answer": "Android Wrapper beta2.2.5 的状态回调用于持续观察工作状态，录制结果回调用于一次录制结束后的目录与分片名；SAVING 仍是过程状态，RECORD_SAVED 才表示设备报告保存完成。结果中的目录和分片列表分别带有效性标志；读取失败不等于录制必然失败。这里只解释 API 状态含义，不保证某设备组合录制同步或落盘成功。",
+    "symbols": [
+      "setEgoStateCallback",
+      "setEgoRecordingResultCallback",
+      "SAVING",
+      "RECORD_SAVED"
+    ],
+    "topics": [
+      "android",
+      "recording",
+      "state",
+      "callback"
+    ],
+    "source_refs": [
+      {
+        "member_suffix": "doc/EgoStateMonitorExample.md",
+        "start_line": 5,
+        "end_line": 17
+      },
+      {
+        "member_suffix": "doc/EgoStateMonitorExample.md",
+        "start_line": 68,
+        "end_line": 111
+      },
+      {
+        "member_suffix": "obsensor/Device.java",
+        "start_line": 1165,
+        "end_line": 1184
+      }
+    ],
+    "usage_tasks": [
+      "recording_state",
+      "recording_result"
+    ]
+  },
+  {
+    "kb_id": "daq-sdk-ble-windows-install-020",
+    "package": "ble_windows_20260929",
+    "sdk_layer": "ble_cpp",
+    "doc_type": "install",
+    "last_verified": "2026-10-16",
+    "title": "EgoLowBle 1.1.8 Windows x64 包的链接与 DLL 放置",
+    "question_patterns": [
+      "Windows x64 EgoLowBle 1.1.8 怎么链接",
+      "EgoLowBle.lib 和 EgoLowBle.dll 放哪里"
+    ],
+    "answer": "EgoLowBle 1.1.8 Windows x64 发布包的 README 要求把 include 加入头文件搜索路径、链接 EgoLowBle.lib，并将 EgoLowBle.dll 放在应用可执行文件旁。它是包内集成说明，不证明目标 Windows 版本、蓝牙适配器或具体 EGO 设备已经通过实测。",
+    "symbols": [
+      "EgoLowBle.lib",
+      "EgoLowBle.dll"
+    ],
+    "topics": [
+      "ble",
+      "windows",
+      "install",
+      "link"
+    ],
+    "source_refs": [
+      {
+        "member_suffix": "EgoLowBle-windows-x64-1.1.8\\docs\\README.md",
+        "start_line": 3,
+        "end_line": 23
+      }
+    ],
+    "usage_tasks": [
+      "link_library",
+      "deploy_dll"
+    ]
+  },
+  {
+    "kb_id": "daq-sdk-ble-linux-install-021",
+    "package": "ble_linux_20260929",
+    "sdk_layer": "ble_cpp",
+    "doc_type": "install",
+    "last_verified": "2026-10-16",
+    "title": "EgoLowBle 1.1.8 Linux x64 包和 demo 范围",
+    "question_patterns": [
+      "Linux x64 EgoLowBle 1.1.8 包有什么",
+      "EgoLowBle Linux demo 支持哪些调用流程"
+    ],
+    "answer": "EgoLowBle 1.1.8 Linux x64 包的 README 列出共享库、头文件、构建脚本和可选预编译 demo；demo 文档列出的流程包括扫描连接、特征值读写、等待通知，以及 Wi-Fi 配网与 IP 请求。可选二进制只有在打包前构建过才存在；这些是包内容与示例范围，不证明具体设备或蓝牙环境可用。",
+    "symbols": [
+      "libEgoLowBle.so",
+      "EgoLowBleDemo.cpp",
+      "LINUX_GUIDE.md"
+    ],
+    "topics": [
+      "ble",
+      "linux",
+      "install",
+      "demo"
+    ],
+    "source_refs": [
+      {
+        "member_suffix": "EgoLowBle-linux-x64-1.1.8\\docs\\README.md",
+        "start_line": 3,
+        "end_line": 36
+      }
+    ],
+    "usage_tasks": [
+      "inspect_package",
+      "ble_demo"
+    ]
+  },
+  {
+    "kb_id": "daq-sdk-ios-framework-022",
+    "package": "ios_framework_20260929",
+    "sdk_layer": "ios_framework",
+    "doc_type": "install",
+    "last_verified": "2026-10-16",
+    "title": "OrbbecSDK 2.9.0 iPhoneOS framework 嵌入要求",
+    "question_patterns": [
+      "iOS OrbbecSDK framework 怎么集成",
+      "OrbbecSDK iOS 包支持 Simulator 吗"
+    ],
+    "answer": "2026-09-29 iOS 包的 README 说明应用需嵌入 OrbbecSDK.framework 及扩展 frameworks，作为同级 framework 放入 app 的 Frameworks 目录；配置 XML 位于主 framework 根目录。该分发包只面向 iPhoneOS 真机，不包含 Simulator 产物。这是打包和集成范围，不能据此确认 EGO 设备、固件或 Swift API 可用。",
+    "symbols": [
+      "OrbbecSDK.framework",
+      "OrbbecSDKConfig.xml"
+    ],
+    "topics": [
+      "ios",
+      "framework",
+      "install",
+      "simulator"
+    ],
+    "source_refs": [
+      {
+        "member_suffix": "README.txt",
+        "start_line": 1,
+        "end_line": 13
+      },
+      {
+        "member_suffix": "README.txt",
+        "start_line": 15,
+        "end_line": 15
+      }
+    ],
+    "usage_tasks": [
+      "integrate_framework",
+      "simulator_scope"
+    ]
   }
 ]

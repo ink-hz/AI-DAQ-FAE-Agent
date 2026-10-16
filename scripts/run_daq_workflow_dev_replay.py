@@ -19,6 +19,8 @@ from threading import Barrier
 import time
 from uuid import uuid4
 
+from daq_fae.knowledge.code_identity import daq_code_sha
+
 
 ROOT = Path(__file__).resolve().parents[1]
 NEW_SUITE = ROOT / 'evals/daq_workflow_20261012.jsonl'
@@ -34,13 +36,7 @@ def _sha(path: Path) -> str:
 
 
 def _daq_code_sha() -> str:
-    digest = hashlib.sha256()
-    for path in sorted((ROOT / 'daq_fae').rglob('*.py')):
-        digest.update(str(path.relative_to(ROOT)).encode())
-        digest.update(b'\0')
-        digest.update(path.read_bytes())
-        digest.update(b'\0')
-    return digest.hexdigest()
+    return daq_code_sha(ROOT)
 
 
 def _cases(suite: str, *, suite_file: Path | None = None) -> list[dict]:
@@ -205,6 +201,8 @@ def main() -> int:
                 'knowledge_release': active['release_id'],
                 'sdk_catalog_sha256': sdk_catalog.manifest['records_sha256']
                 if sdk_catalog is not None else None,
+                'release_notes_sha256': sdk_catalog.release_notes.manifest['records_sha256']
+                if sdk_catalog is not None and sdk_catalog.release_notes is not None else None,
                 'runtime_release': runtime_release,
                 'daq_code_sha256': _daq_code_sha(),
                 'upstream_revision': json.loads((ROOT / 'upstream-source.json').read_text())['revision'],

@@ -10,6 +10,8 @@ import re
 import tempfile
 
 from .sdk_catalog import SdkCatalog
+from .release_notes import ReleaseNoteCatalog, _serialized as _serialized_notes
+from .code_identity import daq_code_sha
 
 
 _SHA = re.compile(r"[0-9a-f]{64}\Z")
@@ -73,6 +75,40 @@ def _read(root: Path, release_id: str) -> dict:
                     or type(ref.get("start_line")) is not int or type(ref.get("end_line")) is not int
                     or not 1 <= ref["start_line"] <= ref["end_line"]):
                 raise ValueError("SDK release source reference invalid")
+    has_notes = "release_notes" in manifest or "release_notes_sha256" in manifest
+    if has_notes:
+        notes = manifest.get("release_notes")
+        notes_sha = manifest.get("release_notes_sha256")
+        if (not isinstance(notes, list) or not _SHA.fullmatch(str(notes_sha or ""))
+                or not _SHA.fullmatch(str(manifest.get("daq_code_sha256", "")))
+                or not _SHA.fullmatch(str(manifest.get("knowledge_release", "")))
+                or _digest(_serialized_notes(notes)) != notes_sha):
+            raise ValueError("SDK release-note digest mismatch")
+        note_ids = set()
+        note_hashes = set()
+        for row in notes:
+            if (not isinstance(row, dict) or not isinstance(row.get("kb_id"), str)
+                    or row["kb_id"] in note_ids
+                    or row.get("doc_type") != "release_note"
+                    or row.get("evidence_scope") != "release_note_statement_only"
+                    or row.get("device_support") != "unknown"
+                    or row.get("view_roles") != ["internal_fae"]
+                    or not _SHA.fullmatch(str(row.get("file_sha256", "")))
+                    or row["file_sha256"] in note_hashes
+                    or not isinstance(row.get("source_refs"), list)
+                    or not row["source_refs"]):
+                raise ValueError("SDK release-note row invalid")
+            note_ids.add(row["kb_id"])
+            note_hashes.add(row["file_sha256"])
+            for ref in row["source_refs"]:
+                if (not isinstance(ref, dict)
+                        or ref.get("package_sha256") != row["file_sha256"]
+                        or ref.get("member_sha256") != row["file_sha256"]
+                        or not _SHA.fullmatch(str(ref.get("span_sha256", "")))
+                        or type(ref.get("start_line")) is not int
+                        or type(ref.get("end_line")) is not int
+                        or not 1 <= ref["start_line"] <= ref["end_line"]):
+                    raise ValueError("SDK release-note source reference invalid")
     return manifest
 
 
@@ -80,6 +116,9 @@ def stage_sdk_release(root: Path, directory: Path, archive: Path, review_report:
                       replay_results: Path, runtime_release: str, upstream_sha: str) -> str:
     """Source verification and independent Dev answer review precede staging."""
     catalog = SdkCatalog.load(directory, archive)
+    release_notes = catalog.release_notes
+    release_notes_sha = (release_notes.manifest["records_sha256"]
+                         if release_notes is not None else None)
     replay_raw = replay_results.read_bytes()
     replay_rows = [json.loads(line) for line in replay_raw.splitlines() if line]
     replay_by_id = {row.get("case", {}).get("id"): row for row in replay_rows}
@@ -88,6 +127,11 @@ def stage_sdk_release(root: Path, directory: Path, archive: Path, review_report:
             or review_report.get("environment") != "dev"
             or review_report.get("reviewer") not in {"Codex", "human_fae"}
             or review_report.get("catalog_sha256") != catalog.manifest["records_sha256"]
+            or (release_notes is not None
+                and review_report.get("release_notes_sha256") != release_notes_sha)
+            or (release_notes is not None and (
+                not _SHA.fullmatch(str(review_report.get("daq_code_sha256", "")))
+                or not _SHA.fullmatch(str(review_report.get("knowledge_release", "")))))
             or review_report.get("results_sha256") != _digest(replay_raw)
             or not _SHA.fullmatch(str(review_report.get("suite_sha256", "")))
             or not isinstance(report_cases, list) or not report_cases
@@ -96,12 +140,32 @@ def stage_sdk_release(root: Path, directory: Path, archive: Path, review_report:
             or {case.get("id") for case in report_cases if isinstance(case, dict)}
                != set(replay_by_id)):
         raise ValueError("SDK Dev answer review missing or failed")
+    if release_notes is not None:
+        reviewed = review_report.get("record_reviews")
+        expected = {row["kb_id"]: _digest(_json_bytes(row))
+                    for row in (*catalog.records, *release_notes.records)}
+        if (not isinstance(reviewed, list) or len(reviewed) != len(expected)
+                or any(not isinstance(item, dict) for item in reviewed)
+                or {item.get("kb_id") for item in reviewed} != set(expected)
+                or any(item.get("record_sha256") != expected[item["kb_id"]]
+                       or item.get("reviewer") not in {"Codex", "human_fae"}
+                       or item.get("passed") is not True
+                       or item.get("source_span_checked") is not True
+                       or not isinstance(item.get("review_note"), str)
+                       or not item["review_note"].strip()
+                       for item in reviewed)):
+            raise ValueError("SDK independent record review missing or failed")
     for case in report_cases:
         row = replay_by_id[case["id"]]
         turns = row.get("turns")
         if (not isinstance(turns, list) or len(turns) != 1
                 or not isinstance(row.get("identity"), dict)
                 or row["identity"].get("sdk_catalog_sha256") != catalog.manifest["records_sha256"]
+                or (release_notes is not None
+                    and row["identity"].get("release_notes_sha256") != release_notes_sha)
+                or (release_notes is not None and (
+                    row["identity"].get("daq_code_sha256") != review_report["daq_code_sha256"]
+                    or row["identity"].get("knowledge_release") != review_report["knowledge_release"]))
                 or row["identity"].get("suite_file_sha256") != review_report["suite_sha256"]):
             raise ValueError("SDK Dev replay identity mismatch")
         if (row["identity"].get("runtime_release") != runtime_release
@@ -131,6 +195,19 @@ def stage_sdk_release(root: Path, directory: Path, archive: Path, review_report:
                 "record_count": len(catalog.records), "records": list(catalog.records),
                 "runtime_release": runtime_release, "upstream_sha": upstream_sha,
                 "dev_answer_review": review_report}
+    if release_notes is not None:
+        note_ids = {row["kb_id"] for row in release_notes.records}
+        if not any(
+            source.get("source_id") in note_ids
+            for row in replay_rows for turn in row["turns"]
+            for source in turn["done"].get("sources", [])
+            if isinstance(source, dict)
+        ):
+            raise ValueError("SDK Dev release-note answer review missing")
+        manifest["release_notes_sha256"] = release_notes_sha
+        manifest["release_notes"] = list(release_notes.records)
+        manifest["daq_code_sha256"] = review_report["daq_code_sha256"]
+        manifest["knowledge_release"] = review_report["knowledge_release"]
     raw = _json_bytes(manifest)
     release_id = _digest(raw)
     releases = _root(root)
@@ -176,7 +253,8 @@ def activate_sdk_release(root: Path, release_id: str) -> None:
 
 
 def load_active_sdk_release(root: Path, *, runtime_release: str,
-                            upstream_sha: str) -> SdkCatalog | None:
+                            upstream_sha: str, daq_code_sha256: str | None = None,
+                            knowledge_release: str | None = None) -> SdkCatalog | None:
     if root.is_symlink():
         raise ValueError("SDK release root linked")
     active = root / "active.json"
@@ -192,10 +270,18 @@ def load_active_sdk_release(root: Path, *, runtime_release: str,
     if (manifest["runtime_release"] != runtime_release
             or manifest["upstream_sha"] != upstream_sha):
         raise ValueError("SDK release runtime identity mismatch")
+    if "release_notes" in manifest and (
+            daq_code_sha256 != daq_code_sha()
+            or daq_code_sha256 != manifest["daq_code_sha256"]
+            or knowledge_release != manifest["knowledge_release"]):
+        raise ValueError("SDK release code or main knowledge identity mismatch")
+    notes = (ReleaseNoteCatalog(manifest["release_notes"], {
+        "records_sha256": manifest["release_notes_sha256"]})
+        if "release_notes" in manifest else None)
     catalog = SdkCatalog(manifest["records"], {
         "records_sha256": manifest["catalog_sha256"],
         "archive_manifest_sha256": manifest["archive_manifest_sha256"],
-    })
+    }, notes)
     catalog.published = True
     catalog.release_id = release_id
     return catalog

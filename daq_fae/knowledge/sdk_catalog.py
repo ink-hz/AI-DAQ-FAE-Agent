@@ -7,8 +7,11 @@ import json
 from pathlib import Path
 import re
 import tarfile
+import unicodedata
+import zipfile
 
 from .section_search import terms
+from .release_notes import ReleaseNoteCatalog
 from scripts.archive_candidate_snapshot import verify_archive
 
 
@@ -29,13 +32,63 @@ PACKAGES = {
         "glob": "SDK/设备端SDK-四目EGO使用/四目设备SDK/libobkit.20260909_*.tar.gz",
         "version": "20260909", "build": "20260909", "platform": "RK3576 AArch64 Linux",
     },
+    "android_java_20260929": {
+        "glob": "SDK/SDK&OrbbecViewer_v2.9.0_20260929/Android/OrbbecSDK-Android-Wrapper-beta2.2.5-202609292240.zip",
+        "version": "beta2.2.5", "build": "20260929", "platform": "Android", "format": "zip",
+    },
+    "ble_windows_20260929": {
+        "glob": "SDK/SDK&OrbbecViewer_v2.9.0_20260929/windows/EgoLowBle-windows-x64-1.1.8.zip",
+        "version": "1.1.8", "build": "20260929", "platform": "Windows x64", "format": "zip",
+    },
+    "ble_linux_20260929": {
+        "glob": "SDK/SDK&OrbbecViewer_v2.9.0_20260929/linux/EgoLowBle-linux-x64-1.1.8.zip",
+        "version": "1.1.8", "build": "20260929", "platform": "Linux x86_64", "format": "zip",
+    },
+    "ios_framework_20260929": {
+        "glob": "SDK/SDK&OrbbecViewer_v2.9.0_20260929/ios/OrbbecSDK_v2.9.0_202609292146_7947205ab_iOS_OS64.tar.gz",
+        "version": "2.9.0", "build": "20260929", "platform": "iOS ARM64",
+    },
 }
 DOC_TYPES = {"api", "example", "build", "install", "troubleshooting"}
 _SHA = re.compile(r"[0-9a-f]{64}\Z")
+_MAX_SOURCE_MEMBER_BYTES = 2_000_000
 
 
 def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def _identity_text(value: str) -> str:
+    return re.sub(r'\s+', '', unicodedata.normalize('NFKC', value).casefold().replace('×', 'x'))
+
+
+def sdk_usage_descriptor_matches(value: str, row: dict) -> bool:
+    """Match an SDK selector only against the reviewed record's own labels."""
+    labels = [str(item) for key in ("usage_tasks", "topics", "symbols")
+              for item in row.get(key, []) if isinstance(item, str)]
+
+    def normalized(text: str) -> str:
+        return re.sub(r"\bsd[_\s-]?card(?![a-z])", "sdcard", text.casefold())
+
+    if _identity_text(normalized(value)) in {
+            _identity_text(normalized(label)) for label in labels}:
+        return True
+    aliases = {
+        "initialization": "init", "initialize": "init", "initialise": "init",
+        "initializing": "init", "startup": "start", "starting": "start",
+        "stopping": "stop", "configuration": "config", "configure": "config",
+        "compilation": "build", "compile": "build",
+    }
+    ignored = {"and", "the", "of", "order", "sequence", "how", "to", "example", "sample"}
+
+    def tokens(text: str) -> set[str]:
+        return {aliases.get(token, token) for token in re.findall(r"[a-z0-9]+", normalized(text))
+                if token not in ignored}
+
+    wanted = tokens(value)
+    known = tokens(" ".join(labels))
+    overlap = wanted & known
+    return len(wanted) >= 2 and len(overlap) >= 2 and len(overlap) * 5 >= len(wanted) * 3
 
 
 def _serialized(records: list[dict]) -> bytes:
@@ -55,18 +108,30 @@ def _package_paths(archive: Path) -> dict[str, Path]:
     return paths
 
 
-def _source_member(bundle: tarfile.TarFile, suffix: str) -> tuple[str, bytes]:
-    matches = [member for member in bundle.getmembers() if member.isfile()
-               and member.name.endswith(suffix)]
+def _source_member(bundle: tarfile.TarFile | zipfile.ZipFile, suffix: str) -> tuple[str, bytes]:
+    if isinstance(bundle, zipfile.ZipFile):
+        matches = [member for member in bundle.infolist() if not member.is_dir()
+                   and member.filename.endswith(suffix)]
+    else:
+        matches = [member for member in bundle.getmembers() if member.isfile()
+                   and member.name.endswith(suffix)]
     if len(matches) != 1:
         raise ValueError("SDK source member missing or ambiguous: " + suffix)
     member = matches[0]
-    if member.name.startswith("/") or ".." in Path(member.name).parts:
+    name = member.filename if isinstance(bundle, zipfile.ZipFile) else member.name
+    normalized = name.replace("\\", "/")
+    if (normalized.startswith("/") or re.match(r"^[A-Za-z]:", normalized)
+            or ".." in Path(normalized).parts or "\x00" in normalized):
         raise ValueError("SDK source member has unsafe path")
+    member_size = member.file_size if isinstance(bundle, zipfile.ZipFile) else member.size
+    if member_size > _MAX_SOURCE_MEMBER_BYTES:
+        raise ValueError("SDK source member too large")
+    if isinstance(bundle, zipfile.ZipFile):
+        return name, bundle.read(member)
     stream = bundle.extractfile(member)
     if stream is None:
         raise ValueError("SDK source member cannot be read")
-    return member.name, stream.read()
+    return name, stream.read()
 
 
 def build_catalog(curated: Path, archive: Path) -> tuple[list[dict], dict]:
@@ -81,7 +146,8 @@ def build_catalog(curated: Path, archive: Path) -> tuple[list[dict], dict]:
     records = []
     for package_id, path in paths.items():
         relative = path.relative_to(archive / "files").as_posix()
-        with tarfile.open(path) as bundle:
+        opener = zipfile.ZipFile if PACKAGES[package_id].get("format") == "zip" else tarfile.open
+        with opener(path) as bundle:
             for item in specifications:
                 if item.get("package") != package_id:
                     continue
@@ -94,11 +160,15 @@ def build_catalog(curated: Path, archive: Path) -> tuple[list[dict], dict]:
                         or not record["question_patterns"]):
                     raise ValueError("SDK curated record invalid")
                 ids.add(record["kb_id"])
+                last_verified = item.get("last_verified", "2026-10-15")
+                if not isinstance(last_verified, str) or not re.fullmatch(
+                        r"20\d{2}-\d{2}-\d{2}", last_verified):
+                    raise ValueError("SDK last_verified invalid")
                 record.update(version=PACKAGES[package_id]["version"],
                               build=PACKAGES[package_id]["build"],
                               platform=PACKAGES[package_id]["platform"],
                               confidence="code_verified" if record["doc_type"] == "example"
-                              else "doc_verified", last_verified="2026-10-15",
+                              else "doc_verified", last_verified=last_verified,
                               view_roles=["internal_fae"])
                 refs = []
                 source_spans = []
@@ -146,9 +216,30 @@ def build_catalog(curated: Path, archive: Path) -> tuple[list[dict], dict]:
 
 
 class SdkCatalog:
-    def __init__(self, records: list[dict], manifest: dict):
+    def __init__(self, records: list[dict], manifest: dict,
+                 release_notes: ReleaseNoteCatalog | None = None):
         self.records = tuple(records)
         self.manifest = manifest
+        self.release_notes = release_notes
+
+    def grounds_selector(self, question: str, key: str, value: object,
+                         role: str = "internal_fae") -> bool:
+        """Use one reviewed record's descriptor and user-quoted intent phrase."""
+        if role != "internal_fae" or key not in {"feature", "task"} or not isinstance(question, str):
+            return False
+        values = [value] if isinstance(value, str) else value
+        if (not isinstance(values, list) or not values or
+                any(not isinstance(item, str) or not item.strip() for item in values)):
+            return False
+        asked = _identity_text(question)
+        return any(
+            role in row.get("view_roles", [])
+            and all(sdk_usage_descriptor_matches(item, row) for item in values)
+            and any(_identity_text(pattern) in asked
+                    for pattern in row.get("question_patterns", [])
+                    if isinstance(pattern, str) and pattern.strip())
+            for row in self.records
+        )
 
     @classmethod
     def load(cls, directory: Path, archive: Path) -> "SdkCatalog":
@@ -157,12 +248,16 @@ class SdkCatalog:
         stored_manifest = json.loads((directory / "SDK_Knowledge_manifest.json").read_text())
         if stored_records != _serialized(records) or stored_manifest != expected:
             raise ValueError("SDK catalog differs from source checked build")
-        return cls(records, expected)
+        release_notes = (ReleaseNoteCatalog.load(directory, archive)
+                         if (directory / "release_notes_curated.json").exists() else None)
+        return cls(records, expected, release_notes)
 
     def search(self, query: str, role: str) -> list[dict]:
         if role != "internal_fae" or not isinstance(query, str) or len(query) > 2000:
             return []
         normalized = query.casefold()
+        if "egoviewer" in normalized and "orbbecsdk" not in normalized:
+            return []
         compact_dates = re.sub(r"(?<=\d)[-/](?=\d)", "", normalized)
         asked_builds = set(re.findall(r"(?<!\d)20\d{6}(?!\d)", compact_dates))
         firmware_118 = bool(re.search(
@@ -170,13 +265,25 @@ class SdkCatalog:
         if (asked_builds and not asked_builds <= {
                 row["build"] for row in self.records}) or re.search(
                     r"(?<!\d)2\.9\.(?!0\b)\d+(?!\d)", normalized) or (
-                        "1.1.8" in normalized and not firmware_118):
+                        "1.1.8" in normalized and not firmware_118
+                        and "egolowble" not in normalized):
             return []
-        selected = self.records
-        if "libobkit" in normalized or "设备端" in query or "rk3576" in normalized:
-            selected = [row for row in selected if row["sdk_layer"] == "device_c"]
-        elif "orbbecsdk" in normalized or "主机侧" in query or "c++" in normalized:
-            selected = [row for row in selected if row["sdk_layer"] == "host_cpp"]
+        layers = set()
+        if "egolowble" in normalized:
+            layers.add("ble_cpp")
+        else:
+            if "android" in normalized or "java" in normalized:
+                layers.add("android_java")
+            if "ios" in normalized or "iphone" in normalized or "swift" in normalized:
+                layers.add("ios_framework")
+            if "libobkit" in normalized or "设备端" in query or "rk3576" in normalized:
+                layers.add("device_c")
+            if ("主机侧" in query or "host" in normalized or "c++" in normalized
+                    or "cpp" in normalized):
+                layers.add("host_cpp")
+            if "orbbecsdk" in normalized and not layers:
+                layers.add("host_cpp")
+        selected = [row for row in self.records if row["sdk_layer"] in layers] if layers else self.records
         if asked_builds:
             selected = [row for row in selected if row["build"] in asked_builds]
         query_terms = terms(query)
@@ -192,5 +299,13 @@ class SdkCatalog:
         ranked.sort(key=lambda item: (-item[0], item[1]["kb_id"]))
         if not ranked:
             return []
+        if len(layers) > 1:
+            best_by_layer = {}
+            for _, row in ranked:
+                best_by_layer.setdefault(row["sdk_layer"], row)
+            chosen = list(best_by_layer.values())
+            chosen_ids = {row["kb_id"] for row in chosen}
+            chosen.extend(row for _, row in ranked if row["kb_id"] not in chosen_ids)
+            return chosen[:max(3, len(best_by_layer))]
         floor = ranked[0][0] * 0.65
         return [row for score, row in ranked if score >= floor][:3]

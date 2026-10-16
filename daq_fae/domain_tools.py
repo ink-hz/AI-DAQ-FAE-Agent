@@ -10,6 +10,7 @@ import unicodedata
 from src.agent.loop.tools import ToolResult
 
 from daq_fae.knowledge.reviewed_view import ReviewedKnowledge, reviewed_name_in_query as _reviewed_name_in_query
+from daq_fae.knowledge.sdk_catalog import sdk_usage_descriptor_matches as _sdk_usage_descriptor_matches
 from daq_fae.knowledge.source_paths import contains_source_path
 from daq_fae.knowledge.software_evidence import missing_conditions, support_gap, software_version_conditions
 from daq_fae.knowledge.section_search import (
@@ -27,7 +28,7 @@ _TOOLS: dict[str, tuple[str, dict[str, dict], tuple[str, ...]]] = {
     "check_software_support": ("Check exact product, revision, connection, platform, software version and capability; include variant selectors in conditions.", {"entity": {"type": "string"}, "software": {"type": "string"}, "platform": {"type": "string"}, "version": {"type": "string"}, "hardware_revision": {"type": "string"}, "connection_mode": {"type": "string"}, "capability": {"type": "string"}, "conditions": {"type": "object"}}, ("entity", "software", "platform", "version", "hardware_revision", "connection_mode", "capability")),
     "read_doc": ("Read one authorized reviewed section by section_id; preserve its scope and conditions.", {"section_id": {"type": "string"}}, ("section_id",)),
     "search_knowledge": ("Find authorized reviewed sections and uncovered records by natural-language query; use read_doc for a full section. Retrieval relevance does not certify a typed fact.", {"query": {"type": "string"}}, ("query",)),
-    "sdk_evidence": ("Find source-checked SDK API and example usage. Usage evidence does not certify a device or firmware combination; exact support requires all software selectors and device tests.", {"query": {"type": "string"}}, ("query",)),
+    "sdk_evidence": ("Find source-checked SDK API and example usage. Packaged source or CMake targets do not prove compilation. Usage evidence does not certify a device or firmware combination; exact support requires all software selectors and device tests.", {"query": {"type": "string"}}, ("query",)),
     "official_links": ("Find authorized and verified official DAQ links.", {"query": {"type": "string"}}, ("query",)),
     "experience": ("Find reviewed field cases and diagnostic experience; not product specifications.", {"query": {"type": "string"}}, ("query",)),
     "risk": ("Find reviewed operating and data integrity risks for an acquisition setup.", {"query": {"type": "string"}}, ("query",)),
@@ -39,29 +40,15 @@ def _identity_text(value: str) -> str:
     return re.sub(r'\s+', '', unicodedata.normalize('NFKC', value).casefold().replace('×', 'x'))
 
 
-def _sdk_usage_descriptor_matches(value: str, row: dict) -> bool:
-    """Match a descriptive SDK goal against source reviewed tags and API names."""
-    labels = [str(item) for key in ("usage_tasks", "topics", "symbols")
-              for item in row.get(key, []) if isinstance(item, str)]
-    def normalized(text: str) -> str:
-        return re.sub(r"\bsd[_\s-]?card(?![a-z])", "sdcard", text.casefold())
-    if _identity_text(normalized(value)) in {
-            _identity_text(normalized(label)) for label in labels}:
-        return True
-    aliases = {
-        "initialization": "init", "initialize": "init", "initialise": "init",
-        "initializing": "init", "startup": "start", "starting": "start",
-        "stopping": "stop", "configuration": "config", "configure": "config",
-        "compilation": "build", "compile": "build",
-    }
-    ignored = {"and", "the", "of", "order", "sequence", "how", "to", "example", "sample"}
-    def tokens(text: str) -> set[str]:
-        return {aliases.get(token, token) for token in re.findall(r"[a-z0-9]+", normalized(text))
-                if token not in ignored}
-    wanted = tokens(value)
-    known = tokens(" ".join(labels))
-    overlap = wanted & known
-    return len(wanted) >= 2 and len(overlap) >= 2 and len(overlap) * 5 >= len(wanted) * 3
+def _sdk_api_selector_matches(value: str, row: dict) -> bool:
+    """A named API or a getter's named value must exist in this exact record."""
+    wanted = _identity_text(value)
+    return bool(wanted) and any(
+        isinstance(symbol, str) and (
+            (name := _identity_text(symbol)) == wanted
+            or name == 'get' + wanted
+        ) for symbol in row.get('symbols', [])
+    )
 
 
 def _entity_identity_labels(row: dict) -> set[str]:
@@ -108,6 +95,98 @@ def _candidate_name_in_query(name: str, query: str) -> bool:
     pattern = re.escape(normalized_name).replace(r'\ ', r'\s*')
     return bool(re.search(r'(?<![A-Za-z0-9])' + pattern + r'(?![A-Za-z0-9])',
                           normalized_query, re.I))
+
+
+def _candidate_query_scope_safe(row: dict, query: str) -> bool:
+    """A descriptive alias cannot fill in a missing variant or version."""
+    surface = unicodedata.normalize('NFKC', query).replace('×', 'x')
+    scope = row['scope']
+    if (row.get('data', {}).get('evidence_conditions', {}).get('host_connection') == 'none'
+            or scope.get('mode') == 'standalone'):
+        if re.search(r'组合|多机|多设备|配对|同步组|组开流|联机|multi[-\s]?device|pairing',
+                     surface, re.I):
+            return False
+        # Any positively mentioned host conflicts with a standalone record.
+        # Looking only beside a connection verb misses “通过 USB 与 PC 通信”.
+        for host in re.finditer(r'电脑|手机|主机|(?<![A-Za-z])PC(?![A-Za-z])|\bcomputer\b'
+                                r'|\bphone\b|\bhost\b', surface, re.I):
+            before = surface[max(0, host.start() - 20):host.start()]
+            if not re.search(
+                    r'(?:不(?:连接|接入|接|使用|用|通过|经)|无(?:需|须|连接)?'
+                    r'|未连接|免(?:接|连|用))[^，。；;!?？!]{0,12}$', before):
+                return False
+    resolutions = {match.group().casefold() for match in re.finditer(
+        r'(?<!\d)\d{3,4}x\d{3,4}(?!\d)', surface, re.I)}
+    scoped_resolutions = {
+        _identity_text(value) for key, value in scope.items()
+        if isinstance(value, str) and ('resolution' in key or 'variant' in key)
+        and re.fullmatch(r'\d{3,4}x\d{3,4}', _identity_text(value))}
+    if not resolutions <= scoped_resolutions:
+        return False
+    version_labels = (
+        ('viewer_version', r'viewer|查看器|浏览器'),
+        ('sdk_version', r'\bsdk\b'),
+        ('firmware_version', r'固件|firmware|\bfw\b'),
+        ('hardware_revision', r'硬件修订|硬件版本|hardware\s*revision'),
+        ('build', r'构建|\bbuild\b'),
+    )
+    for match in re.finditer(r'(?<![\d.])v?(\d+(?:\.\d+){1,3})(?![\d.])',
+                             surface, re.I):
+        value = match.group(1)
+        prefix = surface[max(0, match.start() - 32):match.start()]
+        labels = [(hit.end(), key) for key, pattern in version_labels
+                  for hit in re.finditer(pattern, prefix, re.I)]
+        requested_key = max(labels)[1] if labels else None
+        scoped_versions = {
+            key: token.group(1) for key, item in scope.items()
+            if isinstance(item, str) and (key.endswith('_version') or
+                                          key in {'hardware_revision', 'build'})
+            if (token := re.fullmatch(r'v?(\d+(?:\.\d+){1,3})', item, re.I))}
+        if (requested_key is not None and scoped_versions.get(requested_key) != value
+                or requested_key is None and value not in scoped_versions.values()):
+            return False
+    return True
+
+
+def _candidate_alias_match(row: dict, query: str) -> bool:
+    if row['status'] != 'verified' or not _candidate_query_scope_safe(row, query):
+        return False
+    aliases = row['data'].get('retrieval_aliases', [])
+    normalized = _identity_text(query)
+    return isinstance(aliases, list) and any(
+        isinstance(alias, str) and len(_identity_text(alias)) >= 3 and
+        _identity_text(alias) in normalized for alias in aliases)
+
+
+def _candidate_topology_entities_match(row: dict, query: str,
+                                       entity_records: dict[str, dict]) -> bool:
+    hits = []
+    normalized = _identity_text(query)
+    negated = set()
+    for entity_id, entity in entity_records.items():
+        scope = entity.get('scope', {})
+        if any(_identity_text(str(scope[key])) not in normalized
+               for key in scope.get('required_selectors', [])):
+            continue
+        for label in [entity['data']['name'], scope.get('product', ''),
+                      *entity['data'].get('aliases', [])]:
+            if _candidate_name_in_query(label, query):
+                compact_label = _identity_text(label)
+                hits.append((entity_id, compact_label))
+                if (re.search(
+                        r'(?:不(?:接|连接|带|要|用|使用|含|包含|需要|配)'
+                        r'|未(?:接入|连接|配)|无(?:需)?|没有|排除|去掉|without)'
+                        r'[^，。；;!?？!]{0,4}' + re.escape(compact_label),
+                        normalized, re.I)
+                        or re.search(re.escape(compact_label) +
+                                     r'(?:不参与|不使用|已移除|被排除)', normalized)):
+                    negated.add(entity_id)
+    longest_hits = {entity_id for entity_id, label in hits if not any(
+        label != other and label in other for _, other in hits)}
+    members = set(row['data']['members'])
+    # A loose discovery alias cannot stand in for a required device. Future
+    # group aliases need their own reviewed identity, not a partial name hit.
+    return bool(members) and longest_hits == members and not (negated & members)
 
 
 def _field_intent_matches(intent: str, field: str) -> bool:
@@ -242,6 +321,7 @@ class DaqToolBox:
                 "release_id": self.knowledge.release_id,
                 "sdk_catalog_sha256": self.knowledge.sdk_catalog.manifest["records_sha256"],
                 "evidence_scope": "sdk_usage_only", "device_support": "unknown",
+                "example_build_status": "unknown",
                 "matches": [{key: row[key] for key in (
                     "kb_id", "title", "answer", "sdk_layer", "doc_type", "version",
                     "build", "platform", "symbols", "code_tokens", "confidence", "last_verified")}
@@ -258,6 +338,40 @@ class DaqToolBox:
                                       self.knowledge.release_id),
                 "source_id": row["kb_id"], "source_refs": row["source_refs"],
             } for row in matches])
+        if name == "search_knowledge" and getattr(
+                getattr(self.knowledge, "sdk_catalog", None), "release_notes", None) is not None:
+            query = arguments.get("query")
+            if not isinstance(query, str) or len(query) > MAX_QUERY_CHARS:
+                return ToolResult(status="tool_error", content={"error": "invalid_tool_arguments"})
+            text = self.question or query
+            lowered = text.casefold()
+            note_intent = ("viewer" in lowered or "变更日志" in text or
+                           "更新说明" in text or "发布说明" in text or
+                           "changelog" in lowered or "release note" in lowered)
+            if note_intent:
+                notes = self.knowledge.sdk_catalog.release_notes
+                matches = notes.search(text, self.role)
+                if matches:
+                    return ToolResult(status="ok", content={
+                        "release_id": self.knowledge.release_id,
+                        "release_notes_sha256": notes.manifest["records_sha256"],
+                        "evidence_scope": "release_note_statement_only",
+                        "device_support": "unknown",
+                        "matches": [{key: row[key] for key in (
+                            "title", "answer", "family", "version", "build", "platform")}
+                            for row in matches],
+                        "matched_requirement_ids": [],
+                    }, sources=[{
+                        "type": ("daq_governed_release_note" if getattr(
+                            self.knowledge.sdk_catalog, "published", False)
+                            else "daq_release_note_source_checked"),
+                        "verification_status": ("verified" if getattr(
+                            self.knowledge.sdk_catalog, "published", False)
+                            else "source_checked"),
+                        "release_id": getattr(self.knowledge.sdk_catalog, "release_id",
+                                              self.knowledge.release_id),
+                        "source_id": row["kb_id"], "source_refs": row["source_refs"],
+                    } for row in matches])
         scope_normalized = False
         completed_claim_conditions = {}
         question_targets = {}
@@ -506,9 +620,33 @@ class DaqToolBox:
                     'matches': [], 'matched_requirement_ids': self._attempted_requirement_ids(name, attempt_arguments),
                 })
         candidate_preview = bool(getattr(self.knowledge, 'is_candidate_preview', False))
+        governed_operating = candidate_preview or bool(getattr(
+            self.knowledge, 'is_operator_pro_v2', False))
+        topology_identity_records = entity_records
+        if name in {'inspect_topology', 'lookup_procedure', 'selection'}:
+            if candidate_preview:
+                topology_identity_records = {**entity_records, **{
+                    row['id']: row for row in self.knowledge.candidate_entity_records()}}
+            elif getattr(self.knowledge, 'is_operator_pro_v2', False):
+                topology_identity_records = {**entity_records, **{
+                    row['id']: row for row in self.knowledge.operating_veto_entity_records()}}
+        def formal_question_safe(row):
+            if not getattr(self.knowledge, 'is_operator_pro_v2', False) or row['kind'] not in {
+                    'topology', 'procedure'}:
+                return True
+            topology = (row if row['kind'] == 'topology' else
+                        topologies.get(row['data']['topology_id']))
+            question = self.question or str(arguments.get('query') or '') or (
+                str(arguments.get('task') or '') + ' ' + str(arguments.get('entity') or ''))
+            return bool(topology and _candidate_query_scope_safe(row, question) and
+                        _candidate_query_scope_safe(topology, question) and
+                        _candidate_topology_entities_match(topology, question,
+                                                           topology_identity_records))
         matches = [row for row in rows if self._matches(
-            name, arguments, row, entities, topologies, entity_records,
-            candidate_preview=candidate_preview)]
+            name, arguments, row, entities, topologies, topology_identity_records,
+            candidate_preview=(governed_operating if name in {
+                'inspect_topology', 'lookup_procedure', 'selection'} else candidate_preview))
+                   and formal_question_safe(row)]
         attempted = self._attempted_requirement_ids(name, attempt_arguments)
         if name in {'check_software_support', 'sdk_evidence'} and len({
             row['status'] for row in matches
@@ -655,7 +793,9 @@ class DaqToolBox:
             if isinstance(requirement, dict) and isinstance(requirement.get("id"), str)
             and requirement.get("capability") == name
             and any(self._requirement_matches(requirement, row, entities, topologies,
-                                              entity_records)
+                                              topology_identity_records,
+                                              candidate_preview=(governed_operating if row['kind'] in {
+                                                  'topology', 'procedure'} else candidate_preview))
                     and (name != 'lookup_spec' or self._positive_spec_covers_requirement(
                         requirement, row, arguments, rows, entity_records,
                         conflict_notices))
@@ -671,6 +811,9 @@ class DaqToolBox:
                if completed_claim_conditions else {}),
             **({'question_targets_not_claim_conditions': question_targets}
                if question_targets else {}),
+            **({'variant_scopes_exhaustive': False}
+               if name == 'lookup_spec' and any(
+                   row['scope'].get('required_selectors') for row in matches) else {}),
             **({"query_scope_normalized": scope_normalized} if
                getattr(self.knowledge, "is_candidate_preview", False) else {}),
             "evidence_level": ("dev_source_checked" if
@@ -711,7 +854,24 @@ class DaqToolBox:
         entities = {row['id']: row['data']['name'] for row in rows
                     if row['kind'] == 'entity'}
         topologies = {row['id']: row for row in rows if row['kind'] == 'topology'}
+        identity_records = {row['id']: row for row in rows if row['kind'] == 'entity'}
+        if getattr(self.knowledge, 'is_operator_pro_v2', False):
+            identity_records.update({row['id']: row for row in
+                                     self.knowledge.operating_veto_entity_records()})
+        query = str(arguments.get('query') or '')
+        def operating_search_safe(row):
+            if not getattr(self.knowledge, 'is_operator_pro_v2', False) or row['kind'] not in {
+                    'topology', 'procedure'}:
+                return True
+            topology = (row if row['kind'] == 'topology' else
+                        topologies.get(row['data']['topology_id']))
+            return bool(topology and all(
+                _candidate_query_scope_safe(row, text) and
+                _candidate_query_scope_safe(topology, text) and
+                _candidate_topology_entities_match(topology, text, identity_records)
+                for text in (query, self.question or query)))
         candidates = [row for row in rows if row['id'] not in covered
+                      and operating_search_safe(row)
                       and self._matches('search_knowledge', arguments, row,
                                         entities, topologies)][:20]
         if not candidates:
@@ -905,9 +1065,15 @@ class DaqToolBox:
             if not isinstance(entities, list):
                 continue
             for row in matches:
-                labels = ({"ego", "orbbecsdk", "orbbecsdk2.9.0"}
-                          if row["sdk_layer"] == "host_cpp" else
-                          {"四目ego", "libobkit", "rk3576"})
+                layer = row["sdk_layer"]
+                labels_by_layer = {
+                    "host_cpp": {"ego", "orbbecsdk", "orbbecsdk2.9.0"},
+                    "device_c": {"四目ego", "libobkit", "rk3576"},
+                    "android_java": {"ego", "orbbecsdk", "orbbecsdkandroidwrapper"},
+                    "ble_cpp": {"egolowble"},
+                    "ios_framework": {"orbbecsdk"},
+                }
+                labels = labels_by_layer.get(layer, set())
                 if any(_identity_text(str(entity)) not in labels for entity in entities):
                     continue
                 if ("sdk_version" in conditions and
@@ -925,13 +1091,16 @@ class DaqToolBox:
                             str(conditions["platform"]) == "host_side" and
                             row["sdk_layer"] == "host_cpp")):
                     continue
-                expected_sdk = "orbbecsdk" if row["sdk_layer"] == "host_cpp" else "libobkit"
                 sdk_name = _identity_text(str(conditions.get("sdk", "")))
-                if sdk_name and sdk_name != expected_sdk:
+                sdk_aliases = {
+                    "host_cpp": {"orbbecsdk"}, "device_c": {"libobkit"},
+                    "android_java": {"orbbecsdk", "orbbecsdkandroidwrapper", "androidwrapper"},
+                    "ble_cpp": {"egolowble"}, "ios_framework": {"orbbecsdk"},
+                }
+                if sdk_name and sdk_name not in sdk_aliases.get(layer, set()):
                     continue
-                if ("api" in conditions and
-                        _identity_text(str(conditions["api"])) not in {
-                            _identity_text(symbol) for symbol in row.get("symbols", [])}):
+                if ("api" in conditions and not _sdk_api_selector_matches(
+                        str(conditions["api"]), row)):
                     continue
                 if ("feature" in conditions and not _sdk_usage_descriptor_matches(
                         str(conditions["feature"]), row)):
@@ -952,11 +1121,16 @@ class DaqToolBox:
                 language = _identity_text(str(conditions.get("language", "")))
                 if language in {"c++", "cxx", "cplusplus"}:
                     language = "cpp"
-                if language and language != ("cpp" if row["sdk_layer"] == "host_cpp" else "c"):
+                language_by_layer = {
+                    "host_cpp": "cpp", "device_c": "c", "android_java": "java",
+                    "ble_cpp": "cpp", "ios_framework": None,
+                }
+                if language and language != language_by_layer.get(layer):
                     continue
-                if ("sample_type" in conditions and
-                        (conditions["sample_type"] != "official_example"
-                         or row["doc_type"] != "example")):
+                sample_type = _identity_text(str(conditions.get("sample_type", "")))
+                if sample_type == "officialexample":
+                    sample_type = "example"
+                if sample_type and sample_type != _identity_text(row["doc_type"]):
                     continue
                 if isinstance(requirement.get("id"), str):
                     ids.append(requirement["id"])
@@ -1150,13 +1324,35 @@ class DaqToolBox:
             return kind == "claim" and bool(field and entity) and \
                 data["field"].casefold() == field and entity in cls._entity_names(row, entities, topologies)
         if name in {"inspect_topology", "selection"}:
-            return kind == "topology" and bool(query) and query in text
+            if kind != 'topology' or not query:
+                return False
+            if candidate_preview and name in {'inspect_topology', 'selection'}:
+                return (_candidate_query_scope_safe(row, raw_query) and
+                        _candidate_topology_entities_match(
+                            row, raw_query, entity_records or {}) and
+                        (query in text or _candidate_alias_match(row, raw_query)))
+            return query in text
         if name == "lookup_procedure":
             task = str(arguments.get("task") or "").casefold()
             entity = str(arguments.get("entity") or "").casefold()
+            topology = topologies.get(data.get('topology_id')) if kind == 'procedure' else None
+            scoped_query = task + ' ' + entity
+            if candidate_preview and (
+                    topology is None or
+                    not _candidate_query_scope_safe(row, scoped_query) or
+                    not _candidate_topology_entities_match(
+                        topology, scoped_query, entity_records or {})):
+                return False
             return kind == "procedure" and bool(task and entity) and \
-                task == str(data["task"]).casefold() and \
-                entity in cls._entity_names(row, entities, topologies)
+                (task == str(data["task"]).casefold() or (candidate_preview and
+                 (_candidate_alias_match(row, task) or
+                  row['status'] == 'verified' and
+                  task in data.get('task_intents', []) and
+                  _candidate_query_scope_safe(row, task)))) and \
+                (entity in cls._entity_names(row, entities, topologies)
+                 or candidate_preview and topology is not None and
+                 _candidate_topology_entities_match(
+                     topology, entity, entity_records or {}))
         if name in {'check_software_support', 'sdk_evidence'}:
             return support_gap(row, arguments, cls._entity_names(row, entities, topologies), topologies) is None
         if name == "official_links":
@@ -1171,7 +1367,8 @@ class DaqToolBox:
     @classmethod
     def _requirement_matches(cls, requirement: dict, row: dict,
                              entities: dict[str, str], topologies: dict[str, dict],
-                             entity_records: dict[str, dict] | None = None) -> bool:
+                             entity_records: dict[str, dict] | None = None,
+                             *, candidate_preview: bool = False) -> bool:
         if requirement.get("reason") in {"intent_or_entity_not_grounded",
                                           "unmapped_condition_unverified"} or \
                 requirement.get("conditions_authority") == "platform_context_unverified":
@@ -1226,6 +1423,9 @@ class DaqToolBox:
         ):
             return False
         known = {**row["scope"], **row["data"].get("conditions", {})}
+        if candidate_preview and row['status'] == 'verified' and row['kind'] in {
+                'topology', 'procedure'}:
+            known.update(row['data'].get('evidence_conditions', {}))
         if row["kind"] == "software":
             data = row["data"]
             task = conditions.get("task")
@@ -1255,14 +1455,37 @@ class DaqToolBox:
                 return False
             known.update({"platform": topology["data"]["platform"],
                           "task": row["data"]["task"]})
-        if any(
-            not (cls._condition_supported(row, key, value, entity_records or {})
-                 if key == 'scope' else known.get(key) == value)
+        def condition_matches(key, value):
+            if candidate_preview and key == 'topology_aspects':
+                available = known.get(key)
+                return (isinstance(value, list) and isinstance(available, list)
+                        and bool(value) and set(value) <= set(available))
+            if candidate_preview and key == 'indicators':
+                available = known.get(key)
+                return (isinstance(value, list) and isinstance(available, list)
+                        and bool(value) and set(value) <= set(available))
+            if candidate_preview and key == 'steps':
+                available = known.get(key)
+                if not isinstance(value, list) or not isinstance(available, list) or not value:
+                    return False
+                remaining = iter(available)
+                return all(any(candidate == step for candidate in remaining)
+                           for step in value)
+            if candidate_preview and row['kind'] == 'procedure' and \
+                    row['status'] == 'verified' and key == 'task':
+                tasks = value if isinstance(value, list) else [value]
+                intents = row['data'].get('task_intents', [])
+                if isinstance(intents, list) and intents:
+                    return bool(tasks) and all(
+                        str(item).casefold() in intents for item in tasks)
+            return (cls._condition_supported(row, key, value, entity_records or {})
+                    if key == 'scope' else known.get(key) == value)
+
+        return not any(
+            not condition_matches(key, value)
             for key, value in conditions.items()
             if not (row["kind"] == "software" and key == "task")
-        ):
-            return False
-        return True
+        )
 
     def redact_tool_input(self, _name: str, arguments: dict) -> dict:
         # This release has no credentials in tool arguments; keep bounded audit data.

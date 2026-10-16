@@ -37,13 +37,17 @@ class DevCandidateKnowledge:
 
     def __init__(self, release_id: str, sections: list[dict], records: list[dict],
                  field_aliases: dict[str, str],
-                 scoped_field_aliases: dict[str, dict[str, str]] | None = None):
+                 scoped_field_aliases: dict[str, dict[str, str]] | None = None,
+                 candidate_entities: list[dict] | None = None):
         self.release_id = release_id
         self.manifest = {"format_version": 2, "candidate_preview": True,
                          "section_count": len(sections),
                          "source_checked_count": len(records)}
         self._sections = tuple(deepcopy(sections))
         self._records = tuple(deepcopy(records))
+        # Candidate identities can only veto a mismatched topology. They are
+        # never returned by records_for or promoted to source-checked facts.
+        self._candidate_entities = tuple(deepcopy(candidate_entities or []))
         self._field_aliases = dict(field_aliases)
         self._scoped_field_aliases = deepcopy(scoped_field_aliases or {})
 
@@ -176,7 +180,12 @@ class DevCandidateKnowledge:
                     scoped_field_aliases[entity_id][normalized] = field
         release_hash = hashlib.sha256((graph_hash + ledger_hash).encode()).hexdigest()
         return cls("candidate-dev-" + release_hash, sections, source_checked,
-                   field_aliases, scoped_field_aliases)
+                   field_aliases, scoped_field_aliases,
+                   [row for row in bundle["records"] if row["kind"] == "entity"])
+
+    def candidate_entity_records(self) -> list[dict]:
+        """Return graph identities for negative scope checks, never answers."""
+        return [deepcopy(row) for row in self._candidate_entities]
 
     def records_for(self, role: str, *, for_delivery: bool = False):
         return [deepcopy(row) for row in self._records] if role == "internal_fae" else []

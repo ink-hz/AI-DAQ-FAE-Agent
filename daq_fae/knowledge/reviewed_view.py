@@ -106,6 +106,16 @@ class ReviewedKnowledge:
         self.manifest = deepcopy(manifest)
         self._records = tuple(deepcopy(manifest["records"]))
         self._sections = tuple(deepcopy(manifest.get("sections", [])))
+        self.is_operator_pro_v2 = (manifest.get('review', {}).get('operator_release', {}).get('mode')
+                                   == 'owner_directed_source_checked_v2')
+
+    def operating_veto_entity_records(self) -> list[dict]:
+        """Reviewed v2 exclusion labels are identity vetoes, never answer sources."""
+        if not self.is_operator_pro_v2:
+            return []
+        return [{'id': item['id'], 'scope': {},
+                 'data': {'name': item['name'], 'aliases': item['aliases']}}
+                for item in self.manifest['review']['operator_release']['veto_entities']]
 
     @staticmethod
     def _identity_text(value: str) -> str:
@@ -304,8 +314,8 @@ class ReviewedKnowledge:
         if active is None:
             return None
         if any(active['manifest'].get(key) for key in ('sources', 'records', 'sections')):
-            if active['manifest'].get('review', {}).get('operator_release', {}).get('mode') == \
-                    'owner_directed_source_checked_v1':
+            if active['manifest'].get('review', {}).get('operator_release', {}).get('mode') in {\
+                    'owner_directed_source_checked_v1', 'owner_directed_source_checked_v2'}:
                 from .operator_release import _checked_operator
                 _checked_operator(root, active['release_id'], runtime_release=runtime_release,
                                   upstream_sha=upstream_sha)
@@ -430,6 +440,12 @@ class ReviewedKnowledge:
         if manifest["format_version"] == 2:
             from .section_release import validate_section_manifest
             validate_section_manifest(manifest)
+        if manifest.get('review', {}).get('operator_release', {}).get('mode') == \
+                'owner_directed_source_checked_v2':
+            from .operator_release import verify_operator_manifest
+            runtime = manifest['review']['operator_release']['runtime']
+            verify_operator_manifest(manifest, runtime_release=runtime['release'],
+                                     upstream_sha=runtime['upstream_sha'])
         return cls(release_id, manifest)
 
     def records_for(self, role: str, *, for_delivery: bool = False) -> list[dict]:

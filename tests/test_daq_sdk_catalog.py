@@ -4,6 +4,7 @@ import io
 import json
 from pathlib import Path
 import tarfile
+import zipfile
 
 import pytest
 
@@ -11,8 +12,360 @@ from daq_fae.domain_tools import DaqToolBox
 from daq_fae.domain_evidence import DaqEvidencePolicy
 from daq_fae.knowledge.sdk_catalog import SdkCatalog, _serialized, build_catalog
 from daq_fae.knowledge.sdk_release import activate_sdk_release, load_active_sdk_release, stage_sdk_release
-from daq_fae.request_schema import DaqRequestSchema
+from daq_fae.request_schema import DaqRequestSchema, extract_request_schema
 from scripts.archive_candidate_snapshot import create_archive
+
+
+def _candidate_catalog() -> SdkCatalog:
+    directory = Path("Knowledge_SDK")
+    records = [json.loads(line) for line in (directory / "SDK_Knowledge.jsonl").read_text().splitlines()]
+    manifest = json.loads((directory / "SDK_Knowledge_manifest.json").read_text())
+    return SdkCatalog(records, manifest)
+
+
+def test_host_uid_hotplug_record_has_source_bound_scope_without_device_support():
+    directory = Path("Knowledge_SDK")
+    records = [json.loads(line) for line in (directory / "SDK_Knowledge.jsonl").read_text().splitlines()]
+    uid = next(row for row in records if row["kb_id"] == "daq-sdk-host-net-uid-hotplug-016")
+    assert uid["package"] == "host_cpp_20260929"
+    assert uid["build"] == "20260929"
+    assert uid["source_refs"]
+    assert all(ref["member_sha256"] and ref["package_sha256"] for ref in uid["source_refs"])
+    assert "兼容" not in uid["answer"]
+
+
+def test_archived_host_uid_hotplug_example_retrieves_by_api_intent():
+    directory = Path("Knowledge_SDK")
+    archive = Path("data/knowledge/local_archive/sdk-originals-1015-local-20261015")
+    if not archive.is_dir():
+        pytest.skip("local ignored SDK originals unavailable")
+    catalog = SdkCatalog.load(directory, archive)
+    rows = catalog.search("OrbbecSDK 网络设备 UID 热插拔移除回调怎么核对", "internal_fae")
+    uid = next(row for row in rows if row["kb_id"] == "daq-sdk-host-net-uid-hotplug-016")
+    assert uid["platform"] == "Linux x86_64"
+
+
+def test_zip_member_api_fact_is_hash_and_line_bound(tmp_path, monkeypatch):
+    from daq_fae.knowledge import sdk_catalog
+    monkeypatch.setattr(sdk_catalog, "PACKAGES", {
+        "android": {"glob": "android.zip", "version": "beta2.2.5", "build": "20260929",
+                    "platform": "Android", "format": "zip"},
+    })
+    source = tmp_path / "source"
+    source.mkdir()
+    with zipfile.ZipFile(source / "android.zip", "w") as bundle:
+        bundle.writestr("wrapper/doc/api.md", "Header\nDevice.exportFirmwareLogs(callback)\n")
+    archive = tmp_path / "archive"
+    create_archive(source, archive, "2026-10-16")
+    curated = tmp_path / "curated.json"
+    curated.write_text(json.dumps([{
+        "kb_id": "android-log", "package": "android", "sdk_layer": "android_java",
+        "doc_type": "api", "title": "Android firmware log", "question_patterns": ["Android firmware log"],
+        "answer": "Java API exists; device support unknown.", "symbols": ["exportFirmwareLogs"],
+        "topics": ["firmware_log"], "last_verified": "2026-10-16",
+        "source_refs": [{"member_suffix": "doc/api.md", "start_line": 2, "end_line": 2}],
+    }]))
+    records, manifest = build_catalog(curated, archive)
+    assert records[0]["source_refs"][0]["member"] == "wrapper/doc/api.md"
+    assert records[0]["source_refs"][0]["member_sha256"]
+    assert records[0]["last_verified"] == "2026-10-16"
+    assert manifest["record_count"] == 1
+
+
+@pytest.mark.parametrize("unsafe_name", ["../api.md", "C:\\temp\\api.md", "C:relative\\api.md", "\\\\server\\share\\api.md"])
+def test_zip_source_member_rejects_traversal_and_absolute_names(tmp_path, unsafe_name):
+    from daq_fae.knowledge.sdk_catalog import _source_member
+    path = tmp_path / "unsafe.zip"
+    with zipfile.ZipFile(path, "w") as bundle:
+        bundle.writestr(unsafe_name, "API fact\n")
+    with zipfile.ZipFile(path) as bundle, pytest.raises(ValueError, match="unsafe path"):
+        _source_member(bundle, "api.md")
+
+
+def test_zip_source_member_rejects_large_uncompressed_text(tmp_path):
+    from daq_fae.knowledge.sdk_catalog import _source_member
+    path = tmp_path / "large.zip"
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+        bundle.writestr("doc/api.md", "A" * 2_000_001)
+    with zipfile.ZipFile(path) as bundle, pytest.raises(ValueError, match="too large"):
+        _source_member(bundle, "api.md")
+
+
+def test_android_sdk_intent_does_not_route_to_host_cpp():
+    android = {"kb_id": "android-log", "sdk_layer": "android_java", "version": "beta2.2.5",
+               "build": "20260929", "platform": "Android", "doc_type": "api",
+               "title": "Android 固件日志导出", "question_patterns": ["OrbbecSDK Android exportFirmwareLogs"],
+               "symbols": ["exportFirmwareLogs"], "topics": ["firmware_log"],
+               "answer": "Android Java API", "outputs": []}
+    host = {**android, "kb_id": "host-log", "sdk_layer": "host_cpp", "platform": "Linux x86_64"}
+    catalog = SdkCatalog([android, host], {})
+    rows = catalog.search("OrbbecSDK Android Java exportFirmwareLogs 固件日志", "internal_fae")
+    assert [row["kb_id"] for row in rows] == ["android-log"]
+
+
+def test_explicit_android_and_host_cpp_question_preserves_both_layers():
+    base = {"version": "2.9.0", "build": "20260929", "platform": "Linux x86_64",
+            "doc_type": "api", "title": "固件日志导出", "symbols": ["exportFirmwareLogs"],
+            "topics": ["firmware_log"], "answer": "SDK API", "outputs": []}
+    android = {**base, "kb_id": "android-log", "sdk_layer": "android_java",
+               "platform": "Android", "question_patterns": ["Android Java 固件日志导出"]}
+    host = {**base, "kb_id": "host-log", "sdk_layer": "host_cpp",
+            "question_patterns": ["Linux C++ 固件日志导出"]}
+    catalog = SdkCatalog([android, host], {})
+    rows = catalog.search("OrbbecSDK Android Java 与 Linux C++ 固件日志导出", "internal_fae")
+    assert {row["kb_id"] for row in rows} == {"android-log", "host-log"}
+
+
+@pytest.mark.parametrize("question,expected_id", [
+    ("EgoLowBle 1.1.8 Windows 怎么链接？EGO 固件 1.1.8 能用吗？", "daq-sdk-ble-windows-install-020"),
+    ("OrbbecSDK 2.9.0 iOS framework 如何嵌入？能证明 EGO 固件兼容吗？", "daq-sdk-ios-framework-022"),
+])
+def test_mixed_sdk_and_device_question_keeps_device_support_unknown(question, expected_id):
+    directory = Path("Knowledge_SDK")
+    records = [json.loads(line) for line in (directory / "SDK_Knowledge.jsonl").read_text().splitlines()]
+    manifest = json.loads((directory / "SDK_Knowledge_manifest.json").read_text())
+    catalog = SdkCatalog(records, manifest)
+
+    class Knowledge:
+        release_id = "dev-sdk"
+        sdk_catalog = catalog
+        def records_for(self, role): return []
+        def sections_for(self, role): return []
+
+    toolbox = DaqToolBox(question=question, knowledge=Knowledge(), role="internal_fae")
+    usage = toolbox.dispatch("sdk_evidence", {"query": question})
+    assert usage.status == "ok"
+    assert usage.content["device_support"] == "unknown"
+    assert expected_id in {row["kb_id"] for row in usage.content["matches"]}
+    assert toolbox.dispatch("check_software_support", {"query": question}).status == "not_found"
+
+
+def test_ble_version_118_is_not_mistaken_for_orbbecsdk_version():
+    ble = {"kb_id": "ble-install", "sdk_layer": "ble_cpp", "version": "1.1.8",
+           "build": "20260929", "platform": "Windows x64", "doc_type": "install",
+           "title": "EgoLowBle Windows 集成", "question_patterns": ["EgoLowBle 1.1.8 怎么链接"],
+           "symbols": ["EgoLowBle.lib"], "topics": ["ble", "install"],
+           "answer": "Link import library", "outputs": []}
+    catalog = SdkCatalog([ble], {})
+    assert [row["kb_id"] for row in catalog.search(
+        "Windows EgoLowBle 1.1.8 怎么链接", "internal_fae")] == ["ble-install"]
+
+
+def test_sdk_usage_matcher_respects_java_ble_and_ios_scope():
+    class Knowledge:
+        release_id = "dev-sdk"
+        def records_for(self, role): return []
+        def sections_for(self, role): return []
+
+    toolbox = DaqToolBox(knowledge=Knowledge(), role="internal_fae", requirements=[
+        {"id": "android", "capability": "sdk_evidence", "entities": ["EGO"],
+         "conditions": {"sdk": "OrbbecSDK Android Wrapper", "language": "Java",
+                        "api": "exportFirmwareLogs", "platform": "Android"}},
+        {"id": "wrong_os", "capability": "sdk_evidence", "entities": ["EGO"],
+         "conditions": {"sdk": "OrbbecSDK Android Wrapper", "language": "Java",
+                        "api": "exportFirmwareLogs", "platform": "Windows"}},
+        {"id": "ios_swift", "capability": "sdk_evidence", "entities": [],
+         "conditions": {"sdk": "OrbbecSDK", "language": "Swift", "platform": "iOS"}},
+    ])
+    android_row = {"sdk_layer": "android_java", "version": "beta2.2.5", "build": "20260929",
+                   "platform": "Android", "doc_type": "api", "symbols": ["exportFirmwareLogs"],
+                   "topics": ["firmware_log"], "usage_tasks": ["firmware_log_export"]}
+    ios_row = {"sdk_layer": "ios_framework", "version": "2.9.0", "build": "20260929",
+               "platform": "iOS ARM64", "doc_type": "install", "symbols": [],
+               "topics": ["framework"], "usage_tasks": ["integrate_framework"]}
+    assert toolbox._sdk_usage_requirement_ids([android_row, ios_row]) == ["android"]
+
+
+def test_all_22_catalog_rows_certify_their_exact_sdk_usage_scope():
+    records = [json.loads(line) for line in Path("Knowledge_SDK/SDK_Knowledge.jsonl").read_text().splitlines()]
+    assert len(records) == 22
+
+    class Knowledge:
+        release_id = "dev-sdk"
+        def records_for(self, role): return []
+        def sections_for(self, role): return []
+
+    sdk_names = {"host_cpp": "OrbbecSDK", "device_c": "libobkit",
+                 "android_java": "Android Wrapper", "ble_cpp": "EgoLowBle",
+                 "ios_framework": "OrbbecSDK"}
+    languages = {"host_cpp": "C++", "device_c": "C", "android_java": "Java",
+                 "ble_cpp": "C++"}
+    for row in records:
+        conditions = {"sdk": sdk_names[row["sdk_layer"]], "sdk_version": row["version"],
+                      "sdk_release_date": row["build"], "platform": row["platform"],
+                      "task": row["usage_tasks"][0], "feature": row["usage_tasks"][0]}
+        if row["sdk_layer"] in languages:
+            conditions["language"] = languages[row["sdk_layer"]]
+        if row["doc_type"] == "example":
+            conditions["sample_type"] = "example"
+        requirement = {"id": "sdk-goal", "capability": "sdk_evidence", "entities": [],
+                       "conditions": conditions}
+        toolbox = DaqToolBox(knowledge=Knowledge(), role="internal_fae",
+                             requirements=[requirement])
+        assert toolbox._sdk_usage_requirement_ids([row]) == ["sdk-goal"], row["kb_id"]
+
+
+def test_uid_comparison_intent_certifies_only_source_tagged_host_example():
+    row = next(json.loads(line) for line in Path("Knowledge_SDK/SDK_Knowledge.jsonl").read_text().splitlines()
+               if "daq-sdk-host-net-uid-hotplug-016" in line)
+
+    class Knowledge:
+        release_id = "dev-sdk"
+        def records_for(self, role): return []
+        def sections_for(self, role): return []
+
+    requirement = {"id": "uid-goal", "capability": "sdk_evidence", "entities": [],
+                   "conditions": {"sdk": "OrbbecSDK", "sdk_version": "2.9.0",
+                                  "sdk_release_date": "2026-09-29", "platform": "linux x86_64",
+                                  "language": "c++", "sample_type": "example",
+                                  "feature": "uid_check",
+                                  "task": "network_device_removal_callback"}}
+    toolbox = DaqToolBox(knowledge=Knowledge(), role="internal_fae",
+                         requirements=[requirement])
+    assert toolbox._sdk_usage_requirement_ids([row]) == ["uid-goal"]
+
+
+def test_uid_hotplug_schema_grounds_user_stated_chinese_feature():
+    question = ("用 2026-09-29 Linux x86_64 OrbbecSDK 2.9.0 C++ 示例，"
+                "怎样核对网络设备移除回调中的 UID？不要推断我的设备和固件已经兼容。")
+    schema = DaqRequestSchema.from_candidate(question, {
+        "confidence": "high", "answer_language": "zh", "request_kind": "product",
+        "goals": [{"kind": "product", "capability": "sdk_evidence", "entities": [],
+                   "conditions": {"api": "uid", "feature": "network_device_removal_callback",
+                                  "language": "c++", "platform": "linux x86_64",
+                                  "sdk": "OrbbecSDK", "sdk_release_date": "2026-09-29",
+                                  "sdk_version": "2.9.0"}}],
+    }, sdk_catalog=_candidate_catalog())
+    assert schema.goals[0].unmapped_condition_keys == ()
+
+
+def test_uid_hotplug_schema_rejects_feature_absent_from_user_question():
+    question = "用 2026-09-29 Linux x86_64 OrbbecSDK 2.9.0 C++ 示例，怎样读取 UID？"
+    schema = DaqRequestSchema.from_candidate(question, {
+        "confidence": "high", "answer_language": "zh", "request_kind": "product",
+        "goals": [{"kind": "product", "capability": "sdk_evidence", "entities": [],
+                   "conditions": {"feature": "network_device_removal_callback",
+                                  "sdk": "OrbbecSDK", "sdk_release_date": "2026-09-29",
+                                  "sdk_version": "2.9.0"}}],
+    }, sdk_catalog=_candidate_catalog())
+    assert schema.goals[0].unmapped_condition_keys == ("feature",)
+
+
+def test_uid_hotplug_schema_does_not_translate_without_source_checked_catalog():
+    question = "用 OrbbecSDK 示例怎样核对网络设备移除回调中的 UID？"
+    schema = DaqRequestSchema.from_candidate(question, {
+        "confidence": "high", "answer_language": "zh", "request_kind": "product",
+        "goals": [{"kind": "product", "capability": "sdk_evidence", "entities": [],
+                   "conditions": {"feature": "network_device_removal_callback"}}],
+    })
+    assert schema.goals[0].unmapped_condition_keys == ("feature",)
+
+
+def test_android_sdcard_schema_grounds_user_stated_chinese_sdk_task():
+    question = ("2026-09-29 Android Wrapper beta2.2.5 的 Java API，"
+                "网络 EGO 的 SD 卡文件信息与本地下载该怎么调用？这证明具体固件支持吗？")
+    schema = DaqRequestSchema.from_candidate(question, {
+        "confidence": "high", "answer_language": "zh", "request_kind": "product",
+        "goals": [{"kind": "product", "capability": "sdk_evidence", "entities": ["EGO"],
+                   "conditions": {"feature": "network_ego_sd_card_file_access",
+                                  "task": "sd_card_file_info_and_local_download",
+                                  "language": "java", "platform": "android",
+                                  "sdk": "Android Wrapper", "sdk_release_date": "2026-09-29",
+                                  "sdk_version": "beta2.2.5"}}],
+    }, sdk_catalog=_candidate_catalog())
+    assert schema.goals[0].unmapped_condition_keys == ()
+
+
+def test_sdk_schema_extraction_uses_only_loaded_source_checked_catalog():
+    question = "用 OrbbecSDK 示例怎样核对网络设备移除回调中的 UID？"
+
+    class Adapter:
+        def chat(self, messages, tools, required_tool):
+            yield {"type": "tool_call", "name": "submit_daq_request_schema",
+                   "arguments": {"confidence": "high", "request_kind": "product",
+                                 "goals": [{"kind": "product", "capability": "sdk_evidence",
+                                            "entities": [], "conditions": {
+                                                "feature": "network_device_removal_callback"}}]}}
+
+    class Knowledge:
+        sdk_catalog = _candidate_catalog()
+
+    schema = extract_request_schema(question, adapter=Adapter(), knowledge=Knowledge())
+    assert schema.goals[0].unmapped_condition_keys == ()
+
+
+def test_uid_hotplug_requirement_binds_user_uid_to_reviewed_getter_symbol():
+    row = next(json.loads(line) for line in Path("Knowledge_SDK/SDK_Knowledge.jsonl").read_text().splitlines()
+               if "daq-sdk-host-net-uid-hotplug-016" in line)
+
+    class Knowledge:
+        release_id = "dev-sdk"
+
+        def records_for(self, role): return []
+        def sections_for(self, role): return []
+
+    requirement = {"id": "uid-hotplug", "capability": "sdk_evidence", "entities": [],
+                   "conditions": {"api": "uid", "feature": "network_device_removal_callback",
+                                  "language": "c++", "platform": "linux x86_64",
+                                  "sdk": "OrbbecSDK", "sdk_release_date": "2026-09-29",
+                                  "sdk_version": "2.9.0"}}
+    toolbox = DaqToolBox(knowledge=Knowledge(), role="internal_fae",
+                         requirements=[requirement])
+    assert toolbox._sdk_usage_requirement_ids([row]) == ["uid-hotplug"]
+
+
+@pytest.mark.parametrize("override", [
+    {"sdk_release_date": "2026-09-23"},
+    {"platform": "Windows x64"},
+    {"api": "serial"},
+])
+def test_uid_hotplug_concept_cannot_cross_build_platform_or_api(override):
+    row = next(json.loads(line) for line in Path("Knowledge_SDK/SDK_Knowledge.jsonl").read_text().splitlines()
+               if "daq-sdk-host-net-uid-hotplug-016" in line)
+
+    class Knowledge:
+        release_id = "dev-sdk"
+
+        def records_for(self, role): return []
+        def sections_for(self, role): return []
+
+    conditions = {"api": "uid", "feature": "network_device_removal_callback",
+                  "language": "c++", "platform": "linux x86_64", "sdk": "OrbbecSDK",
+                  "sdk_release_date": "2026-09-29", "sdk_version": "2.9.0",
+                  **override}
+    toolbox = DaqToolBox(knowledge=Knowledge(), role="internal_fae", requirements=[
+        {"id": "usage", "capability": "sdk_evidence", "entities": [],
+         "conditions": conditions},
+        {"id": "device", "capability": "check_software_support", "entities": ["EGO"],
+         "conditions": conditions},
+    ])
+    assert toolbox._sdk_usage_requirement_ids([row]) == []
+
+
+@pytest.mark.parametrize("kb_id,conditions", [
+    ("daq-sdk-android-fwlog-017", {"api": "exportFirmwareLogs", "platform": "android",
+      "sdk": "Android Wrapper", "sdk_release_date": "2026-09-29"}),
+    ("daq-sdk-android-sdcard-018", {"feature": "network_ego_sd_card_file_access",
+      "language": "java", "platform": "android", "sdk": "Android Wrapper",
+      "sdk_release_date": "2026-09-29", "sdk_version": "beta2.2.5",
+      "task": "sd_card_file_info_and_local_download"}),
+])
+def test_real_dev_sdk_selectors_certify_scoped_usage_only(kb_id, conditions):
+    row = next(json.loads(line) for line in Path("Knowledge_SDK/SDK_Knowledge.jsonl").read_text().splitlines()
+               if kb_id in line)
+
+    class Knowledge:
+        release_id = "dev-sdk"
+        def records_for(self, role): return []
+        def sections_for(self, role): return []
+
+    usage = {"id": "usage", "capability": "sdk_evidence", "entities": ["EGO"],
+             "conditions": conditions}
+    device = {"id": "device", "capability": "check_software_support",
+              "entities": ["EGO"], "conditions": conditions}
+    toolbox = DaqToolBox(knowledge=Knowledge(), role="internal_fae",
+                         requirements=[usage, device])
+    assert toolbox._sdk_usage_requirement_ids([row]) == ["usage"]
 
 
 def _package(path: Path, member: str, content: bytes) -> None:
@@ -107,6 +460,23 @@ def test_sdk_tool_returns_usage_without_certifying_device_support(tmp_path, monk
     assert result.content["matched_requirement_ids"] == []
     assert result.sources and "source_refs" in result.sources[0]
     assert toolbox.dispatch("check_software_support", {"query": "EGO 同步模式"}).status == "not_found"
+
+
+def test_sdk_tool_marks_example_build_as_unverified(tmp_path, monkeypatch):
+    directory, archive = _fixture(tmp_path, monkeypatch)
+    catalog = SdkCatalog.load(directory, archive)
+
+    class Knowledge:
+        release_id = "dev-sdk"
+        sdk_catalog = catalog
+
+        def records_for(self, role): return []
+        def sections_for(self, role): return []
+
+    result = DaqToolBox(knowledge=Knowledge(), role="internal_fae").dispatch(
+        "sdk_evidence", {"query": "EGO 同步模式怎么设置"})
+    assert result.status == "ok"
+    assert result.content["example_build_status"] == "unknown"
 
 
 def test_sdk_usage_covers_only_usage_goal_in_dev(tmp_path, monkeypatch):

@@ -1,0 +1,9 @@
+{
+  "archive_manifest_sha256": "56b3c4411956290c3d9bc1dacbccc228e97f489feae649f9389a8a09303bd211",
+  "device_support": "unknown",
+  "format_version": "daq-sdk-material-inventory/v1",
+  "index_sha256": "83a36754a79da7bcadcfe77f2bf973a59bf4e838a2e481f453a56c1fd600385f",
+  "original_count": 143,
+  "source_checked_packages": 8,
+  "unique_file_hashes": 115
+}

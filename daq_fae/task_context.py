@@ -359,6 +359,9 @@ def prepare_turn(message: str, *, previous=None, updates=None, topic_switch=None
         # clause of a comparison and must not filter its other goals.
         scope['conditions'].pop('resolution', None)
         scope['conditions'].pop('per_port', None)
+        # Likewise, an extracted action word is not a condition on every
+        # structured goal. The schema attaches a task to the relevant goal.
+        scope['conditions'].pop('task', None)
     measurement_resolution = re.search(
         r'(?:在|以)\s*([0-9]{3,4})\s*[x×X]\s*([0-9]{3,4})\s*分辨率(?:下|时)',
         message, re.IGNORECASE)
@@ -513,7 +516,9 @@ def prepare_turn(message: str, *, previous=None, updates=None, topic_switch=None
                 }
                 if question_constraints:
                     requirement['question_constraints'] = question_constraints
-                if goal.unmapped_condition_keys and goal.capability != 'lookup_spec':
+                if goal.unmapped_condition_keys and (
+                        goal.capability != 'lookup_spec' or
+                        bool(set(goal.unmapped_condition_keys) & _IDENTITY_SELECTOR_KEYS)):
                     requirement['reason'] = 'unmapped_condition_unverified'
                     requirement['unmapped_condition_keys'] = list(goal.unmapped_condition_keys)
                 if goal.field:

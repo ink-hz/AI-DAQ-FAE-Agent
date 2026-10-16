@@ -1,5 +1,9 @@
 # SDK build changes reviewed on 2026-10-15
 
+2026-10-16 intake follow-up: the [143-file coverage review](../docs/reviews/2026-10-16-daq-sdk-material-coverage.md) audited all original hashes and exact duplicate groups, including 22 versioned change logs and two unverified shortcut files. The **Dev candidate** now has 22 records from 8 exact packages and 55 source spans: one Host C++ network UID hot-plug example, three Android Java API records, two Windows/Linux x64 BLE package integration records, and one iPhoneOS framework integration record were added. The active published release remains at 15 records pending Dev replay and independent answer review. The 2026-09-21 UMI Finger magnetometer addition and 2026-09-23 removal are held as a conflict despite a retained later sample. ARM64/macOS variants, AAR and other binaries remain inventory-only until separately source checked.
+
+The separate **Dev-candidate release-note catalog** covers all 22 change-log paths as 17 unique file-hash statements. Five Linux/Windows desktop Viewer pairs share bytes and do not count as independent corroboration. The Android Viewer `v1.0.11` build 2026092302 note cites the network enumeration restriction at actual file line 8; build 2026092901's top-level entry does not declare restoration. Both records retain their exact source hashes and build identity. A release note says what a particular log states; it does not certify a binary, device pairing or field behavior. Publication must bind the note catalog SHA and an independent Dev answer review.
+
 `update_audit.json` compares member bytes inside the archived Linux x86_64 OrbbecSDK packages. All five drops carry the same marketing version `2.9.0`, so the package build date and SHA are part of each record's scope.
 
 | Drop | EGO example members | Change from prior archived drop |

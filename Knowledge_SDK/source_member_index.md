@@ -1,5 +1,29 @@
 # SDK source member index
 
+## daq-sdk-android-fwlog-017
+
+- OrbbecSDK-Android-Wrapper-beta2.2.5-202609292240/doc/EgoFirmwareLogExportExample.md:20-95 (member SHA-256 `eb38eb5969a8523beb4a971baab2e5013ca74b34828492f75ff7c3af3d50db5f`)
+- OrbbecSDK-Android-Wrapper-beta2.2.5-202609292240/obsensor_jni/src/main/java/com/orbbec/obsensor/Device.java:1294-1315 (member SHA-256 `96e6efbd4ba8e77b998e1988a8ccdda716cbd1a40bd1bbb66950ab206435efea`)
+
+## daq-sdk-android-record-state-019
+
+- OrbbecSDK-Android-Wrapper-beta2.2.5-202609292240/doc/EgoStateMonitorExample.md:5-17 (member SHA-256 `c955f1a9021a2648a80d69c8d554a76e8f7e98578e7a3c2bce01dfad46624451`)
+- OrbbecSDK-Android-Wrapper-beta2.2.5-202609292240/doc/EgoStateMonitorExample.md:68-111 (member SHA-256 `c955f1a9021a2648a80d69c8d554a76e8f7e98578e7a3c2bce01dfad46624451`)
+- OrbbecSDK-Android-Wrapper-beta2.2.5-202609292240/obsensor_jni/src/main/java/com/orbbec/obsensor/Device.java:1165-1184 (member SHA-256 `96e6efbd4ba8e77b998e1988a8ccdda716cbd1a40bd1bbb66950ab206435efea`)
+
+## daq-sdk-android-sdcard-018
+
+- OrbbecSDK-Android-Wrapper-beta2.2.5-202609292240/doc/EgoSdcardFileServiceApiGuide.md:16-66 (member SHA-256 `15978fe1bc262a27e30ca333d12b082f41fffadc1b951b6c71691e57d98aea9b`)
+- OrbbecSDK-Android-Wrapper-beta2.2.5-202609292240/obsensor_jni/src/main/java/com/orbbec/obsensor/Device.java:327-340 (member SHA-256 `96e6efbd4ba8e77b998e1988a8ccdda716cbd1a40bd1bbb66950ab206435efea`)
+
+## daq-sdk-ble-linux-install-021
+
+- EgoLowBle-linux-x64-1.1.8\docs\README.md:3-36 (member SHA-256 `b5341cf02eb6b662d78bce1dc24fa75c4192054222b38e5345103e2ecef50960`)
+
+## daq-sdk-ble-windows-install-020
+
+- EgoLowBle-windows-x64-1.1.8\docs\README.md:3-23 (member SHA-256 `fa7e438f43f1c0d2eacdcf3136a852ea5222491415074b88e70ba26627514d4a`)
+
 ## daq-sdk-device-build-012
 
 - libobkit/README.md:78-121 (member SHA-256 `11a9c853d8602f682f2cc2afbd4bd49763a6a634cb5540d297e634623c0301e1`)
@@ -44,6 +68,11 @@
 
 - OrbbecSDK_v2.9.0_202609291326_7947205a_linux_x86_64/examples/src/6.ego/ego_direction_key.cpp:84-132 (member SHA-256 `6d729380c80adbe4ebf9fabca35c54ab51f7478b1a55e28e8622dbb78092082d`)
 
+## daq-sdk-host-net-uid-hotplug-016
+
+- OrbbecSDK_v2.9.0_202609291326_7947205a_linux_x86_64/examples/src/6.ego/ego_net_uid_hotplug.cpp:42-95 (member SHA-256 `1e7d9db9d0bdfe6e9da3f702ad50b6ffab128e34da649b1639be30efe3c4ab66`)
+- OrbbecSDK_v2.9.0_202609291326_7947205a_linux_x86_64/examples/src/6.ego/ego_net_uid_hotplug.cpp:118-125 (member SHA-256 `1e7d9db9d0bdfe6e9da3f702ad50b6ffab128e34da649b1639be30efe3c4ab66`)
+
 ## daq-sdk-host-record-dir-004
 
 - OrbbecSDK_v2.9.0_202609291326_7947205a_linux_x86_64/examples/src/6.ego/ego_recording_directory.cpp:16-20 (member SHA-256 `9c4fb1b7d59f3423a2eb19779914f76aa51ea24c4cdbc31045b775e78a247bcc`)
@@ -86,3 +115,8 @@
 - OrbbecSDK_v2.9.0_202609291326_7947205a_linux_x86_64/examples/src/6.ego/ego_multi_device_sync.cpp:62-65 (member SHA-256 `26fa19b2f19bd745021bd7d0eb5a679049a17d8f5449e3f573f953cf0a9c4a84`)
 - OrbbecSDK_v2.9.0_202609291326_7947205a_linux_x86_64/examples/src/6.ego/ego_multi_device_sync.cpp:139-148 (member SHA-256 `26fa19b2f19bd745021bd7d0eb5a679049a17d8f5449e3f573f953cf0a9c4a84`)
 - OrbbecSDK_v2.9.0_202609291326_7947205a_linux_x86_64/include/libobsensor/hpp/Device.hpp:622-628 (member SHA-256 `f63b38db160f7f3555aeaced9166729c884adc64bf4bf4b6db663166f4728815`)
+
+## daq-sdk-ios-framework-022
+
+- OrbbecSDK_v2.9.0_202609292146_7947205ab_iOS_OS64/README.txt:1-13 (member SHA-256 `00f489012359e00a579d2fc27361e930a375f2ebcb3f8813c9272e538618e537`)
+- OrbbecSDK_v2.9.0_202609292146_7947205ab_iOS_OS64/README.txt:15-15 (member SHA-256 `00f489012359e00a579d2fc27361e930a375f2ebcb3f8813c9272e538618e537`)

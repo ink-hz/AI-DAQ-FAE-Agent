@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from daq_fae.knowledge.reviewed_view import reviewed_name_in_query
+from daq_fae.knowledge.sdk_catalog import SdkCatalog
 
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -30,7 +31,8 @@ _CONDITIONS = {
     'sdk', 'sdk_name', 'sdk_version', 'sdk_release_date', 'language', 'language_binding', 'api', 'feature', 'export_files', 'firmware_version', 'task', 'per_port', 'power',
     'recording_format', 'storage', 'simultaneous_port_count',
     'scope', 'sensor', 'camera_type', 'camera_config', 'stereo_pair',
-    'lens_type', 'port',
+    'lens_type', 'port', 'host_connection', 'standalone',
+    'topology_aspects', 'recording_mode', 'indicators', 'steps',
 }
 _IDENTITY_SELECTOR_CONDITIONS = frozenset({
     'variant', 'resolution_variant', 'hardware_revision',
@@ -40,6 +42,101 @@ _KINDS = {'service', 'product', 'attachment', 'unknown'}
 _CONFIDENCE = {'high', 'medium', 'low'}
 _DEPENDENCY = {'unknown', 'relevant', 'required_for_answer', 'not_relevant'}
 _SAFE_CODE = re.compile(r'^[a-z][a-z0-9_]{0,63}$')
+_PROCEDURE_STEP_CODES = (
+    'insert_card_power_off', 'power_on', 'start_recording', 'stop_recording',
+)
+
+
+def _normalize_operating_conditions(capability: str,
+                                    conditions: dict[str, Any]) -> dict[str, Any]:
+    """Map model synonyms to one inspectable condition without losing scope."""
+    normalized = dict(conditions)
+    aliases = {}
+    if capability == 'inspect_topology':
+        if normalized.get('usage_context') == 'standalone_no_host':
+            normalized.pop('usage_context')
+            aliases['standalone'] = True
+            aliases['host_connection'] = 'none'
+        if normalized.get('host') == 'none':
+            aliases['host_connection'] = normalized.pop('host')
+        if normalized.get('connection_mode') == 'standalone':
+            normalized.pop('connection_mode')
+            aliases['standalone'] = True
+        aspects = normalized.get('aspects')
+        aspect_names = {'power_supply': 'power', 'connectivity': 'connection',
+                        'storage': 'storage'}
+        if isinstance(aspects, list) and aspects and all(
+                value in aspect_names for value in aspects):
+            normalized.pop('aspects')
+            aliases['topology_aspects'] = [aspect_names[value] for value in aspects]
+    for key, value in aliases.items():
+        if key in normalized and normalized[key] != value:
+            raise SchemaExtractionError('schema_operating_alias_conflict')
+        normalized[key] = value
+    if capability == 'inspect_topology':
+        requested = [key for key in ('power', 'connection', 'storage')
+                     if normalized.get(key) is True]
+        if requested:
+            for key in requested:
+                normalized.pop(key)
+            existing = normalized.get('topology_aspects', [])
+            if not isinstance(existing, list):
+                raise SchemaExtractionError('schema_operating_alias_conflict')
+            normalized['topology_aspects'] = list(dict.fromkeys(existing + requested))
+    if capability == 'lookup_procedure' and isinstance(normalized.get('steps'), list):
+        normalized['steps'] = [
+            'insert_card_power_off' if value == 'power_off_insert_card' else value
+            for value in normalized['steps']]
+    return normalized
+
+
+def _operating_condition_grounded(key: str, value: Any, words: str) -> bool | None:
+    """Accept canonical operating conditions only when the user said them."""
+    if key == 'host_connection' and value == 'none':
+        return bool(re.search(r'不(?:连接|接)(?:电脑|手机|主机|PC)|无需(?:电脑|手机|主机|PC)|脱机',
+                              words, re.IGNORECASE))
+    if key == 'standalone' and value is True:
+        return bool(re.search(r'单机|独立|脱机|standalone', words, re.IGNORECASE))
+    if key == 'topology_aspects' and isinstance(value, list):
+        aspects = {
+            'power': r'供电|电源|电池|power',
+            'connection': r'连接|接线|拓扑|connection',
+            'storage': r'存储|保存|TF\s*卡|SD\s*卡|storage',
+        }
+        return bool(value) and all(
+            item in aspects and re.search(aspects[item], words, re.IGNORECASE)
+            for item in value)
+    if key == 'recording_mode' and value == 'local_tf_card':
+        return bool(re.search(
+            r'(?:本机|单机|独立|本地).{0,12}(?:TF\s*卡|SD\s*卡)'
+            r'|(?:TF\s*卡|SD\s*卡).{0,12}(?:本机|单机|独立|本地)', words, re.IGNORECASE))
+    if key == 'task' and value == ['recording']:
+        return bool(re.search(r'录制|录像|record', words, re.IGNORECASE))
+    if key == 'task' and value == 'standalone_capture':
+        return bool(re.search(r'单机|独立|脱机', words, re.IGNORECASE)
+                    and re.search(r'采集|录制|capture|record', words, re.IGNORECASE))
+    if key == 'task' and value == 'local_recording':
+        return bool(re.search(r'本机|本地|单机|独立', words, re.IGNORECASE)
+                    and re.search(r'录制|录像|record', words, re.IGNORECASE))
+    if key == 'storage' and value == 'tf_card':
+        return bool(re.search(r'TF\s*卡|存储卡', words, re.IGNORECASE))
+    if key == 'indicators' and isinstance(value, list):
+        names = {'voice_prompt': r'语音|提示音|voice',
+                 'green_led': r'绿灯|绿色指示灯|green.*led'}
+        return bool(value) and all(
+            item in names and re.search(names[item], words, re.IGNORECASE)
+            for item in value)
+    if key == 'steps' and isinstance(value, list):
+        names = {
+            'insert_card_power_off': r'断电.{0,8}(?:插卡|TF\s*卡|存储卡)',
+            'power_on': r'开机|上电|power.on',
+            'start_recording': r'开始.{0,4}录制|启动.{0,4}录制|start.record',
+            'stop_recording': r'停止.{0,4}录制|结束.{0,4}录制|stop.record',
+        }
+        return bool(value) and all(
+            item in names and re.search(names[item], words, re.IGNORECASE)
+            for item in value)
+    return None
 
 
 def _safe_condition_value(value: Any, depth: int = 0) -> bool:
@@ -73,7 +170,24 @@ _RESOLUTION_VERSION = re.compile(r'(?<!\d)(\d{3,4}x\d{3,4})(?:版本|变体|版)
 
 
 def _explicit_resolution_versions(text: str) -> set[str]:
-    return {match.group(1) for match in _RESOLUTION_VERSION.finditer(_normalized(text))}
+    normalized = _normalized(text)
+    versions = {match.group(1) for match in _RESOLUTION_VERSION.finditer(normalized)}
+    versions.update(match.group(1) for match in re.finditer(
+        r'(?<!\d)(\d{3,4}x\d{3,4})原生', normalized))
+    # Existing reviewed family questions may identify a variant by its
+    # resolution immediately before a static optical field, without "版本".
+    versions.update(match.group(1) for match in re.finditer(
+        r'(?<!\d)(\d{3,4}x\d{3,4})的(?:水平|垂直)?'
+        r'(?:视场角|视角|fov)', normalized, re.I))
+    # A trailing collective label scopes every member of a comparison:
+    # "1600x1200 和 1920x1200 两个版本" names two variants, whereas
+    # "支持 1600x1300@30，是否只支持 1600x1200" names output modes.
+    group = re.compile(r'(?<!\d)(?:\d{3,4}x\d{3,4})'
+                       r'(?:(?:和|与|及|、|或|/)\d{3,4}x\d{3,4})+'
+                       r'(?:两|两个|多|不同)?(?:版|版本|变体)')
+    for match in group.finditer(normalized):
+        versions.update(_RESOLUTION_PAIR.findall(match.group()))
+    return versions
 
 
 _PORT_COUNT_WORDS = {
@@ -345,7 +459,8 @@ class DaqRequestSchema:
     def from_candidate(cls, question: str, candidate: dict[str, Any], *,
                        prior_user_context: str = '', attachment_present: bool = False,
                        image_present: bool = False,
-                       selected_answer_language: str | None = None) -> 'DaqRequestSchema':
+                       selected_answer_language: str | None = None,
+                       sdk_catalog: SdkCatalog | None = None) -> 'DaqRequestSchema':
         if not isinstance(question, str) or not question.strip() or not isinstance(candidate, dict):
             raise SchemaExtractionError('schema_candidate_invalid')
         confidence = candidate.get('confidence')
@@ -430,7 +545,7 @@ class DaqRequestSchema:
                 raw_signature = json.dumps(raw, ensure_ascii=False, sort_keys=True)
             except (TypeError, ValueError) as exc:
                 raise SchemaExtractionError('schema_goal_invalid') from exc
-            conditions = dict(conditions)
+            conditions = _normalize_operating_conditions(capability, conditions)
             if capability == 'lookup_spec' and field in {
                     'downstream_port_power_output',
                     'total_downstream_port_power_output'}:
@@ -496,6 +611,14 @@ class DaqRequestSchema:
                 if product_entities:
                     entities = product_entities
             unmapped = set(conditions) - _CONDITIONS
+            if kind == 'product' and any(
+                    isinstance(value, str) and
+                    re.fullmatch(r'\d{3,4}x\d{3,4}', _normalized(value)) and
+                    _normalized(value) not in explicit_versions
+                    for value in variant_values):
+                # The question may mention a resolution as an output mode.
+                # Its mere presence cannot authorize a reviewed SKU selector.
+                unmapped.add('resolution_variant')
             if kind != 'product' and conditions:
                 raise SchemaExtractionError('schema_goal_scope_invalid')
             sensor = conditions.pop('sensor', None)
@@ -581,6 +704,19 @@ class DaqRequestSchema:
                 elif conditions['scope'] not in explicit_scopes:
                     raise SchemaExtractionError('condition_scope_ambiguous')
             for key, value in conditions.items():
+                operating_grounded = _operating_condition_grounded(
+                    key, value, user_words)
+                if operating_grounded is not None:
+                    if operating_grounded:
+                        unmapped.discard(key)
+                    else:
+                        unmapped.add(key)
+                    continue
+                if (capability == 'sdk_evidence' and key in {'feature', 'task'}
+                        and isinstance(sdk_catalog, SdkCatalog)
+                        and sdk_catalog.grounds_selector(question, key, value)):
+                    unmapped.discard(key)
+                    continue
                 if (capability == 'sdk_evidence' and key == 'platform'
                         and isinstance(value, str) and (
                             (value == 'device_side' and re.search(r'设备端|device.side', user_words, re.I))
@@ -690,6 +826,7 @@ class DaqRequestSchema:
         for goal in goals:
             if goal.kind == 'product' and goal.capability == 'lookup_spec' \
                     and 'resolution_variant' not in goal.condition_map() \
+                    and (current_versions or prior_versions) \
                     and any(peer.kind == 'product' and peer.capability == 'lookup_spec'
                             and peer.entities == goal.entities
                             and isinstance(peer.condition_map().get('resolution_variant'), str)
@@ -832,7 +969,10 @@ _SCHEMA_TOOL = {
                             _SERVICE | _PRODUCT | _ATTACHMENT | {'clarify'})},
                         'entities': {'type': 'array', 'items': {'type': 'string'}},
                         'field': {'type': 'string'},
-                        'conditions': {'type': 'object'},
+                        'conditions': {'type': 'object', 'properties': {
+                            'steps': {'type': 'array', 'items': {'type': 'string'},
+                                      'description': 'Keep user-stated steps in order; preserve uncovered step codes as evidence gaps.'},
+                        }},
                     },
                     'required': ['kind', 'capability'],
                 }},
@@ -857,7 +997,7 @@ def extract_request_schema(question: str, *, adapter, prior_user_context: str = 
     calls = [event for event in adapter.chat(
         messages, tools=[_SCHEMA_TOOL], required_tool='submit_daq_request_schema')
         if event.get('type') == 'tool_call']
-    def validated(candidate_calls: list[dict]) -> DaqRequestSchema:
+    def validated(candidate_calls: list[dict], *, retry_uncontrolled: bool) -> DaqRequestSchema:
         candidates = [event.get('arguments') for event in candidate_calls
                       if event.get('name') == 'submit_daq_request_schema']
         if len(candidate_calls) != 1 or len(candidates) != 1:
@@ -872,7 +1012,16 @@ def extract_request_schema(question: str, *, adapter, prior_user_context: str = 
             question, raw, prior_user_context=prior_user_context,
             attachment_present=attachment_present, image_present=image_present,
             selected_answer_language=selected_answer_language,
+            sdk_catalog=getattr(knowledge, 'sdk_catalog', None),
         )
+        if retry_uncontrolled and any(
+                key not in _CONDITIONS
+                for goal in schema.goals for key in goal.unmapped_condition_keys):
+            raise SchemaExtractionError('schema_uncontrolled_condition_keys')
+        if retry_uncontrolled and any(
+                goal.capability == 'lookup_procedure' and
+                'steps' in goal.unmapped_condition_keys for goal in schema.goals):
+            raise SchemaExtractionError('schema_step_value_unverified')
         if (knowledge is not None and
                 not getattr(knowledge, 'is_candidate_preview', False) and
                 hasattr(knowledge, 'ground_question') and
@@ -931,7 +1080,7 @@ def extract_request_schema(question: str, *, adapter, prior_user_context: str = 
         return schema
 
     try:
-        return validated(calls)
+        return validated(calls, retry_uncontrolled=True)
     except SchemaExtractionError as exc:
         # Retry once for either a missing call or an invalid schema. Never
         # pass the untrusted candidate back as facts or hide provider errors.
@@ -965,6 +1114,25 @@ def extract_request_schema(question: str, *, adapter, prior_user_context: str = 
                       '如果用户还询问该场景的能力、兼容或流程，请另列对应目标，'
                       '不要把背景使用场景当成已核实能力。现在只调用结构化工具一次。'
                       if str(exc) == 'schema_identity_context_condition' else
+                      '上一次使用了未受控的条件键。受控键：' +
+                      ', '.join(sorted(_CONDITIONS)) + '。请仅从用户原话抽取条件，'
+                      '单机且无电脑或手机主机连接写 `standalone=true` 与 '
+                      '`host_connection="none"`；供电、连接和存储询问写 '
+                      '`topology_aspects` 数组；本机 TF 卡录制及明确步骤分别写 '
+                      '`recording_mode`、`steps`、`indicators`。未知的变体、固件、'
+                      'Viewer 版本不能补猜；无法用受控键表达的条件仍需保留原键作为缺口。'
+                      '现在只调用结构化工具一次。'
+                      if str(exc) == 'schema_uncontrolled_condition_keys' else
+                      '上一次步骤值未通过核验。`steps` 只列用户明确问到的步骤，'
+                      '保持原先后次序。' +
+                      ('已核对的 EGO Pro 单机录制步骤代码：' +
+                       ', '.join(_PROCEDURE_STEP_CODES) +
+                       '；断电插卡对应 insert_card_power_off。'
+                       if re.search(r'\bEGO\s*Pro\b', question, re.I) and
+                       re.search(r'单机|独立|本机|standalone', question, re.I) else '') +
+                      '其他设备或未覆盖流程的步骤仍保留用户原意的短码，后续标证据缺口，'
+                      '不能为套入已核对流程而省略或改写。现在只调用结构化工具一次。'
+                      if str(exc) == 'schema_step_value_unverified' else
                       '上一次把单口供电与多个下游口同时使用的总供电混为一个目标，'
                       '或漏掉了用户明确询问的总量目标（' + str(exc) + '）。'
                       '若用户问 N 个口同时使用时的总供电，独立列 '
@@ -997,4 +1165,4 @@ def extract_request_schema(question: str, *, adapter, prior_user_context: str = 
         retry_calls = [event for event in adapter.chat(
             retry, tools=[_SCHEMA_TOOL], required_tool='submit_daq_request_schema')
             if event.get('type') == 'tool_call']
-        return validated(retry_calls)
+        return validated(retry_calls, retry_uncontrolled=False)

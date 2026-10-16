@@ -22,6 +22,12 @@
 
 生产 `/health` 的 `source_checked_records` 字段沿用 Dev 候选计数，在正式发布模式显示 0；它不表示活动知识为空。主知识以 `knowledge_release` 对应不可变 manifest 的 `record_count=23` 为准，SDK 另看 `sdk_knowledge_release` 的 15 条记录和角色过滤。
 
+## 2026-10-16 资料覆盖进展
+
+两份本机原件归档已逐件重算哈希并纳入[全量覆盖审计](docs/reviews/2026-10-16-daq-full-material-coverage.md)：主产品 276 件中 6 件支撑当前正式知识、45 件有未发布候选引用、225 件仅归档；SDK/Viewer/固件 143 件分别为 4/26/113。SDK 143 件另有完整离线资产索引，不能把文件存在当作设备兼容或交付许可。此前仅归档的 217 张图片按 168 个唯一哈希完成整图复核，冲突与脱敏线索留在受限账本。
+
+本机 Dev 候选已扩至 22 条 SDK 用法、55 处源码引用，并将 22 份变更日志按 17 个唯一文件哈希建立独立发布记录候选；另对 EGO Pro 单机拓扑和录制流程做精确来源核对。它们仍需冻结版本上的完整真实问答、独立语义复审和不可变发布；当前生产范围仍以 2026-10-15 发布身份为准。新候选的来源、版本冲突和不可外推的设备边界见[SDK 资料复审](docs/reviews/2026-10-16-daq-sdk-material-coverage.md)与[拓扑流程复审](docs/reviews/2026-10-16-daq-topology-procedure-review.md)。
+
 ## 本机 Dev
 
 ```bash
@@ -42,17 +48,17 @@ npm --prefix webui test
 npm --prefix webui run build
 ```
 
-最新本机验证为 Python 1125 题、WebUI 246 题通过，WebUI 构建通过。共享 `src/` 没有本轮改动；本轮没有执行生产模型评测。[旧域 Dev 复核](docs/reviews/2026-10-14-daq-alias-variant-dev-review.md)记录先前完整题集；本轮 SDK 六题与旧域两题在最终版本上的结果见[SDK 发布记录](docs/reviews/2026-10-15-daq-sdk-production-release.md)。
+2026-10-15 生产发布时的本机验证为 Python 1125 题、WebUI 246 题通过，WebUI 构建通过。2026-10-16 的新增 Python 回归与 Dev 真实问答另见上方资料覆盖进展及当日复审；共享 `src/` 没有本轮改动，生产未用于模型评测。[旧域 Dev 复核](docs/reviews/2026-10-14-daq-alias-variant-dev-review.md)记录先前完整题集；已发布 SDK 六题与旧域两题的结果见[SDK 发布记录](docs/reviews/2026-10-15-daq-sdk-production-release.md)。
 
 ## 知识更新
 
 原件仍留在 `data/knowledge/local_archive/`，不提交 Git，也不从未核验的 `tmp/` 直接发布。高频更新时先逐文件校验哈希，再对来源、实体、变体、字段、测量条件和依赖关系做增量差异；改变或撤回的事实自动失去旧审核状态。新的规格须在 Dev 完成来源核对、真实模型回放和独立答案复核，再生成不可变发布包并切换活动指针。知识发布不改变相机服务。
 
-清洗与增量设计见[知识专项任务书](docs/superpowers/plans/2026-10-10-daq-knowledge-workstream-task-brief.md)、[逐项状态](docs/reviews/2026-10-10-daq-knowledge-workstream-status.md)和[完整设计](docs/2026-10-08-数采FAE完整设计.md)。生产主知识只包含上述 23 条，SDK 另有 15 条用法事实；其余 742 条候选图记录及软件/链接/组合资料仍待后续核对。
+清洗与增量设计见[知识专项任务书](docs/superpowers/plans/2026-10-10-daq-knowledge-workstream-task-brief.md)、[逐项状态](docs/reviews/2026-10-10-daq-knowledge-workstream-status.md)和[完整设计](docs/2026-10-08-数采FAE完整设计.md)。生产主知识只包含上述 23 条，SDK 另有 15 条用法事实；742 条候选图记录中仅同 ID 的 23 条已有正式发布对应物，其余 719 条未发布。软件、链接和组合资料仍按逐项来源与版本条件核对。
 
 ## SDK 资料开发
 
-`Knowledge_SDK/` 从 2026-10-15 原件归档构建首批 SDK 用法事实：15 条记录、42 处精确源码引用，覆盖 OrbbecSDK 2.9.0 的 EGO Linux x86_64 C++ 示例与 RK3576 设备端 libobkit C 示例，现已独立发布到生产。`sdk_evidence` 只解释对应构建包中的 API、示例和编译方法；设备、固件与整机镜像的实际兼容性仍须由 `check_software_support` 的精确证据确认。快速更新流程会核对原件哈希、构建日期、成员增删改、源码行与独立 Dev 问答复审。归档内其他平台、Android、BLE 和 Viewer 包仍未形成可回答事实，见 [SDK 覆盖审计](Knowledge_SDK/audit/coverage_gaps.md)、[SDK Dev 问答复审](docs/reviews/2026-10-15-daq-sdk-dev-review.md)及[生产发布记录](docs/reviews/2026-10-15-daq-sdk-production-release.md)。
+`Knowledge_SDK/` 从 2026-10-15 原件归档构建首批 SDK 用法事实：15 条记录、42 处精确源码引用，覆盖 OrbbecSDK 2.9.0 的 EGO Linux x86_64 C++ 示例与 RK3576 设备端 libobkit C 示例，现已独立发布到生产。本机 Dev 候选又增加 Android Java、Windows/Linux BLE、iOS framework 和 Linux Host 用法，合计 22 条记录、55 处源码引用；22 份变更日志归并为 17 条独立候选。它们尚未正式发布。`sdk_evidence` 只解释对应构建包中的 API、示例和编译方法；设备、固件与整机镜像的实际兼容性仍须由 `check_software_support` 的精确证据确认。快速更新流程会核对原件哈希、构建日期、成员增删改、源码行与独立 Dev 问答复审。其他平台包、Viewer 二进制和固件镜像保留在完整资产清单中，其行为与组合兼容性仍待核验，见 [SDK 覆盖审计](Knowledge_SDK/audit/coverage_gaps.md)、[SDK 资料复审](docs/reviews/2026-10-16-daq-sdk-material-coverage.md)及[生产发布记录](docs/reviews/2026-10-15-daq-sdk-production-release.md)。
 
 ## 接口边界
 

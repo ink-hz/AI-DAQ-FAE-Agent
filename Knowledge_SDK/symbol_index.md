@@ -2,23 +2,34 @@
 
 Generated from `SDK_Knowledge.jsonl`; source scope is recorded in each row.
 
+- **ALREADY_RUNNING**: daq-sdk-android-fwlog-017
 - **cancelSdcardFileOperation**: daq-sdk-host-sdcard-005, daq-sdk-host-sdcard-20260921, daq-sdk-host-sdcard-20260923
 - **clearDirectionKeyCallback**: daq-sdk-host-key-008
 - **CMakeLists.txt**: daq-sdk-host-build-010
-- **createNetDevice**: daq-sdk-host-depth-009, daq-sdk-host-sdcard-005, daq-sdk-host-sdcard-20260921, daq-sdk-host-sdcard-20260923
+- **createNetDevice**: daq-sdk-android-sdcard-018, daq-sdk-host-depth-009, daq-sdk-host-net-uid-hotplug-016, daq-sdk-host-sdcard-005, daq-sdk-host-sdcard-20260921, daq-sdk-host-sdcard-20260923
 - **DataAcquisitionDevice::fromDevice**: daq-sdk-host-audio-007, daq-sdk-host-fwlog-003
-- **downloadSdcardFile**: daq-sdk-host-sdcard-005, daq-sdk-host-sdcard-20260921, daq-sdk-host-sdcard-20260923
+- **downloadSdcardFile**: daq-sdk-android-sdcard-018, daq-sdk-host-sdcard-005, daq-sdk-host-sdcard-20260921, daq-sdk-host-sdcard-20260923
+- **EgoLowBle.dll**: daq-sdk-ble-windows-install-020
+- **EgoLowBle.lib**: daq-sdk-ble-windows-install-020
+- **EgoLowBleDemo.cpp**: daq-sdk-ble-linux-install-021
 - **enable_mask**: daq-sdk-device-capture-013
+- **enableNetDeviceEnumeration**: daq-sdk-host-net-uid-hotplug-016
+- **exportFirmwareLogs**: daq-sdk-android-fwlog-017
+- **FirmwareLogExportTask**: daq-sdk-android-fwlog-017
 - **getAvailablePresetList**: daq-sdk-host-depth-009
 - **getEgoState**: daq-sdk-host-state-006
 - **getFwRecordingDirectory**: daq-sdk-host-record-dir-004
 - **getFwRecordingFileName**: daq-sdk-host-record-dir-004
 - **getRawData**: daq-sdk-host-calib-002
 - **getRecordingSessionResult**: daq-sdk-host-state-006
+- **getSdcardFileInfo**: daq-sdk-android-sdcard-018
 - **getSdcardFileList**: daq-sdk-host-sdcard-005, daq-sdk-host-sdcard-20260921, daq-sdk-host-sdcard-20260923
 - **getStreamProfileList**: daq-sdk-host-depth-009
 - **getSupportedMultiDeviceSyncModeBitmap**: daq-sdk-host-sync-001
+- **getUid**: daq-sdk-host-net-uid-hotplug-016
+- **libEgoLowBle.so**: daq-sdk-ble-linux-install-021
 - **libobkit.so**: daq-sdk-device-scope-011
+- **LINUX_GUIDE.md**: daq-sdk-ble-linux-install-021
 - **loadPreset**: daq-sdk-host-depth-009
 - **make**: daq-sdk-device-build-012
 - **ob_capture_config_t**: daq-sdk-device-capture-013
@@ -38,14 +49,23 @@ Generated from `SDK_Knowledge.jsonl`; source scope is recorded in each row.
 - **OB_RAW_DATA_IMU_CALIB_YAML**: daq-sdk-host-calib-002
 - **OB_STRUCT_EGO_STATE_REPORT**: daq-sdk-host-state-006
 - **OB_STRUCT_MULTI_DEVICE_SYNC_CONFIG**: daq-sdk-host-sync-001
+- **OBException**: daq-sdk-android-sdcard-018
+- **OrbbecSDK.framework**: daq-sdk-ios-framework-022
+- **OrbbecSDKConfig.xml**: daq-sdk-ios-framework-022
 - **playAudioFile**: daq-sdk-host-audio-007
+- **RECORD_SAVED**: daq-sdk-android-record-state-019
+- **registerDeviceChangedCallback**: daq-sdk-host-net-uid-hotplug-016
 - **RK3576**: daq-sdk-device-scope-011
 - **RPATH**: daq-sdk-device-build-012
+- **SAVING**: daq-sdk-android-record-state-019
+- **SdcardDownloadDestination.LOCAL**: daq-sdk-android-sdcard-018
 - **setDirectionKeyCallback**: daq-sdk-host-key-008
-- **setEgoStateCallback**: daq-sdk-host-state-006
+- **setEgoRecordingResultCallback**: daq-sdk-android-record-state-019
+- **setEgoStateCallback**: daq-sdk-android-record-state-019, daq-sdk-host-state-006
 - **setFwRecordingDirectory**: daq-sdk-host-record-dir-004
 - **setMultiDeviceSyncMode**: daq-sdk-host-sync-001
 - **startFirmwareLogExport**: daq-sdk-host-fwlog-003
 - **stopAudioPlayback**: daq-sdk-host-audio-007
 - **stopFirmwareLogExport**: daq-sdk-host-fwlog-003
 - **TOOLCHAIN_DIR**: daq-sdk-device-build-012
+- **unregisterDeviceChangedCallback**: daq-sdk-host-net-uid-hotplug-016

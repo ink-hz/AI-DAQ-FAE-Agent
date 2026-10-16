@@ -1,0 +1,19 @@
+{"id":"SDK_HOST_NET_UID_HOTPLUG","question":"用 2026-09-29 Linux x86_64 OrbbecSDK 2.9.0 C++ 示例，怎样核对网络设备移除回调中的 UID？不要推断我的设备和固件已经兼容。"}
+{"id":"SDK_UMI_MAGNETOMETER_CONFLICT","question":"2026-09-29 SDK 包里还带有 magnetometer.cpp，就能确定 UMI Finger 磁力计仍可用吗？"}
+{"id":"SDK_ANDROID_FWLOG_BOUNDARY","question":"2026-09-29 Android Wrapper 的 exportFirmwareLogs API 怎么用？它能保证我的 EGO 固件支持导出吗？"}
+{"id":"SDK_VIEWER_BUILD_IDENTITY","question":"Android EgoViewer 都显示 v1.0.11，2026-09-23 与 2026-09-29 的网络设备枚举行为能当作相同吗？"}
+{"id":"SDK_ANDROID_SDCARD","question":"2026-09-29 Android Wrapper beta2.2.5 的 Java API，网络 EGO 的 SD 卡文件信息与本地下载该怎么调用？这证明具体固件支持吗？"}
+{"id":"SDK_ANDROID_RECORD_STATE","question":"Android Wrapper 中 SAVING 和 RECORD_SAVED 有何区别？setEgoStateCallback 与 setEgoRecordingResultCallback 各适合什么？"}
+{"id":"SDK_BLE_WINDOWS_INSTALL","question":"EgoLowBle 1.1.8 Windows x64 包中，C++ 应用应怎样链接库和放置 DLL？这代表具体 EGO 设备通过测试吗？"}
+{"id":"SDK_BLE_LINUX_PACKAGE","question":"EgoLowBle 1.1.8 Linux x64 包提供什么 demo 和构建资料？预编译 demo 是否必定包含？"}
+{"id":"SDK_IOS_FRAMEWORK_SCOPE","question":"2026-09-29 OrbbecSDK 2.9.0 iOS 包应如何嵌入 framework？这个包是否包含 Simulator 产物、能否据此确认 EGO 固件兼容？"}
+{"id":"SDK_ANDROID_HOST_MIXED","question":"同是 2026-09-29，Android Java Wrapper 的 exportFirmwareLogs 与 Linux x86_64 C++ OrbbecSDK 的 startFirmwareLogExport/stopFirmwareLogExport，在调用和完成处理上分别有什么依据？不要混用 API，也不要认定我的固件兼容。"}
+{"id":"SDK_BLE_FIRMWARE_MIXED","question":"EgoLowBle 1.1.8 Windows x64 的 DLL 如何集成？我的 EGO 固件也叫 1.1.8，这两个版本号相同能说明蓝牙功能已兼容吗？"}
+{"id":"SDK_HOST_SYNC","question":"用 2026-09-29 的 OrbbecSDK 2.9.0 C++ 示例，EGO 多设备主从同步模式应该怎样检查并设置？"}
+{"id":"SDK_HOST_CALIB","question":"EGO 的 align_calib.yaml 和 imu_calib.yaml 怎么从 SDK 导出？"}
+{"id":"SDK_DEVICE_BUILD","question":"四目 EGO 设备端 libobkit 示例怎么编译和部署？它能和任意整机镜像搭配吗？"}
+{"id":"SDK_DEVICE_CAPTURE","question":"libobkit 的相机、IMU 和音频采集，在 C 示例里按什么顺序初始化和启动？"}
+{"id":"SDK_NEGATIVE_FW","question":"我的 EGO 固件是 1.1.8，可以肯定支持 SDK 多设备主从同步吗？"}
+{"id":"SDK_OLD_BUILD_SDCARD","question":"2026-09-23 的 OrbbecSDK 包里，EGO SD 卡文件服务是否已经提供 downloadSdcardFile？"}
+{"id":"SDK_DUAL_FIRMWARE_NOTE_HISTORY","question":"双目 EGO 固件变更日志在 v1.1.9 与 v1.1.10 分别记载了哪些主从/同步修改？这些历史说明能证明我的固件与 OrbbecSDK 2.9.0 已配对实测吗？"}
+{"id":"SDK_UMI_NOTE_HISTORY","question":"OrbbecSDK 2026-09-21 与 2026-09-23 两份变更日志分别如何记载 UMI Finger 磁力计？2026-09-29 包中仍有 magnetometer.cpp，能据此说后续构建已恢复或设备已实测吗？"}
