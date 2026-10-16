@@ -51,6 +51,12 @@ def _normalize_operating_conditions(capability: str,
                                     conditions: dict[str, Any]) -> dict[str, Any]:
     """Map model synonyms to one inspectable condition without losing scope."""
     normalized = dict(conditions)
+    # Tool arguments can serialize a boolean as text. Canonicalize the one
+    # governed positive flag before the user-grounding check below; unknown
+    # values remain evidence debt rather than becoming truthy by accident.
+    standalone = normalized.get('standalone')
+    if isinstance(standalone, str) and standalone.strip().casefold() == 'true':
+        normalized['standalone'] = True
     aliases = {}
     if capability == 'inspect_topology':
         if normalized.get('usage_context') == 'standalone_no_host':
@@ -970,6 +976,7 @@ _SCHEMA_TOOL = {
                         'entities': {'type': 'array', 'items': {'type': 'string'}},
                         'field': {'type': 'string'},
                         'conditions': {'type': 'object', 'properties': {
+                            'standalone': {'type': 'boolean'},
                             'steps': {'type': 'array', 'items': {'type': 'string'},
                                       'description': 'Keep user-stated steps in order; preserve uncovered step codes as evidence gaps.'},
                         }},

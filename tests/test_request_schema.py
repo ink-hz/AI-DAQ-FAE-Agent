@@ -1598,6 +1598,27 @@ def test_schema_retries_uncontrolled_topology_key_then_keeps_evidence_debt():
         'unmapped_condition_unverified'
 
 
+def test_topology_boolean_string_normalizes_only_when_user_grounded():
+    from daq_fae.request_schema import _SCHEMA_TOOL
+    standalone_property = _SCHEMA_TOOL['function']['parameters']['properties'][
+        'goals']['items']['properties']['conditions']['properties']['standalone']
+    assert standalone_property == {'type': 'boolean'}
+    candidate = {'confidence': 'high', 'goals': [{
+        'kind': 'product', 'capability': 'inspect_topology',
+        'entities': ['EGO Pro 四目'],
+        'conditions': {'host_connection': 'none', 'standalone': 'true',
+                       'topology_aspects': ['power', 'connection', 'storage']},
+    }]}
+    question = '一台 EGO Pro 四目不连接电脑或手机时，单机独立采集的供电、连接与存储拓扑是什么？'
+    grounded = DaqRequestSchema.from_candidate(question, candidate).goals[0]
+    assert grounded.condition_map()['standalone'] is True
+    assert grounded.unmapped_condition_keys == ()
+    ungrounded = DaqRequestSchema.from_candidate(
+        'EGO Pro 四目不连接电脑或手机的供电、连接与存储拓扑是什么？',
+        candidate).goals[0]
+    assert 'standalone' in ungrounded.unmapped_condition_keys
+
+
 def test_schema_step_codes_keep_uncovered_procedures_expressible_and_retry_once():
     from daq_fae.request_schema import _SCHEMA_TOOL
     step_schema = _SCHEMA_TOOL['function']['parameters']['properties']['goals'][
