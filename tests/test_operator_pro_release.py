@@ -1,4 +1,5 @@
 """The owner Pro release may add exactly two source-checked operating records."""
+import hashlib
 import json
 from copy import deepcopy
 from pathlib import Path
@@ -109,6 +110,8 @@ def _proposal(tmp_path, monkeypatch):
         'daq_code_sha256': daq_code_sha(), 'daq_code_sha256_after': daq_code_sha(),
         'code_unchanged_during_replay': True, 'graph_sha256': 'e' * 64,
         'prompt_sha256': op._prompt_sha256(),
+        'candidate_prompt_sha256': hashlib.sha256((Path(__file__).resolve().parents[1] /
+            'prompts/candidate_knowledge_system.md').read_bytes()).hexdigest(),
         'schema_prompt_sha256': op._schema_prompt_sha256(),
         'cases': [{'id': case, 'trace_id': f'trace-{case}', 'http_status': 200,
                    'outcome': outcome, 'coverage_status': coverage}
@@ -273,7 +276,8 @@ def test_pro_v2_rollback_refuses_uncoordinated_notes_binding(tmp_path, monkeypat
 @pytest.mark.parametrize('change,reason', [
     ('extra', 'pro_delta'), ('wrong_previous', 'production_baseline'),
     ('wrong_source', 'pro_source'), ('role', 'internal_scope'),
-    ('replay_code', 'dev_identity'), ('review_fail', 'dev_cases'),
+    ('replay_code', 'dev_identity'), ('candidate_prompt', 'dev_identity'),
+    ('review_fail', 'dev_cases'),
     ('version_scope', 'pro_record'), ('bound_input', 'bound_inputs'),
 ])
 def test_pro_v2_rejects_unreviewed_delta_and_identity(tmp_path, monkeypatch, change, reason):
@@ -290,6 +294,8 @@ def test_pro_v2_rejects_unreviewed_delta_and_identity(tmp_path, monkeypatch, cha
         bundle['records'][-1]['access_review']['view_roles'] = ['channel']
     elif change == 'replay_code':
         bundle['replay_identity']['daq_code_sha256'] = 'f' * 64
+    elif change == 'candidate_prompt':
+        bundle['replay_identity']['candidate_prompt_sha256'] = 'f' * 64
     elif change == 'review_fail':
         review['cases'][0]['verdict'] = 'fail'
     elif change == 'version_scope':

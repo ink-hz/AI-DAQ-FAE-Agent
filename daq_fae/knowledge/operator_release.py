@@ -25,7 +25,7 @@ PRO_BASELINE_RELEASE = 'ee9083f9891630f6727766c276e6dc123ab0b6b79641dada13315987
 PRO_BASELINE_COUNT = 25
 PRO_RECORD_FINGERPRINTS = {
     'topology:ego-pro-standalone': '95807c6f34035c01da25a060cb149d4c02176a993ede0c804ac0ff62cb79fb76',
-    'procedure:ego-pro-standalone': '95ae04f96d4a248c3ce2d22366095aa4eae138e3be44d43b167acc85908eee80',
+    'procedure:ego-pro-standalone': '469f9f08dee174411b95ee748684487af35da7c69f7e0fb5d911e2989c12a704',
 }
 PRO_SOURCE_REF = {
     'path': '中文-EGO Pro 四目快速使用说明文档/EGO Pro 四目快速使用说明文档.md',
@@ -46,6 +46,11 @@ _SHA = re.compile(r'^[0-9a-f]{64}$')
 def _prompt_sha256() -> str:
     return hashlib.sha256((Path(__file__).resolve().parents[2] /
                            'prompts/reviewed_knowledge_system.md').read_bytes()).hexdigest()
+
+
+def _candidate_prompt_sha256() -> str:
+    return hashlib.sha256((Path(__file__).resolve().parents[2] /
+                           'prompts/candidate_knowledge_system.md').read_bytes()).hexdigest()
 
 
 def _schema_prompt_sha256() -> str:
@@ -245,6 +250,7 @@ def _pro_dev_evidence(bundle: dict, semantic_review: dict) -> dict:
              and identity.get('daq_code_sha256') == _code_sha256()
              and identity.get('daq_code_sha256_after') == _code_sha256()
              and identity.get('prompt_sha256') == _prompt_sha256()
+             and identity.get('candidate_prompt_sha256') == _candidate_prompt_sha256()
              and identity.get('schema_prompt_sha256') == _schema_prompt_sha256()
              and identity.get('graph_sha256') == ledger.get('graph_sha256'), 'dev_identity')
     expected = {
@@ -290,6 +296,7 @@ def _pro_dev_evidence(bundle: dict, semantic_review: dict) -> dict:
     return {
         'daq_code_sha256': _code_sha256(),
         'prompt_sha256': _prompt_sha256(),
+        'candidate_prompt_sha256': _candidate_prompt_sha256(),
         'schema_prompt_sha256': _schema_prompt_sha256(),
         'source_check_sha256': digest(ledger),
         'replay_identity_sha256': digest(identity),
@@ -518,6 +525,7 @@ def _verify_pro_manifest(manifest: dict, *, runtime_release: str,
              and runtime.get('generic_trace_enabled') is False, 'runtime_identity')
     _require(evidence.get('daq_code_sha256') == _code_sha256()
              and evidence.get('prompt_sha256') == _prompt_sha256()
+             and evidence.get('candidate_prompt_sha256') == _candidate_prompt_sha256()
              and evidence.get('schema_prompt_sha256') == _schema_prompt_sha256()
              and all(isinstance(evidence.get(key), str) and _SHA.fullmatch(evidence[key])
                      for key in ('source_check_sha256', 'replay_identity_sha256',

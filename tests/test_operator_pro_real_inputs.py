@@ -16,6 +16,7 @@ from daq_fae.knowledge.adjudication import digest
 from daq_fae.knowledge.code_identity import daq_code_sha
 from daq_fae.knowledge.operator_release import (
     PRO_BASELINE_RELEASE,
+    _candidate_prompt_sha256,
     _prompt_sha256,
     _schema_prompt_sha256,
     stage_operator_pro_release,
@@ -39,9 +40,9 @@ def _json(path: Path) -> dict:
 def test_current_25_records_and_pro_rows_formal_loader_static_sentinel(tmp_path):
     assert PRO_BASELINE_RELEASE == CURRENT_PROD_RELEASE
     paths = (ORIGIN, ARCHIVE / 'manifest.json',
-             PRIVATE / 'pro-offline-reviewed-graph-v5/dependency-bundle.json',
-             PRIVATE / 'v5-pro-reviewed-records-prod-ee908.json',
-             PRIVATE / 'dev-source-checked-pro-offline-v5.json')
+             PRIVATE / 'pro-offline-reviewed-graph-v6/dependency-bundle.json',
+             PRIVATE / 'v6-pro-reviewed-records-prod-ee908.json',
+             PRIVATE / 'dev-source-checked-pro-offline-v6.json')
     if any(not path.is_file() for path in paths):
         pytest.skip('private reviewed originals absent from this checkout')
     origin = _json(ORIGIN)
@@ -54,6 +55,7 @@ def test_current_25_records_and_pro_rows_formal_loader_static_sentinel(tmp_path)
     assert any('外部移动电源' in connection and 'Device' in connection
                for connection in topology['data']['connections'])
     procedure = next(row for row in prep['records'] if row['kind'] == 'procedure')
+    assert '绿灯常亮即完成录制' in procedure['data']['completion_boundary']
     steps = '\n'.join(procedure['data']['steps'])
     assert '设备已就绪 / Device ready' in steps
     assert '3，2，1 开始录制' in steps
@@ -105,6 +107,7 @@ def test_current_25_records_and_pro_rows_formal_loader_static_sentinel(tmp_path)
         'daq_code_sha256': daq_code_sha(),
         'daq_code_sha256_after': daq_code_sha(),
         'prompt_sha256': _prompt_sha256(),
+        'candidate_prompt_sha256': _candidate_prompt_sha256(),
         'schema_prompt_sha256': _schema_prompt_sha256(),
         'graph_sha256': ledger['graph_sha256'],
         'cases': [{'id': case, 'trace_id': 'synthetic-' + case, 'http_status': 200,
