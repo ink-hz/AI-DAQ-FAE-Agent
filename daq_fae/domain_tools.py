@@ -76,6 +76,27 @@ def _entity_identity_labels(row: dict) -> set[str]:
     return labels
 
 
+def _catalog_summary(rows: list[dict], *, candidate_preview: bool) -> dict:
+    """Count the whole role-visible directory and label its publication state."""
+    by_type: dict[str, int] = {}
+    product_names: set[str] = set()
+    for row in rows:
+        entity_type = row['data']['entity_type']
+        by_type[entity_type] = by_type.get(entity_type, 0) + 1
+        if entity_type in {'device', 'variant', 'hub', 'kit'}:
+            product_names.add(row['data']['name'])
+    names = sorted(product_names)
+    return {
+        'entry_count': len(rows),
+        'distinct_product_name_count': len(names),
+        'product_names': names,
+        'by_entity_type': dict(sorted(by_type.items())),
+        'scope': ('source_checked_dev_preview' if candidate_preview
+                  else 'released_role_visible_knowledge'),
+        'exhaustive_product_range': False,
+    }
+
+
 def _resolution_output_field(value: str) -> bool:
     return value.casefold().endswith(('resolution', 'resolution_options'))
 
@@ -616,7 +637,11 @@ class DaqToolBox:
                 "reason": "reviewed_evidence_unavailable", "claim_status": "unknown",
                 "matches": [], "matched_requirement_ids": attempted,
             })
-        matches = matches[:20]
+        catalog_summary = _catalog_summary(
+            matches, candidate_preview=bool(getattr(
+                self.knowledge, 'is_candidate_preview', False))) if name == 'catalog' else None
+        if name != 'catalog':
+            matches = matches[:20]
         field_coverage = {}
         if name == 'resolve_entity':
             for entity_row in matches:
@@ -638,6 +663,7 @@ class DaqToolBox:
         })
         return ToolResult(status="ok", content={
             "release_id": self.knowledge.release_id,
+            **({'catalog_summary': catalog_summary} if catalog_summary is not None else {}),
             **({'available_spec_fields': field_coverage,
                 'available_spec_fields_are_values': False}
                if name == 'resolve_entity' else {}),
@@ -1048,7 +1074,9 @@ class DaqToolBox:
         ):
             return False
         if name == "catalog":
-            return kind == "entity" and (not query or query in text)
+            # The catalog is a directory scan. Natural-language overview
+            # questions are not literal substrings of individual records.
+            return kind == "entity"
         if name == "resolve_entity":
             if kind != "entity" or not query:
                 return False

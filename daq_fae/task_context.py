@@ -22,7 +22,7 @@ _FIELDS = frozenset({
 _SWITCH = re.compile(r'^(?:换个场景|换个问题|另一个问题|重新开始|new topic|switch topic)', re.I)
 _FOLLOWUP = re.compile(r'继续|然后|还是|下一步|那|这个|它|\b(?:it|still|next|continue)\b', re.I)
 _INTENTS = {
-    'catalog': r'(?:有哪些|有多少).{0,8}(?:产品|设备|型号|套件|系统)|(?:产品|设备|型号|套件|系统).{0,8}(?:有哪些|有多少)|型号列表|产品目录|产品线|\b(?:catalog|product list|product range)\b',
+    'catalog': r'(?:有哪些|有多少|多少款|几款).{0,12}(?:产品|设备|型号|套件|系统)|(?:产品|设备|型号|套件|系统).{0,12}(?:有哪些|有多少|多少款|几款)|型号列表|产品目录|产品线|\b(?:catalog|product list|product range)\b',
     'selection': r'推荐|选型|选择|适合|选哪个|选什么|怎么选|如何选|怎样选|选用|方案建议|\b(?:recommend|selection|choose|suitable)\b',
     'resolve_entity': r'设备|型号|变体|配置|套件|\b(?:device|model|variant|kit)\b',
     'lookup_spec': r'规格|参数|精度|分辨率|帧率|带宽|功耗|供电输出|电源输出|基线|视场角|蓝牙|Wi[- ]?Fi|无线通信|USB.{0,8}(?:接口|物理)|物理接口|(?:几路|几颗|几个).{0,8}(?:相机|摄像头)|(?:相机|摄像头).{0,8}数量|(?:下游端口.{0,5}(?:有几个|数量|几个|数)|(?:有几个|几个).{0,5}下游端口)|\b(?:spec|specification|accuracy|resolution|fps|bandwidth|fov|camera count|power output)\b',
