@@ -1,4 +1,4 @@
-"""The owner Pro release may add exactly two source-checked operating records."""
+"""The Pro release adds two operating facts and one reviewed entity alias."""
 import hashlib
 import json
 from copy import deepcopy
@@ -94,6 +94,17 @@ def _proposal(tmp_path, monkeypatch):
     monkeypatch.setattr(op, 'PRO_SOURCE_REF', deepcopy(added[0]['source_refs'][0]))
     monkeypatch.setattr(op, 'PRO_BASELINE_COUNT', len(base['records']))
     new = deepcopy(refreshed)
+    identity = next(row for row in new['records'] if row['kind'] == 'entity')
+    identity['data']['aliases'] = ['EGO 1600 四目']
+    identity['fact_review']['record_sha256'] = record_fingerprint(identity)
+    identity['access_review']['record_sha256'] = access_fingerprint(identity)
+    monkeypatch.setattr(op, 'PRO_IDENTITY_ALIAS_FINGERPRINT',
+                        record_fingerprint(identity), raising=False)
+    monkeypatch.setattr(op, 'PRO_IDENTITY_ALIAS_REF',
+                        deepcopy(identity['source_refs'][0]), raising=False)
+    monkeypatch.setattr(op, 'PRO_IDENTITY_ALIAS_VALUE',
+                        'EGO 1600 四目', raising=False)
+    monkeypatch.setattr(op, 'PRO_IDENTITY_ALIAS_ID', identity['id'], raising=False)
     new['records'] += added
     new['previous_release'] = previous
     new['runtime']['release'] = 'fae-runtime-2'
@@ -163,6 +174,18 @@ def test_pro_v2_stages_exact_delta_and_preserves_v1_loader(tmp_path, monkeypatch
                                            upstream_sha='a' * 40)
     assert {r['id'] for r in loaded.records_for('internal_fae')} == set(bundle['scope']['answerable_ids'])
     assert {r['kind'] for r in loaded.records_for('channel')} == set()
+    assert loaded.ground_question('EGO 1600 四目不连接电脑或手机时，单机采集',
+                                  role='internal_fae')[
+        'entities'] == ['entity:ego-1600']
+    assert loaded.ground_question('EGO 1600 四目牛奶', role='internal_fae') == {}
+
+
+def test_pro_v2_rejects_unreviewed_identity_alias_change(tmp_path, monkeypatch):
+    root, archive, bundle, review, _ = _proposal(tmp_path, monkeypatch)
+    identity = next(row for row in bundle['records'] if row['kind'] == 'entity')
+    identity['data']['aliases'] = ['EGO 1600 四目', 'EGO 1600 任意版本']
+    with pytest.raises(ValueError, match='pro_delta'):
+        _stage_v2(root, archive, bundle, review)
 
 
 def test_pro_v2_formal_retrieval_and_same_runtime_rollback(tmp_path, monkeypatch):

@@ -50,7 +50,7 @@ def reviewed_name_in_query(name: str, query: str,
                 return True
             stripped = remaining
         if re.match(r'(?:的|是|在|与|和|有几|能否|是否|可以|供电|电源|功率|'
-                    r'每口|每个下游口|单口)'
+                    r'每口|每个下游口|单口|单机|独立|不连接|不接|无需)'
                     r'(?![A-Za-z0-9])',
                     stripped):
             return True

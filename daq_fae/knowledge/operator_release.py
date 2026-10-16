@@ -32,6 +32,14 @@ PRO_SOURCE_REF = {
     'sha256': 'ded0378e7f5560760cd3bfbb833a64536776e9ad59682a98547c28dfecb55c7a',
     'locator': {'kind': 'lines', 'start': 54, 'end': 90},
 }
+PRO_IDENTITY_ALIAS_ID = 'entity:ego-pro'
+PRO_IDENTITY_ALIAS_VALUE = 'EGO Pro 四目'
+PRO_IDENTITY_ALIAS_FINGERPRINT = '8f581a7889f701e58a64279cc4b01657e783e1edb5c4cb7b4881cdbe8a58c28f'
+PRO_IDENTITY_ALIAS_REF = {
+    'path': '中文-EGO Pro 四目快速使用说明文档/EGO Pro 四目快速使用说明文档.md',
+    'sha256': 'ded0378e7f5560760cd3bfbb833a64536776e9ad59682a98547c28dfecb55c7a',
+    'locator': {'kind': 'lines', 'start': 1, 'end': 5},
+}
 PRO_VETO_ENTITIES = [
     {'id': 'entity:wristcam', 'name': 'WristCam', 'aliases': ['腕部相机']},
     {'id': 'entity:external-hub', 'name': 'HUB', 'aliases': ['集线器']},
@@ -70,6 +78,36 @@ def _require(condition, reason):
 
 def _record_core(row):
     return {key: value for key, value in row.items() if key != 'answerable'}
+
+
+def _pro_identity_alias_delta(previous_by_id: dict, by_id: dict) -> bool:
+    """Permit the one source-bound Pro name needed by formal entity resolution."""
+    from .records import access_fingerprint, record_fingerprint
+
+    previous = previous_by_id.get(PRO_IDENTITY_ALIAS_ID)
+    current = by_id.get(PRO_IDENTITY_ALIAS_ID)
+    if not isinstance(previous, dict) or not isinstance(current, dict):
+        return False
+    old_aliases = previous['data'].get('aliases', [])
+    expected_data = {**previous['data'],
+                     'aliases': [*old_aliases, PRO_IDENTITY_ALIAS_VALUE]}
+    old_refs = previous['source_refs']
+    expected_refs = [*old_refs]
+    if PRO_IDENTITY_ALIAS_REF not in expected_refs:
+        expected_refs.append(PRO_IDENTITY_ALIAS_REF)
+    return (current.get('id') == previous['id']
+            and current.get('kind') == previous['kind'] == 'entity'
+            and current.get('status') == previous['status'] == 'verified'
+            and current.get('scope') == previous['scope']
+            and current.get('data') == expected_data
+            and current.get('source_refs') == expected_refs
+            and record_fingerprint(current) == PRO_IDENTITY_ALIAS_FINGERPRINT
+            and current.get('fact_review', {}).get('record_sha256') ==
+            PRO_IDENTITY_ALIAS_FINGERPRINT
+            and current.get('access_review', {}).get('record_sha256') ==
+            access_fingerprint(current)
+            and current.get('access_review', {}).get('view_roles') == ['internal_fae']
+            and current.get('access_review', {}).get('forward_roles') == ['internal_fae'])
 
 
 def _inventory(sources):
@@ -330,7 +368,7 @@ def _bound_pro_input_hashes(bundle: dict, semantic_review: dict) -> dict:
 def stage_operator_pro_release(root: Path, bundle: dict, archive: Path,
                                semantic_review: dict, *, runtime_release: str,
                                upstream_sha: str) -> str:
-    """Stage exactly two Pro standalone facts on the known 25-record production base."""
+    """Stage two Pro facts and one governed name alias on the 25-record base."""
     from .records import record_fingerprint
     b = deepcopy(bundle)
     _require(isinstance(b, dict) and all(key in b for key in
@@ -374,7 +412,9 @@ def stage_operator_pro_release(root: Path, bundle: dict, archive: Path,
     _require(len(by_id) == len(b['records']) == PRO_BASELINE_COUNT + 2
              and set(by_id) - set(previous_by_id) == set(PRO_RECORD_FINGERPRINTS)
              and all(_record_core(by_id[rid]) == _record_core(row)
-                     for rid, row in previous_by_id.items()), 'pro_delta')
+                     for rid, row in previous_by_id.items()
+                     if rid != PRO_IDENTITY_ALIAS_ID)
+             and _pro_identity_alias_delta(previous_by_id, by_id), 'pro_delta')
     new_rows = {rid: by_id[rid] for rid in PRO_RECORD_FINGERPRINTS}
     _require(all(row.get('source_refs') == [PRO_SOURCE_REF] for row in new_rows.values())
              and any(item.get('path') == PRO_SOURCE_REF['path'] and
@@ -428,6 +468,9 @@ def stage_operator_pro_release(root: Path, bundle: dict, archive: Path,
         'scoped_field_aliases': deepcopy(b['scoped_field_aliases']),
         'pro_record_fingerprints': deepcopy(PRO_RECORD_FINGERPRINTS),
         'pro_source_ref': deepcopy(PRO_SOURCE_REF),
+        'pro_identity_alias_fingerprint': PRO_IDENTITY_ALIAS_FINGERPRINT,
+        'pro_identity_alias_ref': deepcopy(PRO_IDENTITY_ALIAS_REF),
+        'pro_identity_alias_value': PRO_IDENTITY_ALIAS_VALUE,
         'veto_entities': deepcopy(PRO_VETO_ENTITIES),
         **dev_evidence,
     }
@@ -484,7 +527,7 @@ def verify_operator_manifest(manifest: dict, *, runtime_release: str, upstream_s
 
 def _verify_pro_manifest(manifest: dict, *, runtime_release: str,
                          upstream_sha: str) -> None:
-    from .records import record_fingerprint
+    from .records import access_fingerprint, record_fingerprint
     evidence = manifest['review']['operator_release']
     rows = manifest['records']
     by_id = {row['id']: row for row in rows}
@@ -505,6 +548,10 @@ def _verify_pro_manifest(manifest: dict, *, runtime_release: str,
                  (_record_core(row) for row in rows), key=lambda row: row['id']))
              and evidence.get('pro_record_fingerprints') == PRO_RECORD_FINGERPRINTS
              and evidence.get('pro_source_ref') == PRO_SOURCE_REF
+             and evidence.get('pro_identity_alias_fingerprint') ==
+             PRO_IDENTITY_ALIAS_FINGERPRINT
+             and evidence.get('pro_identity_alias_ref') == PRO_IDENTITY_ALIAS_REF
+             and evidence.get('pro_identity_alias_value') == PRO_IDENTITY_ALIAS_VALUE
              and evidence.get('veto_entities') == PRO_VETO_ENTITIES,
              'manifest_binding')
     _require(set(PRO_RECORD_FINGERPRINTS) <= set(by_id)
@@ -515,6 +562,20 @@ def _verify_pro_manifest(manifest: dict, *, runtime_release: str,
                      and row['access_review']['view_roles'] == ['internal_fae']
                      and row['access_review']['forward_roles'] == ['internal_fae']
                      for rid, row in ((rid, by_id[rid]) for rid in PRO_RECORD_FINGERPRINTS))
+             and PRO_IDENTITY_ALIAS_ID in by_id
+             and record_fingerprint(by_id[PRO_IDENTITY_ALIAS_ID]) ==
+             PRO_IDENTITY_ALIAS_FINGERPRINT
+             and PRO_IDENTITY_ALIAS_REF in by_id[PRO_IDENTITY_ALIAS_ID]['source_refs']
+             and PRO_IDENTITY_ALIAS_VALUE in
+             by_id[PRO_IDENTITY_ALIAS_ID]['data'].get('aliases', [])
+             and by_id[PRO_IDENTITY_ALIAS_ID]['access_review']['view_roles'] ==
+             ['internal_fae']
+             and by_id[PRO_IDENTITY_ALIAS_ID]['access_review']['forward_roles'] ==
+             ['internal_fae']
+             and by_id[PRO_IDENTITY_ALIAS_ID]['fact_review']['record_sha256'] ==
+             PRO_IDENTITY_ALIAS_FINGERPRINT
+             and by_id[PRO_IDENTITY_ALIAS_ID]['access_review']['record_sha256'] ==
+             access_fingerprint(by_id[PRO_IDENTITY_ALIAS_ID])
              and sorted(scope.get('answerable_ids', [])) == sorted(by_id)
              and set(scope.get('excluded_topics', [])) >= EXCLUDED - {'topology', 'procedure'}
              and not set(scope['excluded_topics']) & {'topology', 'procedure'},
@@ -557,7 +618,10 @@ def _checked_operator(root: Path, release_id: str, *, runtime_release: str,
                  digest(sorted((_record_core(row) for row in previous['records']),
                                key=lambda row: row['id'])) and all(
             _record_core(by_id.get(row['id'], {})) == _record_core(row)
-            for row in previous['records']), 'production_baseline')
+            for row in previous['records'] if row['id'] != PRO_IDENTITY_ALIAS_ID)
+                 and _pro_identity_alias_delta(
+                     {row['id']: row for row in previous['records']}, by_id),
+                 'production_baseline')
     return manifest
 
 

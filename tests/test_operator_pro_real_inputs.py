@@ -42,13 +42,18 @@ def test_current_25_records_and_pro_rows_formal_loader_static_sentinel(tmp_path)
     paths = (ORIGIN, ARCHIVE / 'manifest.json',
              PRIVATE / 'pro-offline-reviewed-graph-v6/dependency-bundle.json',
              PRIVATE / 'v6-pro-reviewed-records-prod-ee908.json',
-             PRIVATE / 'dev-source-checked-pro-offline-v6.json')
+             PRIVATE / 'dev-source-checked-pro-offline-v6.json',
+             PRIVATE / 'v7-ego-pro-identity-alias-row.json')
     if any(not path.is_file() for path in paths):
         pytest.skip('private reviewed originals absent from this checkout')
     origin = _json(ORIGIN)
     snapshot = _json(paths[2])['snapshot']
     prep = _json(paths[3])
     ledger = _json(paths[4])
+    alias_row = _json(paths[5])
+    assert alias_row['data']['aliases'] == ['EGO Pro 四目']
+    assert alias_row['source_refs'][-1]['locator'] == {
+        'kind': 'lines', 'start': 1, 'end': 5}
     assert len(prep['records']) == 2
     topology = next(row for row in prep['records'] if row['kind'] == 'topology')
     assert topology['data']['sync_target'] == 'unknown'
@@ -94,6 +99,8 @@ def test_current_25_records_and_pro_rows_formal_loader_static_sentinel(tmp_path)
                                         runtime_release=new_runtime, upstream_sha=upstream)
     _write_active_pointer(root, new_base25)
     bundle = deepcopy(base)
+    bundle['records'] = [deepcopy(alias_row) if row['id'] == alias_row['id']
+                         else row for row in bundle['records']]
     bundle['records'].extend(deepcopy(prep['records']))
     bundle['previous_release'] = new_base25
     bundle['scope']['answerable_ids'] = [row['id'] for row in bundle['records']]
@@ -148,6 +155,9 @@ def test_current_25_records_and_pro_rows_formal_loader_static_sentinel(tmp_path)
     assert len(knowledge.records_for('internal_fae')) == 27
     assert {'entity:eg-db', 'entity:wristcam'} <= {
         row['id'] for row in knowledge.records_for('internal_fae')}
+    assert knowledge.ground_question(
+        '一台 EGO Pro 四目不连接电脑或手机时，单机采集如何供电？',
+        role='internal_fae')['entities'] == ['entity:ego-pro']
     def dispatch(question, tool, arguments, role='internal_fae'):
         return DaqToolBox(question=question, knowledge=knowledge, role=role,
                           requirements=[]).dispatch(tool, arguments)
