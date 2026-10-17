@@ -66,6 +66,10 @@ def sdk_usage_descriptor_matches(value: str, row: dict) -> bool:
     """Match an SDK selector only against the reviewed record's own labels."""
     labels = [str(item) for key in ("usage_tasks", "topics", "symbols")
               for item in row.get(key, []) if isinstance(item, str)]
+    if row.get("sdk_layer") == "ios_framework":
+        ios_aliases = {"embed_framework": "integrate_framework",
+                       "simulator_artifacts": "simulator_scope"}
+        value = ios_aliases.get(value, value)
 
     def normalized(text: str) -> str:
         return re.sub(r"\bsd[_\s-]?card(?![a-z])", "sdcard", text.casefold())
@@ -78,6 +82,8 @@ def sdk_usage_descriptor_matches(value: str, row: dict) -> bool:
         "initializing": "init", "startup": "start", "starting": "start",
         "stopping": "stop", "configuration": "config", "configure": "config",
         "compilation": "build", "compile": "build",
+        "linking": "link", "libraries": "library", "dlls": "dll",
+        "placement": "deploy", "placing": "deploy", "integration": "deploy",
     }
     ignored = {"and", "the", "of", "order", "sequence", "how", "to", "example", "sample"}
 
@@ -232,6 +238,57 @@ class SdkCatalog:
                 any(not isinstance(item, str) or not item.strip() for item in values)):
             return False
         asked = _identity_text(question)
+        ios_phrases = {
+            "embed_framework": r"(?:嵌入.{0,16}framework|embed.{0,16}framework)",
+            "simulator_artifacts": r"simulator.{0,12}(?:产物|包|支持|artifact)",
+        }
+        if len(values) == 1 and values[0] in ios_phrases and re.search(
+                ios_phrases[values[0]], question, re.I):
+            return any(row.get("sdk_layer") == "ios_framework"
+                       and sdk_usage_descriptor_matches(values[0], row)
+                       for row in self.search(question, role))
+        if (len(values) == 1 and values[0] == 'inspect_package'
+                and re.search(r'包|package', question, re.I)
+                and re.search(r'demo|示例', question, re.I)
+                and re.search(r'构建|预编译|build|prebuilt', question, re.I)):
+            return any(row.get('sdk_layer') == 'ble_cpp'
+                       and 'linux' in str(row.get('platform', '')).casefold()
+                       and sdk_usage_descriptor_matches(values[0], row)
+                       for row in self.search(question, role))
+        if (len(values) == 1 and values[0] == 'multi_device_sync_mode_check_and_set'
+                and re.search(r'主从|master.slave', question, re.I)
+                and re.search(r'同步|sync', question, re.I)
+                and re.search(r'检查|设置|check|set', question, re.I)):
+            return any(row.get('sdk_layer') == 'host_cpp'
+                       and sdk_usage_descriptor_matches(values[0], row)
+                       for row in self.search(question, role))
+        if (len(values) == 1 and values[0] == 'library_linking_and_dll_placement'
+                and re.search(r'链接|\blink\b', question, re.I)
+                and re.search(r'DLL', question, re.I)):
+            return any(row.get('sdk_layer') == 'ble_cpp'
+                       and 'windows' in str(row.get('platform', '')).casefold()
+                       and sdk_usage_descriptor_matches(values[0], row)
+                       for row in self.search(question, role))
+        intent_phrases = {
+            'link_library_and_place_dll': (r'链接|\blink\b', r'\bDLL\b'),
+            'link_libraries_and_deploy_dlls': (r'链接|\blink\b', r'\bDLL\b'),
+            'link_library_and_deploy_dll': (r'链接|\blink\b', r'\bDLL\b'),
+            'dll_integration': (r'\bDLL\b', r'集成|integrat'),
+            'build_and_deploy': (r'编译|\bbuild\b', r'部署|deploy'),
+            'compile_and_deploy': (r'编译|\bbuild\b', r'部署|deploy'),
+        }
+        if (key == 'task' and len(values) == 1 and values[0] in intent_phrases
+                and all(re.search(pattern, question, re.I)
+                        for pattern in intent_phrases[values[0]])):
+            return any(sdk_usage_descriptor_matches(values[0], row)
+                       for row in self.search(question, role))
+        if key == 'task' and all(isinstance(item, str) for item in values):
+            for row in self.search(question, role):
+                if (all(sdk_usage_descriptor_matches(item, row) for item in values)
+                        and any(_identity_text(symbol) in asked
+                                for symbol in row.get('symbols', [])
+                                if isinstance(symbol, str) and len(symbol) >= 6)):
+                    return True
         return any(
             role in row.get("view_roles", [])
             and all(sdk_usage_descriptor_matches(item, row) for item in values)
@@ -291,6 +348,9 @@ class SdkCatalog:
         for row in selected:
             fields = [(8, row["title"]), (6, " ".join(row["question_patterns"])),
                       (5, " ".join(row["symbols"] + row["topics"])),
+                      (10, " ".join(str(ref.get("member", "")).replace("\\", "/").rsplit("/", 1)[-1]
+                                      for ref in row.get("source_refs", [])
+                                      if re.fullmatch(r"[0-9a-f]{64}", str(ref.get("member_sha256", ""))))),
                       (1, row["answer"])]
             score = sum(weight * sum(len(term) for term in query_terms & terms(value))
                         for weight, value in fields)

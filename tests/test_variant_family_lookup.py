@@ -59,6 +59,21 @@ def test_family_phrase_can_query_each_explicit_variant_without_crossing_to_pro()
     assert unresolved.content['reason'] == 'variant_selector_required'
 
 
+def test_generic_family_identity_goal_is_satisfied_by_visible_variant_set():
+    box = DaqToolBox(
+        question='泛称 EGO 是否只支持 1600×1200？',
+        knowledge=FamilyKnowledge(), role='internal_fae',
+        requirements=[{'id': 'family-identity', 'capability': 'resolve_entity',
+                       'entities': ['EGO'], 'conditions': {}}],
+    )
+    result = box.dispatch('resolve_entity', {'text': 'EGO'})
+    assert result.status == 'ok'
+    assert {row['id'] for row in result.content['matches']} == {
+        'entity:ego-1600', 'entity:ego-1920'}
+    assert result.content['matched_requirement_ids'] == ['family-identity']
+    assert result.content['variant_scopes_exhaustive'] is False
+
+
 def test_comparison_identity_evidence_is_required_for_each_visible_variant():
     from daq_fae.request_schema import DaqRequestSchema
     from daq_fae.task_context import prepare_turn
@@ -744,6 +759,36 @@ def test_family_requirement_without_variant_cannot_inject_other_variant_resoluti
     assert result.content['matches'][0]['id'] == 'claim:fov-1600'
 
 
+def test_family_target_resolution_does_not_override_explicit_variant_probe():
+    class FpsKnowledge(FamilyKnowledge):
+        def records_for(self, role):
+            rows = super().records_for(role)
+            for row in rows:
+                if row['kind'] == 'claim':
+                    row['data'].update(field='rgb_max_fps',
+                                       conditions={'resolution': row['scope']['resolution_variant']})
+            return rows
+
+        def resolve_field(self, field, entity_id=None):
+            return 'rgb_max_fps' if field in {'rgb_max_fps', 'rgb_max_frame_rate'} else field
+
+    box = DaqToolBox(
+        question='泛称 EGO 是否支持 1600×1300@30？', knowledge=FpsKnowledge(),
+        role='internal_fae', requirements=[{
+            'id': 'req-target', 'capability': 'lookup_spec',
+            'field': 'rgb_max_frame_rate', 'entities': ['EGO'],
+            'conditions': {'resolution': '1600x1300'},
+        }],
+    )
+    result = box.dispatch('lookup_spec', {
+        'entity': 'entity:ego-1600', 'field': 'rgb_max_fps',
+        'conditions': {'resolution_variant': '1600x1200'},
+    })
+    assert result.status == 'ok'
+    assert result.content['matches'][0]['id'] == 'claim:fov-1600'
+    assert result.content['matched_requirement_ids'] == []
+
+
 def test_multiple_measurement_modes_still_require_explicit_resolution():
     class MultiModeKnowledge(FamilyKnowledge):
         def records_for(self, role):
@@ -936,10 +981,57 @@ def test_field02_wrong_measurement_condition_reports_variant_modes():
     result = DaqToolBox(question='EGO 双目两版 RGB 原生帧率',
                         knowledge=FrameRateKnowledge(), role='internal_fae').dispatch(
                             'lookup_spec', {'entity': 'EGO 双目',
-                                            'field': 'rgb_max_frame_rate',
+                            'field': 'rgb_max_fps',
                                             'conditions': {'resolution_variant': '1600x1200',
                                                            'resolution': '1920x1200'}})
     assert result.status == 'not_found'
     assert result.content['reason'] == 'claim_conditions_mismatch'
-    assert result.content['available_claim_conditions'] == {'resolution': ['1600x1200']}
+    assert 'available_claim_conditions' not in result.content
+    assert result.content['available_claim_condition_scopes'] == [{
+        'entity_id': 'entity:ego-1600',
+        'resolution_variant': '1600x1200',
+        'conditions': {'resolution': '1600x1200'},
+    }]
     assert result.sources == []
+
+
+def test_generic_family_target_mismatch_does_not_expose_one_variant_as_all_modes():
+    class FrameRateKnowledge(FamilyKnowledge):
+        is_candidate_preview = True
+
+        def ground_question(self, question):
+            return {'entities': ['entity:ego-1600'],
+                    'conditions': {'resolution_variant': '1600x1200'}}
+
+        def source_checked_variant_scopes(self, entity, field):
+            return {'resolution_variant': ['1600x1200']}
+
+        def records_for(self, role):
+            rows = super().records_for(role)
+            for row in rows:
+                if row['kind'] == 'claim':
+                    row['data']['field'] = 'rgb_max_fps'
+                    row['data']['conditions'] = {
+                        'resolution': row['scope']['resolution_variant']}
+            return [row for row in rows if row['kind'] != 'claim'
+                    or row['scope'].get('resolution_variant') == '1600x1200']
+
+        def resolve_field(self, field, entity_id=None):
+            return 'rgb_max_fps' if field == 'rgb_max_frame_rate' else None
+
+    result = DaqToolBox(question='泛称 EGO 是否支持 1600×1300@30？能否说只支持 1600×1200？',
+                        knowledge=FrameRateKnowledge(), role='internal_fae',
+                        requirements=[{'id': 'target', 'capability': 'lookup_spec',
+                                       'field': 'rgb_max_frame_rate', 'entities': ['EGO'],
+                                       'conditions': {'resolution': '1600x1300'}}]).dispatch(
+                            'lookup_spec', {'entity': 'EGO',
+                                            'field': 'rgb_max_fps',
+                                            'conditions': {'resolution': '1600x1300'}})
+    assert result.status == 'not_found'
+    assert result.content['reason'] == 'variant_selector_required'
+    assert result.content['source_checked_variant_scopes'] == {
+        'resolution_variant': ['1600x1200']}
+    assert result.content['visible_entity_variant_scopes'] == {
+        'resolution_variant': ['1600x1200', '1920x1200']}
+    assert result.content['variant_scopes_exhaustive'] is False
+    assert 'available_claim_condition_scopes' not in result.content

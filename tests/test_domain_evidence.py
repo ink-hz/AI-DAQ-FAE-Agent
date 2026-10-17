@@ -19,6 +19,36 @@ def test_service_contract_satisfies_only_service_goals():
         outcome='resolved', conclusion='我是内部数采 FAE 助手。')).action == 'allow'
 
 
+def test_answer_contract_requests_rewrite_of_literal_newline_escape():
+    contract = ServiceContract.for_release(None, role='internal_fae',
+                                           runtime_release='runtime-dev')
+    session = DaqEvidencePolicy(service_contract=contract).begin({'requirements': [
+        {'id': 'service', 'capability': 'service_identity',
+         'evidence_class': 'service_contract'},
+    ]})
+    decision = session.evaluate(AnswerSubmission(
+        outcome='resolved', conclusion='步骤：\\n1. 断电插卡。\\n2. 开机。'))
+    assert decision.action == 'request_evidence'
+    assert decision.reason_code == 'daq_literal_escape_in_answer'
+    assert session.evaluate(AnswerSubmission(
+        outcome='resolved', conclusion='步骤：\n1. 断电插卡。\n2. 开机。')).action == 'allow'
+
+
+def test_answer_contract_hides_source_file_names_but_keeps_output_names():
+    contract = ServiceContract.for_release(None, role='internal_fae',
+                                           runtime_release='runtime-dev')
+    session = DaqEvidencePolicy(service_contract=contract).begin({'requirements': [
+        {'id': 'service', 'capability': 'service_identity',
+         'evidence_class': 'service_contract'},
+    ]})
+    decision = session.evaluate(AnswerSubmission(
+        outcome='resolved', conclusion='包内有 EgoLowBleDemo.cpp 示例源码。'))
+    assert decision.action == 'request_evidence'
+    assert decision.reason_code == 'daq_source_filename_in_answer'
+    assert session.evaluate(AnswerSubmission(
+        outcome='resolved', conclusion='示例会导出 align_calib.yaml。')).action == 'allow'
+
+
 def test_english_answer_contract_retries_chinese_body_not_only_headings():
     contract = ServiceContract.for_release(None, role='internal_fae',
                                            runtime_release='runtime-dev')
@@ -286,6 +316,52 @@ def test_answer_must_keep_internal_provenance_out_of_prose():
     )).action == "allow"
 
 
+def test_source_page_or_line_locator_is_not_delivered_in_answer_prose():
+    session = DaqEvidencePolicy().begin(question_requirements('变更日志怎么说？'))
+    for prose in ('变更日志第 8 行记载了该变更。',
+                  'The change is on line 8 of the release note.',
+                  '原件第 3 页有说明。'):
+        decision = session.evaluate(AnswerSubmission(
+            outcome='safe_abstained', basis=prose, missing='组合支持未知。'))
+        assert decision.action == 'request_evidence'
+        assert decision.reason_code == 'daq_internal_provenance_in_answer'
+    assert session.evaluate(AnswerSubmission(
+        outcome='safe_abstained', basis='变更日志记载了该变更。',
+        missing='组合支持未知。')).action == 'allow'
+
+
+def test_model_added_interface_must_be_in_user_question_or_reviewed_source():
+    requirements = {'requirements': [
+        {'id': 'sdk', 'capability': 'sdk_evidence'},
+    ]}
+    session = DaqEvidencePolicy(question='iOS framework 如何嵌入？',
+                                allow_dev_source_check=True).begin(requirements)
+    session.observe('sdk_evidence', ToolResult(
+        status='ok', content={'matched_requirement_ids': ['sdk'],
+                              'matches': [{'answer': '把 framework 嵌入应用。'}]},
+        sources=[{'source_id': 'sdk-ios', 'type': 'daq_sdk_source_checked',
+                  'verification_status': 'source_checked',
+                  'release_id': 'dev-sdk'}],
+    ))
+    decision = session.evaluate(AnswerSubmission(
+        outcome='safe_abstained', basis='本轮按 USB 连接核对支持。',
+        missing='设备固件支持未知。'))
+    assert decision.action == 'request_evidence'
+    assert decision.reason_code == 'daq_unrequested_interface_in_answer'
+
+    grounded = DaqEvidencePolicy(question='多设备同步怎么设置？',
+                                 allow_dev_source_check=True).begin(requirements)
+    grounded.observe('sdk_evidence', ToolResult(
+        status='ok', content={'matched_requirement_ids': ['sdk'],
+                              'matches': [{'answer': '示例通过 USB 枚举打开设备。'}]},
+        sources=[{'source_id': 'sdk-sync', 'type': 'daq_sdk_source_checked',
+                  'verification_status': 'source_checked',
+                  'release_id': 'dev-sdk'}],
+    ))
+    assert grounded.evaluate(AnswerSubmission(
+        outcome='resolved', conclusion='示例通过 USB 枚举打开设备。')).action == 'allow'
+
+
 def test_sdk_output_filenames_are_allowed_but_source_member_paths_are_not():
     session = DaqEvidencePolicy(allow_dev_source_check=True).begin({"requirements": [
         {"id": "sdk", "capability": "sdk_evidence"},
@@ -303,7 +379,7 @@ def test_sdk_output_filenames_are_allowed_but_source_member_paths_are_not():
     decision = session.evaluate(AnswerSubmission(
         outcome="resolved", conclusion="请查看 ego_calib_yaml_export.cpp。"
     ))
-    assert decision.reason_code == "daq_internal_provenance_in_answer"
+    assert decision.reason_code == "daq_source_filename_in_answer"
 
 
 def test_public_sdk_symbols_are_allowed_in_sdk_usage_answer():

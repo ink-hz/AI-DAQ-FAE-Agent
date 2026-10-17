@@ -51,6 +51,58 @@ def _mentioned_families(text: str) -> list[str]:
     return families
 
 
+def _firmware_identity(text: str) -> str | None:
+    """Select only an explicitly named firmware product, never generic EGO."""
+    lowered = text.casefold()
+    dual = '双目' in text or bool(re.search(r'ego\s*dual\b', lowered))
+    pro = '四目' in text or bool(re.search(r'ego\s*pro\b', lowered))
+    if dual and pro:
+        return 'ambiguous'
+    return 'dual' if dual else 'pro' if pro else None
+
+
+def _firmware_scopes(query: str) -> dict[str, dict]:
+    """Keep a named firmware product and its versions in the same clause."""
+    scopes: dict[str, dict] = {}
+    current = None
+    for clause in re.split(r"(?:与|和|以及|及|、|[;,；，]|\band\b)", query,
+                           flags=re.IGNORECASE):
+        families = _mentioned_families(clause)
+        identity = _firmware_identity(clause)
+        if identity == 'ambiguous':
+            return {}
+        if families and 'firmware' not in families:
+            current = None
+            continue
+        if identity:
+            current = identity
+        versions = _versions(clause)
+        if current is None or not (versions or 'firmware' in families):
+            continue
+        scope = scopes.setdefault(current, {'versions': set(), 'unversioned': False})
+        scope['versions'].update(versions)
+        if 'firmware' in families and not versions:
+            scope['unversioned'] = True
+    return scopes
+
+
+def _firmware_requirement_identity(query: str, entities: list,
+                                   version: object) -> str | None:
+    scopes = _firmware_scopes(query)
+    named = _firmware_identity(' '.join(str(entity) for entity in entities))
+    if named == 'ambiguous' or named and named not in scopes:
+        return None
+    if version:
+        token = str(version).lstrip('vV')
+        candidates = {identity for identity, scope in scopes.items()
+                      if token in scope['versions'] or scope['unversioned']}
+    else:
+        candidates = set(scopes)
+    if named:
+        return named if named in candidates else None
+    return next(iter(candidates)) if len(candidates) == 1 else None
+
+
 def _build_tokens(text: str) -> set[str]:
     normalized = re.sub(
         r"(?<!\d)(20\d{2})[-/](\d{2})[-/](\d{2})(?!\d)",
@@ -197,19 +249,29 @@ class ReleaseNoteCatalog:
         if not families:
             return []
         scopes = _selector_scopes(query)
+        firmware_scopes = _firmware_scopes(query)
         candidates = []
         for row in self.records:
             family = next((item for item in families
                            if item in row["family"].casefold()), None)
             if family is None:
                 continue
+            if family == 'firmware':
+                product = next((name for name in firmware_scopes
+                                if name in row['family'].casefold()), None)
+                if product is None:
+                    continue
+                product_scope = firmware_scopes[product]
+                if (product_scope['versions'] and not product_scope['unversioned']
+                        and not product_scope['versions'] & _versions(row['answer'])):
+                    continue
             scope = scopes[family]
             if (scope["platforms"] and not any(
                     _platform_matches(row, platform)
                     for platform in scope["platforms"])):
                 continue
-            if (scope["versions"] and not scope["versions"] & _versions(
-                    row["answer"] if family == "firmware" else row["version"])):
+            if (family != 'firmware' and scope["versions"]
+                    and not scope["versions"] & _versions(row["version"])):
                 continue
             if (scope["builds"] and not any(row["build"].startswith(build)
                                             for build in scope["builds"])):

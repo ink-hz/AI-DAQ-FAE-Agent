@@ -13,7 +13,7 @@
       "20260910 OrbbecSDK 2.9.0 变更日志",
       "双目按键事件固件暂不支持"
     ],
-    "answer": "2026-09-10 SDK 变更日志记载蓝牙配对接口重构、网络按键事件范围及 TCP/授时修正；其中双目按键上报明确注明当时固件暂不支持。此为版本记录，不能证明某设备组合通过测试。",
+    "answer": "2026-09-10 SDK 变更日志记载蓝牙配对接口重构、网络按键事件范围及 TCP/授时修正；其中双目按键上报明确注明当时固件暂不支持。",
     "symbols": [],
     "topics": [
       "sdk",
@@ -48,7 +48,7 @@
       "20260917 OrbbecSDK 变更日志",
       "Android 前后台 TCP 恢复 20260917"
     ],
-    "answer": "2026-09-17 SDK 变更日志记载升级错误日志、电池充电状态、移除心跳及 Android 前后台 TCP 恢复等改动，并列出 UMI Finger 与 EGO Depth；记录本身不是设备与固件配对证明。",
+    "answer": "2026-09-17 SDK 变更日志记载升级错误日志、电池充电状态、移除心跳及 Android 前后台 TCP 恢复等改动，并列出 UMI Finger 与 EGO Depth。",
     "symbols": [],
     "topics": [
       "sdk",
@@ -84,7 +84,7 @@
       "20260921 UMI Finger 磁力计 SDK 日志",
       "20260921 SD 卡文件变更"
     ],
-    "answer": "2026-09-21 SDK 变更日志当时记载 UMI Finger 磁力计与磁编码器及 SD 卡文件功能；这是该构建的说明，不能据此宣称后续构建仍可用。",
+    "answer": "2026-09-21 SDK 变更日志记载 UMI Finger 磁力计与磁编码器及 SD 卡文件功能。",
     "symbols": [],
     "topics": [
       "sdk",
@@ -120,7 +120,7 @@
       "20260923 UMI Finger 磁力计移除",
       "SDK 20260923 MAC 属性固件 1.1.9"
     ],
-    "answer": "2026-09-23 SDK 变更日志记载移除 UMI Finger 磁力计功能，并注明设备 MAC 属性在 EGO 固件 1.1.9 上支持、其他设备未支持。此仅复述该构建记录，不能据此确认手头设备或后续构建的行为。",
+    "answer": "2026-09-23 SDK 变更日志记载移除 UMI Finger 磁力计功能，并注明设备 MAC 属性在 EGO 固件 1.1.9 上支持、其他设备未支持。",
     "symbols": [],
     "topics": [
       "sdk",
@@ -156,7 +156,7 @@
       "20260929 OrbbecSDK UMI Finger 磁力计",
       "20260929 SDK 网络 poll 变更"
     ],
-    "answer": "2026-09-29 SDK 变更日志记载 UMI Finger 控制指令完善、移除 NV12 格式、网络模式改用 poll 等改动；该顶层段没有宣布磁力计恢复。不能把包内旧示例当作恢复证据。",
+    "answer": "2026-09-29 SDK 变更日志记载 UMI Finger 控制指令完善、移除 NV12 格式、网络模式改用 poll 等改动；所核对的顶层段未列出磁力计恢复条目。",
     "symbols": [],
     "topics": [
       "sdk",
@@ -191,7 +191,7 @@
     "question_patterns": [
       "EgoViewer Android 20260910 v1.0.10 更新"
     ],
-    "answer": "EgoViewer Android v1.0.10（build 20260910）变更日志记载配对入口、设备名称修改、YUYV 屏蔽等应用改动。此为应用发布记录，未证明设备或固件组合实测。",
+    "answer": "EgoViewer Android v1.0.10（build 20260910）变更日志记载配对入口、设备名称修改、YUYV 屏蔽等应用改动。",
     "symbols": [],
     "topics": [
       "viewer",
@@ -226,7 +226,7 @@
       "EgoViewer desktop v2.0.11 更新",
       "20260910 Linux Windows Viewer 变更日志"
     ],
-    "answer": "桌面 EgoViewer v2.0.11 变更日志记载录像参数同步到预览预设、电脑录制磁盘低于 1 GB 时结束并提示等改动。Linux 与 Windows 日志字节相同，但两个可执行包不同，不能推断二进制或设备行为相同。",
+    "answer": "桌面 EgoViewer v2.0.11 变更日志记载录像参数同步到预览预设、电脑录制磁盘低于 1 GB 时结束并提示等改动。",
     "symbols": [],
     "topics": [
       "viewer",
@@ -261,7 +261,7 @@
       "EgoViewer Android v1.0.11 build 20260917",
       "Android Viewer 网络设备 IMU 20260917"
     ],
-    "answer": "EgoViewer Android v1.0.11（build 20260917）变更日志记载网络设备上下电后的 IMU、USB 改名、录制交互等修正；版本号相同不表示其后续构建行为相同。",
+    "answer": "EgoViewer Android v1.0.11（build 20260917）变更日志记载网络设备上下电后的 IMU、USB 改名、录制交互等修正。",
     "symbols": [],
     "topics": [
       "viewer",
@@ -295,7 +295,7 @@
     "question_patterns": [
       "EgoViewer desktop v2.0.12 对齐变更"
     ],
-    "answer": "桌面 EgoViewer v2.0.12 变更日志记载 EGO 加两腕带录制首尾、关键帧和分片对齐及预览同步限制等设计改动；不能据更新说明宣称任意拓扑同步实测通过。",
+    "answer": "桌面 EgoViewer v2.0.12 变更日志记载 EGO 加两腕带录制首尾、关键帧和分片对齐及预览同步限制等改动。",
     "symbols": [],
     "topics": [
       "viewer",
@@ -330,7 +330,7 @@
     "question_patterns": [
       "EgoViewer Android v1.0.11 build 20260921 MCAP"
     ],
-    "answer": "EgoViewer Android v1.0.11（build 20260921）变更日志记载 MCAP 录制、双目腕部首尾帧同步优化及 UMI/EGO Depth 升级入口；这些是该应用构建的说明，不构成硬件或固件组合实测证明。",
+    "answer": "EgoViewer Android v1.0.11（build 20260921）变更日志记载 MCAP 录制、双目腕部首尾帧同步优化及 UMI/EGO Depth 升级入口。",
     "symbols": [],
     "topics": [
       "viewer",
@@ -365,7 +365,7 @@
     "question_patterns": [
       "EgoViewer desktop v2.0.13 EGO Depth"
     ],
-    "answer": "桌面 EgoViewer v2.0.13 变更日志记载 EGO Depth 相关开流、录制与升级入口，并注明其预览和录制暂不限制同步帧处理；不可外推到其他设备或实测结果。",
+    "answer": "桌面 EgoViewer v2.0.13 变更日志记载 EGO Depth 相关开流、录制与升级入口，并注明其预览和录制暂不限制同步帧处理。",
     "symbols": [],
     "topics": [
       "viewer",
@@ -400,7 +400,7 @@
       "EgoViewer Android 20260923 网络设备枚举屏蔽",
       "v1.0.11 build 2026092302 闪退"
     ],
-    "answer": "EgoViewer Android v1.0.11（build 2026092302）变更日志第 8 行记载：临时屏蔽网络设备枚举以规避已知闪退。这限定为该构建的发布说明，不能直接证明后续构建是否恢复。",
+    "answer": "EgoViewer Android v1.0.11（build 2026092302）变更日志记载：临时屏蔽网络设备枚举以规避已知闪退。",
     "symbols": [],
     "topics": [
       "viewer",
@@ -435,7 +435,7 @@
     "question_patterns": [
       "EgoViewer desktop v2.0.14 UMI 磁力计移除"
     ],
-    "answer": "桌面 EgoViewer v2.0.14 变更日志记载 UMI 夹爪条目移除磁力计功能，并调整录制到电脑必须切片等行为；这是工具版本说明，不能确认某设备固件仍有磁力计或录制兼容。",
+    "answer": "桌面 EgoViewer v2.0.14 变更日志记载 UMI 夹爪条目移除磁力计功能，并调整录制到电脑必须切片等行为。",
     "symbols": [],
     "topics": [
       "viewer",
@@ -471,7 +471,7 @@
       "EgoViewer Android 20260929 网络设备枚举恢复了吗",
       "v1.0.11 build 2026092901 变更日志"
     ],
-    "answer": "EgoViewer Android v1.0.11（build 2026092901）变更日志顶层段记载混合 H.264/H.265 录制、音频可视化、崩溃捕获等改动，没有宣布网络设备枚举恢复。不能据此判断该构建的网络枚举实际状态。",
+    "answer": "EgoViewer Android v1.0.11（build 2026092901）变更日志顶层段记载混合 H.264/H.265 录制、音频可视化、崩溃捕获等改动；所核对的顶层段未列出网络设备枚举恢复条目。",
     "symbols": [],
     "topics": [
       "viewer",
@@ -506,7 +506,7 @@
     "question_patterns": [
       "EgoViewer desktop v2.0.15 TN2615 同步帧排除"
     ],
-    "answer": "桌面 EgoViewer v2.0.15 变更日志记载 TN2615 设备条目，但明确暂时排除同步帧预览和同步关键帧录制；该发布记录不证明其他 TN2615 功能或设备组合实测。",
+    "answer": "桌面 EgoViewer v2.0.15 变更日志记载 TN2615 设备条目，并明确暂时排除同步帧预览和同步关键帧录制。",
     "symbols": [],
     "topics": [
       "viewer",
@@ -542,7 +542,7 @@
       "双目 EGO 固件 1.1.10 变更日志",
       "固件 1.1.9 主从切换外部同步"
     ],
-    "answer": "双目 EGO 固件变更日志在 v1.1.10 段记载多设备录制起始对齐与 IMU 时间戳修正，在历史 v1.1.9 段记载主从切换和外部同步；变更说明不能证明任何固件与 SDK/Viewer 的配对已实测。",
+    "answer": "双目 EGO 固件变更日志在 v1.1.10 段记载多设备录制起始对齐与 IMU 时间戳修正，在历史 v1.1.9 段记载主从切换和外部同步。",
     "symbols": [],
     "topics": [
       "firmware",
@@ -577,7 +577,7 @@
       "EGO Pro factory update libobkit 区别",
       "四目 EGO Pro 1.0.7 变更日志"
     ],
-    "answer": "四目 EGO Pro 固件变更日志的目录说明区分 factory 烧录包、update 烧录包和非整机烧录的 libobkit 二次开发包；v1.0.7 段记载时间戳与丢帧优化。这些文字不建立刷机授权或某 SDK 与固件配对。",
+    "answer": "四目 EGO Pro 固件变更日志的目录说明区分 factory 烧录包、update 烧录包和非整机烧录的 libobkit 二次开发包；v1.0.7 段记载时间戳与丢帧优化。",
     "symbols": [],
     "topics": [
       "firmware",

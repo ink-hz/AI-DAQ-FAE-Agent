@@ -6,6 +6,7 @@ Generated from `SDK_Knowledge.jsonl`; source scope is recorded in each row.
 - **audio**: daq-sdk-device-capture-013, daq-sdk-host-audio-007
 - **ble**: daq-sdk-ble-linux-install-021, daq-sdk-ble-windows-install-020
 - **build**: daq-sdk-device-build-012, daq-sdk-host-build-010
+- **build_scope**: daq-sdk-host-magnetometer-sample-023
 - **calibration**: daq-sdk-host-calib-002
 - **callback**: daq-sdk-android-fwlog-017, daq-sdk-android-record-state-019, daq-sdk-host-key-008, daq-sdk-host-net-uid-hotplug-016, daq-sdk-host-state-006
 - **camera**: daq-sdk-device-capture-013
@@ -33,6 +34,7 @@ Generated from `SDK_Knowledge.jsonl`; source scope is recorded in each row.
 - **lifecycle**: daq-sdk-device-capture-013
 - **link**: daq-sdk-ble-windows-install-020
 - **linux**: daq-sdk-ble-linux-install-021
+- **magnetometer**: daq-sdk-host-magnetometer-sample-023
 - **multi_device**: daq-sdk-host-sync-001
 - **network**: daq-sdk-host-depth-009, daq-sdk-host-net-uid-hotplug-016, daq-sdk-host-sdcard-005, daq-sdk-host-sdcard-20260921, daq-sdk-host-sdcard-20260923
 - **playback**: daq-sdk-host-audio-007
@@ -41,6 +43,7 @@ Generated from `SDK_Knowledge.jsonl`; source scope is recorded in each row.
 - **readback**: daq-sdk-host-record-dir-004
 - **recording**: daq-sdk-android-record-state-019, daq-sdk-host-record-dir-004, daq-sdk-host-state-006
 - **runtime_library**: daq-sdk-device-build-012
+- **sample**: daq-sdk-host-magnetometer-sample-023
 - **sdcard**: daq-sdk-android-sdcard-018, daq-sdk-host-sdcard-005, daq-sdk-host-sdcard-20260921, daq-sdk-host-sdcard-20260923
 - **simulator**: daq-sdk-ios-framework-022
 - **state**: daq-sdk-android-record-state-019, daq-sdk-host-state-006

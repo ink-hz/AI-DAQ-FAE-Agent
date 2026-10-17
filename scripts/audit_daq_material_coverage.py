@@ -15,6 +15,7 @@ from pathlib import Path
 import tempfile
 
 from daq_fae.knowledge.releases import read_active_release
+from daq_fae.knowledge.code_identity import daq_code_sha
 from daq_fae.knowledge.reviewed_view import ReviewedKnowledge
 from daq_fae.knowledge.sdk_catalog import SdkCatalog
 from daq_fae.knowledge.sdk_materials import build_inventory
@@ -27,6 +28,14 @@ _CANDIDATE_FILES = (
     "_facts/all-records.json", "_sections/section-index.json",
     "sdk/software-evidence-matrix.json", "links/candidate-link-ledger.json",
 )
+
+
+def _load_sdk_for_audit(root: Path, runtime_release: str, upstream_sha: str,
+                        knowledge_release: str):
+    """Bind the SDK notes to the exact DAQ code and active main knowledge."""
+    return load_active_sdk_release(
+        root, runtime_release=runtime_release, upstream_sha=upstream_sha,
+        daq_code_sha256=daq_code_sha(), knowledge_release=knowledge_release)
 
 
 def _inventory(rows: list[dict], label: str) -> dict[str, dict]:
@@ -374,9 +383,9 @@ def main() -> None:
     product_view = ReviewedKnowledge.load_active(
         args.product_release_root, runtime_release=args.runtime_release,
         upstream_sha=args.upstream_sha)
-    sdk_active = load_active_sdk_release(
-        args.sdk_release_root, runtime_release=args.runtime_release,
-        upstream_sha=args.upstream_sha)
+    sdk_active = _load_sdk_for_audit(
+        args.sdk_release_root, args.runtime_release, args.upstream_sha,
+        args.product_release_id)
     if (product_active is None or product_view is None
             or product_active["release_id"] != args.product_release_id
             or product_view.release_id != args.product_release_id

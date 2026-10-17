@@ -95,7 +95,7 @@ def _proposal(tmp_path, monkeypatch):
     monkeypatch.setattr(op, 'PRO_BASELINE_COUNT', len(base['records']))
     new = deepcopy(refreshed)
     identity = next(row for row in new['records'] if row['kind'] == 'entity')
-    identity['data']['aliases'] = ['EGO 1600 四目']
+    identity['data']['aliases'] = ['EGO 1600 四目', '四目 EGO 1600']
     identity['fact_review']['record_sha256'] = record_fingerprint(identity)
     identity['access_review']['record_sha256'] = access_fingerprint(identity)
     monkeypatch.setattr(op, 'PRO_IDENTITY_ALIAS_FINGERPRINT',
@@ -104,6 +104,10 @@ def _proposal(tmp_path, monkeypatch):
                         deepcopy(identity['source_refs'][0]), raising=False)
     monkeypatch.setattr(op, 'PRO_IDENTITY_ALIAS_VALUE',
                         'EGO 1600 四目', raising=False)
+    monkeypatch.setattr(op, 'PRO_IDENTITY_ALIAS_VALUE_2',
+                        '四目 EGO 1600', raising=False)
+    monkeypatch.setattr(op, 'PRO_IDENTITY_ALIAS_REF_2',
+                        deepcopy(identity['source_refs'][0]), raising=False)
     monkeypatch.setattr(op, 'PRO_IDENTITY_ALIAS_ID', identity['id'], raising=False)
     new['records'] += added
     new['previous_release'] = previous

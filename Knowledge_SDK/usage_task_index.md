@@ -19,6 +19,7 @@ Generated from `SDK_Knowledge.jsonl`; source scope is recorded in each row.
 - **inspect_package**: daq-sdk-ble-linux-install-021
 - **integrate_framework**: daq-sdk-ios-framework-022
 - **link_library**: daq-sdk-ble-windows-install-020
+- **magnetometer_sample**: daq-sdk-host-magnetometer-sample-023
 - **multi_device_sync_mode_check_and_set**: daq-sdk-host-sync-001
 - **network_ego_sd_card_file_access**: daq-sdk-android-sdcard-018
 - **network_uid_hotplug**: daq-sdk-host-net-uid-hotplug-016

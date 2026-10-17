@@ -34,11 +34,17 @@ PRO_SOURCE_REF = {
 }
 PRO_IDENTITY_ALIAS_ID = 'entity:ego-pro'
 PRO_IDENTITY_ALIAS_VALUE = 'EGO Pro 四目'
-PRO_IDENTITY_ALIAS_FINGERPRINT = '8f581a7889f701e58a64279cc4b01657e783e1edb5c4cb7b4881cdbe8a58c28f'
+PRO_IDENTITY_ALIAS_VALUE_2 = '四目 EGO'
+PRO_IDENTITY_ALIAS_FINGERPRINT = 'd91681a8ac178ba536801e0005503c7f0a9e80a25cf0cfa3f28f9ea83e3b9573'
 PRO_IDENTITY_ALIAS_REF = {
     'path': '中文-EGO Pro 四目快速使用说明文档/EGO Pro 四目快速使用说明文档.md',
     'sha256': 'ded0378e7f5560760cd3bfbb833a64536776e9ad59682a98547c28dfecb55c7a',
     'locator': {'kind': 'lines', 'start': 1, 'end': 5},
+}
+PRO_IDENTITY_ALIAS_REF_2 = {
+    'path': '中文-EGO Pro 四目快速使用说明文档/EGO Pro 四目快速使用说明文档.md',
+    'sha256': 'ded0378e7f5560760cd3bfbb833a64536776e9ad59682a98547c28dfecb55c7a',
+    'locator': {'kind': 'lines', 'start': 23, 'end': 39},
 }
 PRO_VETO_ENTITIES = [
     {'id': 'entity:wristcam', 'name': 'WristCam', 'aliases': ['腕部相机']},
@@ -90,11 +96,14 @@ def _pro_identity_alias_delta(previous_by_id: dict, by_id: dict) -> bool:
         return False
     old_aliases = previous['data'].get('aliases', [])
     expected_data = {**previous['data'],
-                     'aliases': [*old_aliases, PRO_IDENTITY_ALIAS_VALUE]}
+                     'aliases': [*old_aliases, PRO_IDENTITY_ALIAS_VALUE,
+                                 PRO_IDENTITY_ALIAS_VALUE_2]}
     old_refs = previous['source_refs']
     expected_refs = [*old_refs]
     if PRO_IDENTITY_ALIAS_REF not in expected_refs:
         expected_refs.append(PRO_IDENTITY_ALIAS_REF)
+    if PRO_IDENTITY_ALIAS_REF_2 not in expected_refs:
+        expected_refs.append(PRO_IDENTITY_ALIAS_REF_2)
     return (current.get('id') == previous['id']
             and current.get('kind') == previous['kind'] == 'entity'
             and current.get('status') == previous['status'] == 'verified'
@@ -471,6 +480,8 @@ def stage_operator_pro_release(root: Path, bundle: dict, archive: Path,
         'pro_identity_alias_fingerprint': PRO_IDENTITY_ALIAS_FINGERPRINT,
         'pro_identity_alias_ref': deepcopy(PRO_IDENTITY_ALIAS_REF),
         'pro_identity_alias_value': PRO_IDENTITY_ALIAS_VALUE,
+        'pro_identity_alias_ref_2': deepcopy(PRO_IDENTITY_ALIAS_REF_2),
+        'pro_identity_alias_value_2': PRO_IDENTITY_ALIAS_VALUE_2,
         'veto_entities': deepcopy(PRO_VETO_ENTITIES),
         **dev_evidence,
     }
@@ -552,6 +563,8 @@ def _verify_pro_manifest(manifest: dict, *, runtime_release: str,
              PRO_IDENTITY_ALIAS_FINGERPRINT
              and evidence.get('pro_identity_alias_ref') == PRO_IDENTITY_ALIAS_REF
              and evidence.get('pro_identity_alias_value') == PRO_IDENTITY_ALIAS_VALUE
+             and evidence.get('pro_identity_alias_ref_2') == PRO_IDENTITY_ALIAS_REF_2
+             and evidence.get('pro_identity_alias_value_2') == PRO_IDENTITY_ALIAS_VALUE_2
              and evidence.get('veto_entities') == PRO_VETO_ENTITIES,
              'manifest_binding')
     _require(set(PRO_RECORD_FINGERPRINTS) <= set(by_id)
@@ -566,7 +579,10 @@ def _verify_pro_manifest(manifest: dict, *, runtime_release: str,
              and record_fingerprint(by_id[PRO_IDENTITY_ALIAS_ID]) ==
              PRO_IDENTITY_ALIAS_FINGERPRINT
              and PRO_IDENTITY_ALIAS_REF in by_id[PRO_IDENTITY_ALIAS_ID]['source_refs']
+             and PRO_IDENTITY_ALIAS_REF_2 in by_id[PRO_IDENTITY_ALIAS_ID]['source_refs']
              and PRO_IDENTITY_ALIAS_VALUE in
+             by_id[PRO_IDENTITY_ALIAS_ID]['data'].get('aliases', [])
+             and PRO_IDENTITY_ALIAS_VALUE_2 in
              by_id[PRO_IDENTITY_ALIAS_ID]['data'].get('aliases', [])
              and by_id[PRO_IDENTITY_ALIAS_ID]['access_review']['view_roles'] ==
              ['internal_fae']

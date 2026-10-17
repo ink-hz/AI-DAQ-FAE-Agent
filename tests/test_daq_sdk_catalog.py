@@ -7,7 +7,6 @@ import tarfile
 import zipfile
 
 import pytest
-
 from daq_fae.domain_tools import DaqToolBox
 from daq_fae.domain_evidence import DaqEvidencePolicy
 from daq_fae.knowledge.sdk_catalog import SdkCatalog, _serialized, build_catalog
@@ -16,11 +15,151 @@ from daq_fae.request_schema import DaqRequestSchema, extract_request_schema
 from scripts.archive_candidate_snapshot import create_archive
 
 
+def test_sdk_usage_statements_separate_source_facts_from_review_limits():
+    rows = json.loads(Path("Knowledge_SDK/curated.json").read_text())
+    by_id = {row["kb_id"]: row["answer"] for row in rows}
+    assert "不能据此确认具体设备或固件支持" not in by_id["daq-sdk-android-fwlog-017"]
+    assert "不能证明 UMI Finger 磁力计" not in by_id["daq-sdk-host-magnetometer-sample-023"]
+    assert "不能据此确认 EGO 设备" not in by_id["daq-sdk-ios-framework-022"]
+
+
+def test_sdk_tool_keeps_package_scope_and_build_status_typed():
+    catalog = _candidate_catalog()
+
+    class Knowledge:
+        release_id = "dev-sdk"
+        sdk_catalog = catalog
+        def records_for(self, role): return []
+        def sections_for(self, role): return []
+
+    question = "四目 EGO 设备端 libobkit 示例怎么编译和部署？它能和任意整机镜像搭配吗？"
+    result = DaqToolBox(
+        question=question, knowledge=Knowledge(), role="internal_fae",
+        requirements=[{"id": "build", "capability": "sdk_evidence",
+                       "entities": ["四目 EGO"],
+                       "conditions": {"sdk": "libobkit", "task": "build_and_deploy"}}],
+    ).dispatch("sdk_evidence", {
+        "query": "libobkit 设备端示例 编译 部署 build and deploy example",
+    })
+    assert result.status == "ok"
+    assert {row["kb_id"] for row in result.content["matches"]} >= {
+        "daq-sdk-device-build-012", "daq-sdk-device-scope-011",
+    }
+    assert result.content["matched_requirement_ids"] == ["build"]
+    assert result.content["device_support"] == "unknown"
+
+    install = DaqToolBox(
+        question="EgoLowBle 1.1.8 Windows x64 DLL 怎么集成？",
+        knowledge=Knowledge(), role="internal_fae",
+    ).dispatch("sdk_evidence", {
+        "query": "EgoLowBle 1.1.8 Windows x64 DLL 怎么集成？",
+    })
+    assert install.status == "ok"
+    assert install.content["example_build_status"] == "not_applicable"
+
+
+def test_device_side_build_schema_retrieves_reviewed_libobkit_usage():
+    catalog = _candidate_catalog()
+    question = ("四目 EGO 设备端 libobkit 示例怎么编译和部署？"
+                "它能和任意整机镜像搭配吗？")
+    schema = DaqRequestSchema.from_candidate(question, {
+        "confidence": "medium", "goals": [{
+            "kind": "product", "capability": "sdk_evidence",
+            "entities": ["四目 EGO"],
+            "conditions": {"platform": "device", "sdk": "libobkit",
+                           "standalone": True, "task": "compile_and_deploy"},
+        }],
+    }, sdk_catalog=catalog)
+    goal = schema.goals[0]
+
+    class Knowledge:
+        release_id = "dev-sdk"
+        sdk_catalog = catalog
+
+        def records_for(self, role):
+            return []
+
+        def sections_for(self, role):
+            return []
+
+    result = DaqToolBox(
+        question=question, knowledge=Knowledge(), role="internal_fae",
+        requirements=[{"id": goal.id, "capability": goal.capability,
+                       "entities": list(goal.entities),
+                       "conditions": goal.condition_map()}],
+    ).dispatch("sdk_evidence", {"query": "libobkit 示例编译与部署 device 端"})
+    assert result.status == "ok"
+    assert "daq-sdk-device-build-012" in {
+        row["kb_id"] for row in result.content["matches"]}
+    assert result.content["matched_requirement_ids"] == [goal.id]
+
+
 def _candidate_catalog() -> SdkCatalog:
     directory = Path("Knowledge_SDK")
     records = [json.loads(line) for line in (directory / "SDK_Knowledge.jsonl").read_text().splitlines()]
     manifest = json.loads((directory / "SDK_Knowledge_manifest.json").read_text())
     return SdkCatalog(records, manifest)
+
+
+def test_scoped_sdk_search_survives_unrelated_viewer_build_in_user_question():
+    catalog = _candidate_catalog()
+    class Knowledge:
+        release_id = 'dev-sdk'
+        sdk_catalog = catalog
+        def records_for(self, role): return []
+        def sections_for(self, role): return []
+    box = DaqToolBox(
+        question=('EgoLowBle Windows x64 DLL 怎样放？另请核对 EgoViewer Android '
+                  '2026092302 的变更日志。'),
+        knowledge=Knowledge(), role='internal_fae', requirements=[
+            {'id': 'ble', 'capability': 'sdk_evidence', 'entities': [],
+             'conditions': {'sdk': 'EgoLowBle', 'platform': 'windows_x64',
+                            'task': 'link_library_and_place_dll'}}])
+    result = box.dispatch('sdk_evidence', {'query': 'EgoLowBle Windows x64 DLL 怎样放'})
+    assert result.status == 'ok'
+    assert result.content['matched_requirement_ids'] == ['ble']
+    assert {source['source_id'] for source in result.sources} == {
+        'daq-sdk-ble-windows-install-020'}
+
+
+def test_sdk_source_filename_recovers_exact_hashed_sample():
+    catalog = _candidate_catalog()
+    class Knowledge:
+        release_id = 'dev-sdk'
+        sdk_catalog = catalog
+        def records_for(self, role): return []
+        def sections_for(self, role): return []
+    requirement = {'id': 'uid_file', 'capability': 'sdk_evidence', 'entities': [],
+                   'conditions': {'sdk': 'OrbbecSDK', 'platform': 'linux_x64',
+                                  'sdk_release_date': '20260929',
+                                  'source_files': ['ego_net_uid_hotplug.cpp']}}
+    box = DaqToolBox(question='OrbbecSDK Linux x64 20260929 ego_net_uid_hotplug.cpp',
+                     knowledge=Knowledge(), role='internal_fae',
+                     requirements=[requirement])
+    result = box.dispatch('sdk_evidence', {'query': box.question})
+    assert result.status == 'ok'
+    assert result.content['matched_requirement_ids'] == ['uid_file']
+    assert {source['source_id'] for source in result.sources} == {
+        'daq-sdk-host-net-uid-hotplug-016'}
+
+
+def test_sdk_search_recovers_each_goal_when_tool_query_contains_viewer_clause():
+    catalog = _candidate_catalog()
+    class Knowledge:
+        release_id = 'dev-sdk'
+        sdk_catalog = catalog
+        def records_for(self, role): return []
+        def sections_for(self, role): return []
+    box = DaqToolBox(
+        question=('EgoLowBle Windows x64 DLL 怎样放？另请核对 EgoViewer Android '
+                  '2026092302 的变更日志。'),
+        knowledge=Knowledge(), role='internal_fae', requirements=[
+            {'id': 'ble', 'capability': 'sdk_evidence', 'entities': [],
+             'conditions': {'sdk': 'EgoLowBle', 'platform': 'windows_x64',
+                            'task': 'link_library_and_place_dll'}}])
+    result = box.dispatch('sdk_evidence', {'query': box.question})
+    assert result.status == 'ok'
+    assert result.content['matched_requirement_ids'] == ['ble']
 
 
 def test_host_uid_hotplug_record_has_source_bound_scope_without_device_support():
@@ -43,6 +182,24 @@ def test_archived_host_uid_hotplug_example_retrieves_by_api_intent():
     rows = catalog.search("OrbbecSDK 网络设备 UID 热插拔移除回调怎么核对", "internal_fae")
     uid = next(row for row in rows if row["kb_id"] == "daq-sdk-host-net-uid-hotplug-016")
     assert uid["platform"] == "Linux x86_64"
+
+
+def test_archived_magnetometer_sample_is_package_fact_not_umi_support():
+    archive = Path("data/knowledge/local_archive/sdk-originals-1015-local-20261015")
+    if not archive.is_dir():
+        pytest.skip("local ignored SDK originals unavailable")
+    catalog = SdkCatalog.load(Path("Knowledge_SDK"), archive)
+    rows = catalog.search(
+        "OrbbecSDK 2026-09-29 包中 magnetometer.cpp 示例是否存在", "internal_fae")
+    sample = next(row for row in rows if row["kb_id"] ==
+                  "daq-sdk-host-magnetometer-sample-023")
+    assert not sample.get("outputs")
+    assert sample["build"] == "20260929"
+    assert any(ref["member"].endswith("/magnetometer.cpp")
+               for ref in sample["source_refs"])
+    assert sample["doc_type"] == "example"
+    assert sample["sdk_layer"] == "host_cpp"
+    assert "UMI Finger" not in sample["answer"]
 
 
 def test_zip_member_api_fact_is_hash_and_line_bound(tmp_path, monkeypatch):
@@ -176,9 +333,9 @@ def test_sdk_usage_matcher_respects_java_ble_and_ios_scope():
     assert toolbox._sdk_usage_requirement_ids([android_row, ios_row]) == ["android"]
 
 
-def test_all_22_catalog_rows_certify_their_exact_sdk_usage_scope():
+def test_all_23_catalog_rows_certify_their_exact_sdk_usage_scope():
     records = [json.loads(line) for line in Path("Knowledge_SDK/SDK_Knowledge.jsonl").read_text().splitlines()]
-    assert len(records) == 22
+    assert len(records) == 23
 
     class Knowledge:
         release_id = "dev-sdk"
@@ -237,6 +394,31 @@ def test_uid_hotplug_schema_grounds_user_stated_chinese_feature():
                                   "sdk_version": "2.9.0"}}],
     }, sdk_catalog=_candidate_catalog())
     assert schema.goals[0].unmapped_condition_keys == ()
+
+
+def test_uid_hotplug_model_concept_is_a_task_not_an_invented_api():
+    question = ("用 2026-09-29 Linux x86_64 OrbbecSDK 2.9.0 C++ 示例，"
+                "怎样核对网络设备移除回调中的 UID？不要推断我的设备和固件已经兼容。")
+    catalog = _candidate_catalog()
+    schema = DaqRequestSchema.from_candidate(question, {
+        "confidence": "high", "goals": [{
+            "kind": "product", "capability": "sdk_evidence", "entities": [],
+            "conditions": {"api": "device_removed_callback", "sdk": "OrbbecSDK",
+                           "sdk_version": "2.9.0", "sdk_release_date": "2026-09-29",
+                           "platform": "linux_x86_64", "language": "c++"}}],
+    }, sdk_catalog=catalog)
+    goal = schema.goals[0]
+    assert goal.condition_map()["task"] == "device_removed_callback"
+    assert "api" not in goal.condition_map()
+    assert goal.unmapped_condition_keys == ()
+    row = next(row for row in catalog.records
+               if row["kb_id"] == "daq-sdk-host-net-uid-hotplug-016")
+    class Knowledge:
+        release_id = "dev-sdk"
+    assert DaqToolBox(knowledge=Knowledge(), role="internal_fae", requirements=[
+        {"id": "uid-goal", "capability": "sdk_evidence", "entities": [],
+         "conditions": goal.condition_map()},
+    ])._sdk_usage_requirement_ids([row]) == ["uid-goal"]
 
 
 def test_uid_hotplug_schema_rejects_feature_absent_from_user_question():
@@ -623,6 +805,30 @@ def test_calibration_output_names_are_checked_against_source_record():
     assert toolbox._sdk_usage_requirement_ids([row]) == ["yaml"]
 
 
+def test_sdk_source_filename_matches_only_hashed_member_not_generated_output():
+    class Knowledge:
+        release_id = "dev-sdk"
+
+        def records_for(self, role):
+            return []
+
+        def sections_for(self, role):
+            return []
+
+    toolbox = DaqToolBox(knowledge=Knowledge(), role="internal_fae", requirements=[
+        {"id": "sample", "capability": "sdk_evidence", "entities": [],
+         "conditions": {"sdk": "OrbbecSDK", "sdk_release_date": "2026-09-29",
+                        "source_files": ["magnetometer.cpp"]}},
+    ])
+    row = {"sdk_layer": "host_cpp", "version": "2.9.0", "build": "20260929",
+           "platform": "Linux x86_64", "doc_type": "example", "outputs": [],
+           "source_refs": [{"member": "pkg/examples/src/6.ego/magnetometer.cpp",
+                            "member_sha256": "a" * 64}]}
+    assert toolbox._sdk_usage_requirement_ids([row]) == ["sample"]
+    assert toolbox._sdk_usage_requirement_ids([{**row, "source_refs": [
+        {"member": "pkg/examples/src/6.ego/other.cpp", "member_sha256": "a" * 64}]}]) == []
+
+
 def test_sdk_release_is_immutable_and_reversible(tmp_path, monkeypatch):
     directory, archive = _fixture(tmp_path, monkeypatch)
     catalog = SdkCatalog.load(directory, archive)
@@ -727,3 +933,534 @@ def test_device_side_package_aliases_can_cover_usage_without_image_support():
                     "entities": ["四目 EGO"],
                     "conditions": {"sdk": "libobkit", "platform": "device_side"}}]})
     assert schema.goals[0].unmapped_condition_keys == ()
+
+
+def test_ios_framework_question_maps_only_source_checked_package_goals():
+    catalog = _candidate_catalog()
+    question = ('2026-09-29 OrbbecSDK 2.9.0 iOS 包应如何嵌入 framework？'
+                '这个包是否包含 Simulator 产物、能否据此确认 EGO 固件兼容？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [
+            {'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+             'conditions': {'sdk': 'OrbbecSDK', 'sdk_version': '2.9.0',
+                            'sdk_release_date': '2026-09-29', 'platform': 'ios',
+                            'task': 'embed_framework'}},
+            {'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+             'conditions': {'sdk': 'OrbbecSDK', 'sdk_version': '2.9.0',
+                            'sdk_release_date': '2026-09-29', 'platform': 'ios',
+                            'feature': 'simulator_artifacts'}},
+        ]}, sdk_catalog=catalog)
+    assert [goal.unmapped_condition_keys for goal in schema.goals] == [(), ()]
+    class Knowledge:
+        release_id = 'dev-sdk'
+        sdk_catalog = catalog
+        def records_for(self, role): return []
+        def sections_for(self, role): return []
+    box = DaqToolBox(question=question, knowledge=Knowledge(), role='internal_fae',
+                     requirements=[{'id': goal.id, 'capability': goal.capability,
+                                    'entities': list(goal.entities),
+                                    'conditions': dict(goal.conditions)}
+                                   for goal in schema.goals])
+    result = box.dispatch('sdk_evidence', {'query': question})
+    assert result.status == 'ok'
+    assert set(result.content['matched_requirement_ids']) == {goal.id for goal in schema.goals}
+    assert result.content['device_support'] == 'unknown'
+    assert not catalog.grounds_selector('OrbbecSDK 2.9.0 iOS 如何嵌入 framework？',
+                                       'feature', 'simulator_artifacts')
+    assert not catalog.grounds_selector('Android OrbbecSDK 如何嵌入 framework？',
+                                       'task', 'embed_framework')
+
+
+def test_linux_x64_package_selector_keeps_source_platform_identity():
+    catalog = _candidate_catalog()
+    question = 'EgoLowBle 1.1.8 Linux x64 包提供什么 demo 和构建资料？预编译 demo 是否必定包含？'
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [
+            {'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+             'conditions': {'sdk': 'EgoLowBle', 'sdk_version': '1.1.8',
+                            'platform': 'linux_x64'}}]}, sdk_catalog=catalog)
+    assert schema.goals[0].unmapped_condition_keys == ()
+    class Knowledge:
+        release_id = 'dev-sdk'
+        sdk_catalog = catalog
+        def records_for(self, role): return []
+        def sections_for(self, role): return []
+    box = DaqToolBox(question=question, knowledge=Knowledge(), role='internal_fae',
+                     requirements=[{'id': 'package', 'capability': 'sdk_evidence',
+                                    'entities': [], 'conditions': dict(schema.goals[0].conditions)}])
+    result = box.dispatch('sdk_evidence', {'query': question})
+    assert result.status == 'ok'
+    assert 'package' in result.content['matched_requirement_ids']
+
+
+def test_windows_ble_cpp_link_and_dll_usage_is_separate_from_device_support():
+    catalog = _candidate_catalog()
+    question = ('EgoLowBle 1.1.8 Windows x64 包中，C++ 应用应怎样链接库和放置 DLL？'
+                '这代表具体 EGO 设备通过测试吗？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [
+            {'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+             'conditions': {'sdk': 'EgoLowBle', 'sdk_version': '1.1.8',
+                            'platform': 'windows_x64', 'language': 'cpp',
+                            'feature': 'library_linking_and_dll_placement'}},
+            {'kind': 'product', 'capability': 'check_software_support',
+             'entities': ['EGO'],
+             'conditions': {'sdk': 'EgoLowBle', 'sdk_version': '1.1.8',
+                            'platform': 'windows_x64'}},
+        ]}, sdk_catalog=catalog)
+    usage = next(goal for goal in schema.goals if goal.capability == 'sdk_evidence')
+    support = next(goal for goal in schema.goals
+                   if goal.capability == 'check_software_support')
+    assert usage.unmapped_condition_keys == ()
+    assert support.unmapped_condition_keys == ()
+    class Knowledge:
+        release_id = 'dev-sdk'
+        sdk_catalog = catalog
+        def records_for(self, role): return []
+        def sections_for(self, role): return []
+    result = DaqToolBox(question=question, knowledge=Knowledge(),
+                        role='internal_fae', requirements=[
+                            {'id': 'usage', 'capability': 'sdk_evidence',
+                             'entities': [], 'conditions': dict(usage.conditions)},
+                            {'id': 'support', 'capability': 'check_software_support',
+                             'entities': ['EGO'], 'conditions': dict(support.conditions)},
+                        ]).dispatch('sdk_evidence', {'query': question})
+    assert result.status == 'ok'
+    assert result.content['matched_requirement_ids'] == ['usage']
+    assert result.content['device_support'] == 'unknown'
+
+
+def test_windows_ble_link_libraries_and_deploy_dlls_descriptor_is_grounded():
+    catalog = _candidate_catalog()
+    question = ('EgoLowBle 1.1.8 Windows x64 包中，C++ 应用应怎样链接库和放置 DLL？'
+                '这代表具体 EGO 设备通过测试吗？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [
+            {'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+             'conditions': {'sdk': 'EgoLowBle', 'sdk_version': '1.1.8',
+                            'platform': 'windows_x64', 'language': 'c++',
+                            'task': 'link_libraries_and_deploy_dlls'}},
+        ],
+    }, sdk_catalog=catalog)
+    assert schema.goals[0].unmapped_condition_keys == ()
+    class Knowledge:
+        release_id = 'dev-sdk'
+        sdk_catalog = catalog
+        def records_for(self, role): return []
+        def sections_for(self, role): return []
+    result = DaqToolBox(question=question, knowledge=Knowledge(), role='internal_fae',
+                        requirements=[{'id': 'usage', 'capability': 'sdk_evidence',
+                                       'entities': [],
+                                       'conditions': schema.goals[0].condition_map()}]).dispatch(
+                                           'sdk_evidence', {'query': question})
+    assert result.content['matched_requirement_ids'] == ['usage']
+
+
+def test_windows_ble_dll_integration_descriptor_keeps_sdk_fact_covered():
+    catalog = _candidate_catalog()
+    question = ('EgoLowBle 1.1.8 Windows x64 的 DLL 如何集成？'
+                '我的 EGO 固件也叫 1.1.8，这两个版本号相同能说明蓝牙功能已兼容吗？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [
+            {'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+             'conditions': {'sdk': 'EgoLowBle', 'sdk_version': '1.1.8',
+                            'platform': 'windows_x64', 'task': 'dll_integration'}},
+        ],
+    }, sdk_catalog=catalog)
+    assert schema.goals[0].unmapped_condition_keys == ()
+
+
+def test_windows_ble_singular_link_library_and_deploy_dll_is_grounded():
+    catalog = _candidate_catalog()
+    question = ('EgoLowBle 1.1.8 Windows x64 包中，C++ 应用应怎样链接库和放置 DLL？'
+                '这代表具体 EGO 设备通过测试吗？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [
+            {'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+             'conditions': {'sdk': 'EgoLowBle', 'sdk_version': '1.1.8',
+                            'platform': 'windows_x64', 'language': 'c++',
+                            'task': 'link_library_and_deploy_dll'}},
+        ]}, sdk_catalog=catalog)
+    assert schema.goals[0].unmapped_condition_keys == ()
+
+
+def test_ble_firmware_mixed_goal_normalizes_bluetooth_and_windows_spelling():
+    catalog = _candidate_catalog()
+    question = ('EgoLowBle 1.1.8 Windows x64 的 DLL 如何集成？我的 EGO 固件也叫 '
+                '1.1.8，这两个版本号相同能说明蓝牙功能已兼容吗？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [
+            {'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+             'conditions': {'feature': 'bluetooth', 'platform': 'windows-x64',
+                            'sdk': 'EgoLowBle', 'sdk_version': '1.1.8',
+                            'task': 'dll_integration'}},
+            {'kind': 'product', 'capability': 'check_software_support',
+             'entities': ['EGO'],
+             'conditions': {'feature': 'bluetooth',
+                            'firmware_version': '1.1.8',
+                            'sdk_version': '1.1.8'}},
+        ]}, sdk_catalog=catalog)
+    usage, support = schema.goals
+    assert usage.condition_map()['platform'] == 'windows_x64'
+    assert usage.condition_map()['feature'] == 'ble'
+    assert usage.unmapped_condition_keys == ()
+    assert support.unmapped_condition_keys == ()
+    class Knowledge:
+        release_id = 'dev-sdk'
+        sdk_catalog = catalog
+        def records_for(self, role): return []
+        def sections_for(self, role): return []
+    result = DaqToolBox(question=question, knowledge=Knowledge(),
+                        role='internal_fae', requirements=[
+                            {'id': 'usage', 'capability': 'sdk_evidence',
+                             'entities': [], 'conditions': usage.condition_map()},
+                        ]).dispatch('sdk_evidence', {'query': question})
+    assert result.content['matched_requirement_ids'] == ['usage']
+
+
+def test_real_ble_firmware_mixed_schema_keeps_dll_usage_evidence():
+    catalog = _candidate_catalog()
+    question = ('EgoLowBle 1.1.8 Windows x64 的 DLL 如何集成？我的 EGO 固件也叫 '
+                '1.1.8，这两个版本号相同能说明蓝牙功能已兼容吗？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'medium', 'goals': [
+            {'kind': 'product', 'capability': 'sdk_evidence', 'entities': ['EGO'],
+             'conditions': {'sdk': 'EgoLowBle', 'sdk_version': '1.1.8',
+                            'platform': 'windows_x64', 'task': 'integration'}},
+            {'kind': 'product', 'capability': 'check_software_support',
+             'entities': ['EGO'], 'conditions': {'feature': 'bluetooth'}},
+        ]}, sdk_catalog=catalog)
+    usage = schema.goals[0]
+    assert usage.unmapped_condition_keys == ()
+    assert usage.condition_map()['task'] == 'dll_integration'
+    class Knowledge:
+        release_id = 'dev-sdk'
+        sdk_catalog = catalog
+        def records_for(self, role): return []
+        def sections_for(self, role): return []
+    result = DaqToolBox(question=question, knowledge=Knowledge(),
+                        role='internal_fae', requirements=[
+                            {'id': 'usage', 'capability': 'sdk_evidence',
+                             'entities': list(usage.entities),
+                             'conditions': usage.condition_map()},
+                        ]).dispatch('sdk_evidence', {'query': question})
+    assert result.status == 'ok'
+    assert result.content['matched_requirement_ids'] == ['usage']
+    assert result.content['device_support'] == 'unknown'
+    assert {source['source_id'] for source in result.sources} == {
+        'daq-sdk-ble-windows-install-020'}
+
+
+def test_reviewed_entity_ids_preserve_sdk_package_usage_scope():
+    catalog = _candidate_catalog()
+    host = next(row for row in catalog.records if row['kb_id'] ==
+                'daq-sdk-host-sync-001')
+    device = next(row for row in catalog.records if row['kb_id'] ==
+                  'daq-sdk-device-build-012')
+    class Knowledge:
+        release_id = 'dev-sdk'
+        sdk_catalog = catalog
+        def records_for(self, role): return []
+        def sections_for(self, role): return []
+    box = DaqToolBox(knowledge=Knowledge(), role='internal_fae', requirements=[
+        {'id': 'ego_host', 'capability': 'sdk_evidence',
+         'entities': ['entity:ego-1600'],
+         'conditions': {'sdk': 'OrbbecSDK', 'sdk_release_date': '20260929',
+                        'feature': 'multi_device_sync_mode_check_and_set'}},
+        {'id': 'pro_device', 'capability': 'sdk_evidence',
+         'entities': ['entity:ego-pro'],
+         'conditions': {'sdk': 'libobkit', 'task': 'compile_and_deploy'}},
+    ])
+    assert box._sdk_usage_requirement_ids([host]) == ['ego_host']
+    assert box._sdk_usage_requirement_ids([device]) == ['pro_device']
+    assert box._sdk_usage_requirement_ids([{**host, 'sdk_layer': 'device_c'}]) == []
+
+
+def test_real_host_sync_english_tool_paraphrase_recovers_user_question_evidence():
+    catalog = _candidate_catalog()
+    question = ('用 2026-09-29 的 OrbbecSDK 2.9.0 C++ 示例，EGO '
+                '多设备主从同步模式应该怎样检查并设置？')
+    class Knowledge:
+        release_id = 'dev-sdk'
+        sdk_catalog = catalog
+        def records_for(self, role): return []
+        def sections_for(self, role): return []
+    box = DaqToolBox(question=question, knowledge=Knowledge(),
+                     role='internal_fae', requirements=[
+                         {'id': 'sync', 'capability': 'sdk_evidence',
+                          'entities': ['EGO'], 'conditions': {
+                              'sdk': 'OrbbecSDK', 'sdk_version': '2.9.0',
+                              'sdk_release_date': '2026-09-29',
+                              'language': 'c++',
+                              'feature': 'multi_device_sync_mode_check_and_set'}},
+                     ])
+    query = 'OrbbecSDK C++ example multi-device master-slave sync mode check and set EGO'
+    assert [row['kb_id'] for row in catalog.search(query, 'internal_fae')] != [
+        'daq-sdk-host-sync-001']
+    result = box.dispatch('sdk_evidence', {'query': query})
+    assert result.status == 'ok'
+    assert result.content['matched_requirement_ids'] == ['sync']
+    assert {source['source_id'] for source in result.sources} == {
+        'daq-sdk-host-sync-001'}
+
+
+def test_sdk_evidence_extra_device_fields_cannot_switch_to_support_lookup():
+    catalog = _candidate_catalog()
+    question = ('同是 2026-09-29，Android Java Wrapper 的 exportFirmwareLogs 与 '
+                'Linux x86_64 C++ OrbbecSDK 的 startFirmwareLogExport/'
+                'stopFirmwareLogExport，在调用和完成处理上分别有什么依据？')
+    class Knowledge:
+        release_id = 'dev-sdk'
+        sdk_catalog = catalog
+        def records_for(self, role): return []
+        def sections_for(self, role): return []
+    box = DaqToolBox(question=question, knowledge=Knowledge(), role='internal_fae')
+    result = box.dispatch('sdk_evidence', {
+        'query': 'exportFirmwareLogs', 'entity': 'orbbecsdk_java_wrapper',
+        'software': 'orbbecsdk_java_wrapper', 'platform': 'android',
+        'version': '2026-09-29', 'hardware_revision': 'unknown',
+        'connection_mode': 'unknown', 'capability': 'sdk_evidence'})
+    assert result.status == 'ok'
+    assert result.content['evidence_scope'] == 'sdk_usage_only'
+    assert result.content['device_support'] == 'unknown'
+
+
+def test_libobkit_build_and_deploy_goal_uses_four_eye_identity():
+    catalog = _candidate_catalog()
+    question = ('四目 EGO 设备端 libobkit 示例怎么编译和部署？'
+                '它能和任意整机镜像搭配吗？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [
+            {'kind': 'product', 'capability': 'sdk_evidence', 'entities': ['EGO'],
+             'conditions': {'sdk': 'libobkit', 'task': 'build_and_deploy',
+                            'platform': 'device_side'}}]}, sdk_catalog=catalog)
+    goal = schema.goals[0]
+    assert goal.entities == ('四目 EGO',)
+    assert goal.unmapped_condition_keys == ()
+    class Knowledge:
+        release_id = 'dev-sdk'
+        sdk_catalog = catalog
+        def records_for(self, role): return []
+        def sections_for(self, role): return []
+    result = DaqToolBox(question=question, knowledge=Knowledge(),
+                        role='internal_fae', requirements=[
+                            {'id': 'usage', 'capability': 'sdk_evidence',
+                             'entities': list(goal.entities),
+                             'conditions': goal.condition_map()},
+                        ]).dispatch('sdk_evidence', {'query': question})
+    assert result.content['matched_requirement_ids'] == ['usage']
+
+
+def test_libobkit_compile_and_deploy_model_task_is_user_grounded():
+    catalog = _candidate_catalog()
+    question = ('四目 EGO 设备端 libobkit 示例怎么编译和部署？'
+                '它能和任意整机镜像搭配吗？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'medium', 'goals': [
+            {'kind': 'product', 'capability': 'sdk_evidence', 'entities': ['EGO'],
+             'conditions': {'sdk': 'libobkit', 'task': 'compile_and_deploy',
+                            'platform': 'device_side'}}]}, sdk_catalog=catalog)
+    assert schema.goals[0].entities == ('四目 EGO',)
+    assert schema.goals[0].unmapped_condition_keys == ()
+
+
+def test_unspoken_api_in_comma_list_stays_unmapped():
+    schema = DaqRequestSchema.from_candidate('Android Wrapper 的 SAVING 是什么？', {
+        'confidence': 'high', 'goals': [
+            {'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+             'conditions': {'api': 'SAVING, fabricatedDeviceApi'}}]})
+    assert 'api' in schema.goals[0].unmapped_condition_keys
+
+
+def test_ble_windows_model_task_matches_reviewed_link_and_dll_scope():
+    question = ('EgoLowBle 1.1.8 Windows x64 包中，C++ 应用应怎样链接库和放置 DLL？'
+                '这代表具体 EGO 设备通过测试吗？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'medium', 'goals': [{
+            'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+            'conditions': {'language': 'c++', 'platform': 'windows x64',
+                           'sdk': 'EgoLowBle', 'sdk_version': '1.1.8',
+                           'task': 'link_library_and_place_dll'},
+        }],
+    }, sdk_catalog=_candidate_catalog())
+    assert schema.goals[0].unmapped_condition_keys == ()
+
+
+def test_android_record_state_two_api_selectors_match_one_reviewed_record():
+    catalog = _candidate_catalog()
+    question = ('Android Wrapper 中 SAVING 和 RECORD_SAVED 有何区别？'
+                'setEgoStateCallback 与 setEgoRecordingResultCallback 各适合什么？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [
+            {'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+             'conditions': {'api': ['setEgoStateCallback',
+                                    'setEgoRecordingResultCallback'],
+                            'feature': ['SAVING', 'RECORD_SAVED'],
+                            'platform': 'android', 'sdk': 'android_wrapper'}}]},
+        sdk_catalog=catalog)
+    assert schema.goals[0].unmapped_condition_keys == ()
+    class Knowledge:
+        release_id = 'dev-sdk'
+        sdk_catalog = catalog
+        def records_for(self, role): return []
+        def sections_for(self, role): return []
+    result = DaqToolBox(question=question, knowledge=Knowledge(),
+                        role='internal_fae', requirements=[
+                            {'id': 'usage', 'capability': 'sdk_evidence',
+                             'entities': [],
+                             'conditions': dict(schema.goals[0].conditions)},
+                        ]).dispatch('sdk_evidence', {'query': question})
+    assert result.status == 'ok'
+    assert result.content['matched_requirement_ids'] == ['usage']
+
+
+def test_android_and_host_firmware_log_goals_keep_their_sdk_layers():
+    catalog = _candidate_catalog()
+    question = ('同是 2026-09-29，Android Java Wrapper 的 exportFirmwareLogs 与 '
+                'Linux x86_64 C++ OrbbecSDK 的 startFirmwareLogExport/'
+                'stopFirmwareLogExport，在调用和完成处理上分别有什么依据？')
+    conditions = [
+        {'api': 'exportFirmwareLogs', 'language': 'java', 'platform': 'android',
+         'sdk': 'OrbbecSDK Android Java Wrapper',
+         'sdk_release_date': '2026-09-29'},
+        {'api': ['startFirmwareLogExport', 'stopFirmwareLogExport'],
+         'language': 'cpp', 'platform': 'linux_x86_64', 'sdk': 'OrbbecSDK',
+         'sdk_release_date': '2026-09-29'},
+    ]
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [
+            {'kind': 'product', 'capability': 'sdk_evidence',
+             'entities': [], 'conditions': item} for item in conditions]},
+        sdk_catalog=catalog)
+    assert [goal.unmapped_condition_keys for goal in schema.goals] == [(), ()]
+    class Knowledge:
+        release_id = 'dev-sdk'
+        sdk_catalog = catalog
+        def records_for(self, role): return []
+        def sections_for(self, role): return []
+    result = DaqToolBox(question=question, knowledge=Knowledge(),
+                        role='internal_fae', requirements=[
+                            {'id': 'android', 'capability': 'sdk_evidence',
+                             'entities': [], 'conditions': conditions[0]},
+                            {'id': 'host', 'capability': 'sdk_evidence',
+                             'entities': [], 'conditions': conditions[1]},
+                        ]).dispatch('sdk_evidence', {'query': question})
+    assert result.status == 'ok'
+    assert result.content['matched_requirement_ids'] == ['android', 'host']
+
+
+def test_sdk_call_and_completion_phrase_is_not_an_api_feature_selector():
+    catalog = _candidate_catalog()
+    question = ('同是 2026-09-29，Android Java Wrapper 的 exportFirmwareLogs 与 '
+                'Linux x86_64 C++ OrbbecSDK 的 startFirmwareLogExport/'
+                'stopFirmwareLogExport，在调用和完成处理上分别有什么依据？')
+    common = {'feature': 'invocation_and_completion_handling',
+              'sdk_release_date': '2026-09-29'}
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'medium', 'goals': [
+            {'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+             'conditions': {**common, 'sdk': 'android_java_wrapper',
+                            'platform': 'android', 'language': 'java',
+                            'api': 'exportFirmwareLogs'}},
+            {'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+             'conditions': {**common, 'sdk': 'orbbecsdk',
+                            'platform': 'linux_x86_64', 'language': 'c++',
+                            'api': ['startFirmwareLogExport',
+                                    'stopFirmwareLogExport']}},
+        ]}, sdk_catalog=catalog)
+    assert all('feature' not in goal.condition_map() for goal in schema.goals)
+    assert all(not goal.unmapped_condition_keys for goal in schema.goals)
+
+
+def test_android_network_sdcard_usage_goal_can_match_network_source_only():
+    catalog = _candidate_catalog()
+    question = ('2026-09-29 Android Wrapper beta2.2.5 的 Java API，网络 EGO 的 '
+                'SD 卡文件信息与本地下载该怎么调用？这证明具体固件支持吗？')
+    conditions = {'connection': 'network',
+                  'feature': ['sd_card_file_info', 'local_download'],
+                  'language': 'java', 'platform': 'android',
+                  'sdk': 'Android Wrapper', 'sdk_release_date': '2026-09-29',
+                  'sdk_version': 'beta2.2.5'}
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [
+            {'kind': 'product', 'capability': 'sdk_evidence',
+             'entities': ['EGO'], 'conditions': conditions}]},
+        sdk_catalog=catalog)
+    assert schema.goals[0].unmapped_condition_keys == ()
+    class Knowledge:
+        release_id = 'dev-sdk'
+        sdk_catalog = catalog
+        def records_for(self, role): return []
+        def sections_for(self, role): return []
+    result = DaqToolBox(question=question, knowledge=Knowledge(),
+                        role='internal_fae', requirements=[
+                            {'id': 'usage', 'capability': 'sdk_evidence',
+                             'entities': ['EGO'], 'conditions': conditions},
+                        ]).dispatch('sdk_evidence', {'query': question})
+    assert result.status == 'ok'
+    assert result.content['matched_requirement_ids'] == ['usage']
+
+
+def test_android_record_state_comma_separated_public_symbols_are_normalized():
+    catalog = _candidate_catalog()
+    question = ('Android Wrapper 中 SAVING 和 RECORD_SAVED 有何区别？'
+                'setEgoStateCallback 与 setEgoRecordingResultCallback 各适合什么？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [
+            {'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+             'conditions': {
+                 'api': ('setEgoStateCallback, setEgoRecordingResultCallback, '
+                         'SAVING, RECORD_SAVED'),
+                 'platform': 'android', 'sdk': 'Android Wrapper'}}]},
+        sdk_catalog=catalog)
+    assert schema.goals[0].condition_map()['api'] == [
+        'setEgoStateCallback', 'setEgoRecordingResultCallback',
+        'SAVING', 'RECORD_SAVED']
+    assert schema.goals[0].unmapped_condition_keys == ()
+    class Knowledge:
+        release_id = 'dev-sdk'
+        sdk_catalog = catalog
+        def records_for(self, role): return []
+        def sections_for(self, role): return []
+    result = DaqToolBox(question=question, knowledge=Knowledge(),
+                        role='internal_fae', requirements=[
+                            {'id': 'usage', 'capability': 'sdk_evidence',
+                             'entities': [], 'conditions': schema.goals[0].condition_map()},
+                        ]).dispatch('sdk_evidence', {'query': question})
+    assert result.content['matched_requirement_ids'] == ['usage']
+
+
+def test_firmware_log_mixed_model_conditions_keep_both_sdk_goals():
+    catalog = _candidate_catalog()
+    question = ('同是 2026-09-29，Android Java Wrapper 的 exportFirmwareLogs 与 '
+                'Linux x86_64 C++ OrbbecSDK 的 startFirmwareLogExport/'
+                'stopFirmwareLogExport，在调用和完成处理上分别有什么依据？')
+    common = {'sdk_release_date': '2026-09-29', 'steps': [],
+              'task': 'firmware_log_export'}
+    raw = [
+        {**common, 'api': 'exportFirmwareLogs', 'language': 'java',
+         'platform': 'android', 'sdk': 'android_java_wrapper'},
+        {**common, 'api': 'startFirmwareLogExport', 'language': 'c++',
+         'platform': 'linux_x86_64', 'sdk': 'orbbecsdk'},
+        {**common, 'api': 'stopFirmwareLogExport', 'language': 'c++',
+         'platform': 'linux_x86_64', 'sdk': 'orbbecsdk'},
+    ]
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [
+            {'kind': 'product', 'capability': 'sdk_evidence',
+             'entities': [], 'conditions': item} for item in raw]},
+        sdk_catalog=catalog)
+    assert all('steps' not in goal.condition_map() for goal in schema.goals)
+    assert all(goal.unmapped_condition_keys == () for goal in schema.goals)
+    class Knowledge:
+        release_id = 'dev-sdk'
+        sdk_catalog = catalog
+        def records_for(self, role): return []
+        def sections_for(self, role): return []
+    result = DaqToolBox(question=question, knowledge=Knowledge(),
+                        role='internal_fae', requirements=[
+                            {'id': str(index), 'capability': 'sdk_evidence',
+                             'entities': [], 'conditions': goal.condition_map()}
+                            for index, goal in enumerate(schema.goals)
+                        ]).dispatch('sdk_evidence', {'query': question})
+    assert result.content['matched_requirement_ids'] == ['0', '1', '2']

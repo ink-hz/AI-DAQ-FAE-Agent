@@ -1,6 +1,6 @@
 """Catalog overview contract with a self-contained governed release."""
 
-from daq_fae.domain_tools import DaqToolBox
+from daq_fae.domain_tools import DaqToolBox, _catalog_summary
 from daq_fae.knowledge.records import access_fingerprint, record_fingerprint
 from daq_fae.knowledge.releases import _publish_release, _read_release
 from daq_fae.knowledge.reviewed_view import ReviewedKnowledge
@@ -86,11 +86,39 @@ def test_natural_language_question_scans_all_visible_entities(tmp_path):
     assert len(result.content["matches"]) == len(result.sources) == 6
     assert result.content["catalog_summary"] == {
         "entry_count": 6, "distinct_product_name_count": 4,
+        "product_or_variant_entry_count": 5, "component_entry_count": 1,
+        "entry_count_includes_components": True,
         "product_names": ["EGO", "EGO Pro", "UMI Finger", "数采 HUB"],
-        "by_entity_type": {"component": 1, "device": 2, "hub": 1, "variant": 2},
         "scope": "released_role_visible_knowledge", "exhaustive_product_range": False,
     }
     assert result.content["matched_requirement_ids"]
+
+
+def test_catalog_explicit_entity_type_breakdown_remains_available(tmp_path):
+    question = "设备、HUB、变体、部件各有多少条目录实体？"
+    result = _box(tmp_path, question).dispatch("catalog", {"query": question})
+    assert result.status == "ok"
+    assert result.content["catalog_summary"]["by_entity_type"] == {
+        "component": 1, "device": 2, "hub": 1, "variant": 2}
+
+
+def test_variant_labels_merge_by_reviewed_product_identity():
+    rows = [
+        _entity('ego-1600', 'EGO 1600', 'variant', scope={
+            'product': 'ego', 'required_selectors': ['resolution_variant'],
+            'resolution_variant': '1600x1200'}),
+        _entity('ego-1920', 'EGO 1920', 'variant', scope={
+            'product': 'ego', 'required_selectors': ['resolution_variant'],
+            'resolution_variant': '1920x1200'}),
+    ]
+    for row in rows:
+        row['data']['aliases'] = ['EGO']
+        row['fact_review']['record_sha256'] = record_fingerprint(row)
+        row['access_review']['record_sha256'] = access_fingerprint(row)
+    summary = _catalog_summary(rows, candidate_preview=False)
+    assert summary['entry_count'] == 2
+    assert summary['distinct_product_name_count'] == 1
+    assert summary['product_names'] == ['EGO']
 
 
 def test_catalog_coverage_and_sources_include_entry_after_twenty(tmp_path):

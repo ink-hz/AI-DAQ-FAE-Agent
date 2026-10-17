@@ -76,8 +76,10 @@ def allowed_tools_for(schema: DaqRequestSchema) -> frozenset[str] | None:
         'lookup_spec': {'lookup_spec'},
         'inspect_topology': {'inspect_topology', 'lookup_procedure'},
         'lookup_procedure': {'inspect_topology', 'lookup_procedure'},
-        'check_software_support': {'check_software_support', 'sdk_evidence'},
-        'sdk_evidence': {'sdk_evidence', 'check_software_support'},
+        'check_software_support': {'check_software_support', 'sdk_evidence',
+                                   'search_knowledge', 'read_doc'},
+        'sdk_evidence': {'sdk_evidence', 'check_software_support',
+                         'search_knowledge', 'read_doc'},
         'official_links': {'official_links'},
         'experience': {'experience', 'risk'},
         'risk': {'risk', 'experience'},
@@ -164,15 +166,49 @@ def prepare_workflow(message: str, *, adapter, runtime_release: str,
     rebound = None
     if knowledge is not None and hasattr(knowledge, 'ground_question'):
         candidate_preview = getattr(knowledge, 'is_candidate_preview', False)
-        if not candidate_preview:
-            # Production callers may precompute a name match before schema
-            # extraction. Re-evaluate it against the extracted goal here.
-            grounded_targets = None
+        # Callers may precompute a name match before schema extraction. Recheck
+        # it against each goal; a variant mentioned as a rejected possibility
+        # must not become the selected variant for a generic family question.
+        grounded_targets = None
+
+        def goal_confirms_variant(grounded, phrase):
+            ids = grounded.get('entities', [])
+            if len(ids) != 1:
+                return False
+            row = next((item for item in knowledge.records_for(role)
+                        if item['kind'] == 'entity' and item['id'] == ids[0]), None)
+            if row is None:
+                return False
+            selectors = row['scope'].get('required_selectors', [])
+            if not selectors:
+                return True
+            product_goals = [goal for goal in schema.goals if goal.kind == 'product']
+            normalized_phrase = phrase.casefold().replace('×', 'x').replace(' ', '')
+            labels = [row['data']['name'], *row['data'].get('aliases', [])]
+            return bool(product_goals) and all(
+                all(
+                    str(goal.condition_map().get(key, '')).casefold().replace('×', 'x')
+                    == str(row['scope'][key]).casefold().replace('×', 'x')
+                    or any(
+                        str(row['scope'][key]).casefold().replace('×', 'x')
+                        in name.casefold().replace('×', 'x')
+                        for name in goal.entities
+                    )
+                    or any(
+                        (str(label).casefold().replace('×', 'x').replace(' ', '')
+                         + str(row['scope'][key]).casefold().replace('×', 'x').replace(' ', ''))
+                        in normalized_phrase
+                        for label in labels
+                    )
+                    for key in selectors
+                ) for goal in product_goals
+            )
         current_grounding = (knowledge.ground_question(message) if candidate_preview
                              else knowledge.ground_question(message, role=role))
-        if (not candidate_preview and current_grounding.get('entities')
-                and not knowledge.grounding_matches_goals(
-                    current_grounding, schema.goals, role=role)):
+        if (current_grounding.get('entities') and
+                (not goal_confirms_variant(current_grounding, message) or
+                 (not candidate_preview and not knowledge.grounding_matches_goals(
+                     current_grounding, schema.goals, role=role)))):
             current_grounding = {}
         try:
             rebound = (knowledge.rebind_variant(
@@ -184,9 +220,10 @@ def prepare_workflow(message: str, *, adapter, runtime_release: str,
         effective_grounding = (knowledge.ground_question(schema.effective_question)
                                if candidate_preview else knowledge.ground_question(
                                    schema.effective_question, role=role))
-        if (not candidate_preview and effective_grounding.get('entities')
-                and not knowledge.grounding_matches_goals(
-                    effective_grounding, schema.goals, role=role)):
+        if (effective_grounding.get('entities') and
+                (not goal_confirms_variant(effective_grounding, schema.effective_question) or
+                 (not candidate_preview and not knowledge.grounding_matches_goals(
+                     effective_grounding, schema.goals, role=role)))):
             effective_grounding = {}
         if current_grounding.get('entities'):
             grounded_targets = current_grounding

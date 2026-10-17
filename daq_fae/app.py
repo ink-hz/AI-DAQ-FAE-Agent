@@ -572,6 +572,7 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                                 allow_dev_source_check=candidate_mode or (sdk_catalog is not None
                                     and not getattr(sdk_catalog, 'published', False)),
                                 service_contract=prepared.service_contract if prepared else None,
+                                question=prepared.schema.effective_question if prepared else request.message,
                                 answer_language=prepared.schema.answer_language if prepared else 'zh',
                                 allowed_tools=base_toolbox.allowed_tools,
                                 allowed_chinese_terms=tuple({entity for goal in prepared.schema.goals

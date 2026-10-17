@@ -11,6 +11,10 @@ from src.agent.loop.tools import ToolResult
 
 from daq_fae.knowledge.reviewed_view import ReviewedKnowledge, reviewed_name_in_query as _reviewed_name_in_query
 from daq_fae.knowledge.sdk_catalog import sdk_usage_descriptor_matches as _sdk_usage_descriptor_matches
+from daq_fae.knowledge.release_notes import (
+    _firmware_identity, _firmware_requirement_identity, _firmware_scopes,
+    _mentioned_families,
+)
 from daq_fae.knowledge.source_paths import contains_source_path
 from daq_fae.knowledge.software_evidence import missing_conditions, support_gap, software_version_conditions
 from daq_fae.knowledge.section_search import (
@@ -22,7 +26,7 @@ _TOOLS: dict[str, tuple[str, dict[str, dict], tuple[str, ...]]] = {
     "catalog": ("List governed DAQ products, kits, and release scope.", {"query": {"type": "string"}}, ("query",)),
     "selection": ("Evaluate a DAQ configuration against all stated acquisition constraints.", {"query": {"type": "string"}}, ("query",)),
     "resolve_entity": ("Resolve a DAQ product, variant, kit, or component. Returns reviewed spec field coverage without values; use lookup_spec before answering a field.", {"text": {"type": "string"}}, ("text",)),
-    "lookup_spec": ("Look up a governed DAQ claim. Use a canonical field such as rgb_resolution or rgb_camera_count; conditions must be a JSON object, for example {\"resolution_variant\":\"1600x1200\"}. A generic product name cannot select a variant.", {"entity": {"type": "string"}, "field": {"type": "string"}, "conditions": {"type": "object"}}, ("entity", "field")),
+    "lookup_spec": ("Look up a governed DAQ claim. Use a canonical field such as rgb_resolution or rgb_camera_count; conditions must be a JSON object, for example {\"resolution_variant\":\"1600x1200\"}. A generic product name cannot select a variant. Visible entity variant scopes establish identity only, not support for this field or measurement condition.", {"entity": {"type": "string"}, "field": {"type": "string"}, "conditions": {"type": "object"}}, ("entity", "field")),
     "inspect_topology": ("Inspect a verified acquisition system topology.", {"query": {"type": "string"}}, ("query",)),
     "lookup_procedure": ("Find an applicable, reviewed acquisition procedure.", {"task": {"type": "string"}, "entity": {"type": "string"}}, ("task",)),
     "check_software_support": ("Check exact product, revision, connection, platform, software version and capability; include variant selectors in conditions.", {"entity": {"type": "string"}, "software": {"type": "string"}, "platform": {"type": "string"}, "version": {"type": "string"}, "hardware_revision": {"type": "string"}, "connection_mode": {"type": "string"}, "capability": {"type": "string"}, "conditions": {"type": "object"}}, ("entity", "software", "platform", "version", "hardware_revision", "connection_mode", "capability")),
@@ -51,6 +55,34 @@ def _sdk_api_selector_matches(value: str, row: dict) -> bool:
     )
 
 
+def _release_build_matches(selector: object, build: str) -> bool:
+    wanted = re.sub(r'\D', '', str(selector))
+    return (len(wanted) == 8 and build.startswith(wanted) or
+            len(wanted) in {10, 12} and build == wanted)
+
+
+def _procedure_task_paraphrase_matches(task: str, row: dict) -> bool:
+    """Accept source-scoped recording paraphrases when the record names that mode."""
+    data = row.get('data', {})
+    conditions = data.get('evidence_conditions', {})
+    if (row.get('status') != 'verified' or
+            conditions.get('recording_mode') != 'local_tf_card' or
+            conditions.get('storage') != 'tf_card' or
+            'local_recording' not in data.get('task_intents', [])):
+        return False
+    compact = _identity_text(task)
+    if any(selector in compact for selector in ('ssd', 'nvme', '硬盘', 'emmc', 'sd卡')):
+        return False
+    recording = '录制' in compact or 'record' in compact
+    local_storage = any(value in compact for value in
+                        ('tf卡', 'tfcard', '本机', '本地', '独立', 'local'))
+    reviewed_checks = all(value in conditions.get('indicators', [])
+                          for value in ('voice_prompt', 'green_led'))
+    check_sequence = (reviewed_checks and '步骤' in compact and
+                      '语音' in compact and '绿灯' in compact)
+    return recording and (local_storage or check_sequence)
+
+
 def _entity_identity_labels(row: dict) -> set[str]:
     labels = {_identity_text(str(value)) for value in (
         row['id'], row['data']['name'], row['scope'].get('product', ''),
@@ -63,21 +95,39 @@ def _entity_identity_labels(row: dict) -> set[str]:
     return labels
 
 
-def _catalog_summary(rows: list[dict], *, candidate_preview: bool) -> dict:
+def _catalog_summary(rows: list[dict], *, candidate_preview: bool,
+                     category_counts_requested: bool = False) -> dict:
     """Count the whole role-visible directory and label its publication state."""
     by_type: dict[str, int] = {}
-    product_names: set[str] = set()
+    products: dict[str, list[dict]] = {}
+    product_types = {'device', 'variant', 'hub', 'kit'}
     for row in rows:
         entity_type = row['data']['entity_type']
         by_type[entity_type] = by_type.get(entity_type, 0) + 1
-        if entity_type in {'device', 'variant', 'hub', 'kit'}:
-            product_names.add(row['data']['name'])
-    names = sorted(product_names)
+        if entity_type in product_types:
+            products.setdefault(str(row['scope'].get('product') or row['data']['name']), []).append(row)
+    names = []
+    for product, variants in products.items():
+        labels = {row['data']['name'] for row in variants}
+        if len(labels) == 1:
+            names.append(next(iter(labels)))
+            continue
+        shared_aliases = set(variants[0]['data'].get('aliases', []))
+        for row in variants[1:]:
+            shared_aliases &= set(row['data'].get('aliases', []))
+        names.append(sorted(shared_aliases, key=lambda value: (len(value), value))[0]
+                     if shared_aliases else product)
+    names.sort()
     return {
         'entry_count': len(rows),
         'distinct_product_name_count': len(names),
+        'product_or_variant_entry_count': sum(by_type.get(kind, 0)
+                                              for kind in product_types),
+        'component_entry_count': by_type.get('component', 0),
+        'entry_count_includes_components': True,
         'product_names': names,
-        'by_entity_type': dict(sorted(by_type.items())),
+        **({'by_entity_type': dict(sorted(by_type.items()))}
+           if category_counts_requested else {}),
         'scope': ('source_checked_dev_preview' if candidate_preview
                   else 'released_role_visible_knowledge'),
         'exhaustive_product_range': False,
@@ -302,14 +352,71 @@ class DaqToolBox:
                 "reason": "empty_knowledge_release", "query": dict(arguments),
                 "claim_status": "unknown", "matches": [],
             })
-        if name == "sdk_evidence" and getattr(self.knowledge, "sdk_catalog", None) is not None \
-                and not all(arguments.get(key) for key in (
-                    "entity", "software", "platform", "version", "hardware_revision",
-                    "connection_mode", "capability")):
+        if name == "sdk_evidence" and getattr(self.knowledge, "sdk_catalog", None) is not None:
             query = arguments.get("query")
             if not isinstance(query, str) or not query.strip() or len(query) > MAX_QUERY_CHARS:
                 return ToolResult(status="tool_error", content={"error": "invalid_tool_arguments"})
-            matches = self.knowledge.sdk_catalog.search(self.question or query, self.role)
+            catalog = self.knowledge.sdk_catalog
+            sdk_requirements = [item for item in self.requirements
+                                if isinstance(item, dict)
+                                and item.get('capability') == 'sdk_evidence']
+            matches = catalog.search(query, self.role)
+            if sdk_requirements:
+                matches = [row for row in matches
+                           if self._sdk_usage_requirement_ids([row])]
+                # Recover every still-uncovered typed SDK goal separately. A
+                # Viewer clause or another SDK build cannot erase its evidence.
+                covered = set(self._sdk_usage_requirement_ids(matches))
+                for requirement in sdk_requirements:
+                    if requirement.get('id') in covered:
+                        continue
+                    conditions = requirement.get('conditions') or {}
+                    if not isinstance(conditions, dict):
+                        continue
+                    selectors = (
+                        conditions.get('sdk') or conditions.get('sdk_name') or
+                        conditions.get('software') or '',
+                        conditions.get('platform') or '',
+                        conditions.get('api') or conditions.get('task') or
+                        conditions.get('feature') or '',
+                        conditions.get('sdk_release_date') or
+                        conditions.get('sdk_build') or '',
+                        ' '.join(conditions.get('source_files', []))
+                        if isinstance(conditions.get('source_files'), list) else '',
+                    )
+                    scoped = ' '.join(value.replace('_', ' ') for value in selectors
+                                      if isinstance(value, str) and value)
+                    if not scoped:
+                        continue
+                    for row in catalog.search(scoped, self.role):
+                        row_ids = self._sdk_usage_requirement_ids([row])
+                        if requirement.get('id') in row_ids and row not in matches:
+                            matches.append(row)
+                            covered.update(row_ids)
+                    if requirement.get('id') not in covered:
+                        # The model may paraphrase a source task into search
+                        # terms that rank a different sample first. Recover
+                        # from the user's words only through the same typed
+                        # requirement check, never through relevance alone.
+                        for row in catalog.search(self.question, self.role):
+                            row_ids = self._sdk_usage_requirement_ids([row])
+                            if requirement.get('id') in row_ids and row not in matches:
+                                matches.append(row)
+                                covered.update(row_ids)
+                # A build or API goal can be paired with a separate question
+                # about the package's image/firmware scope. Preserve the
+                # reviewed package-scope record as context, without letting it
+                # satisfy either an API task or device support requirement.
+                if matches and re.search(
+                        r'镜像|固件|兼容|搭配|配套|image|firmware|compatib',
+                        self.question, re.I):
+                    packages = {row.get('package') for row in matches}
+                    for row in catalog.search(self.question, self.role):
+                        if (row.get('package') in packages
+                                and 'sdk_scope' in row.get('usage_tasks', [])
+                                and row not in matches):
+                            matches.append(row)
+                matches = matches[:6]
             if not matches:
                 return ToolResult(status="not_found", content={
                     "release_id": self.knowledge.release_id,
@@ -321,7 +428,9 @@ class DaqToolBox:
                 "release_id": self.knowledge.release_id,
                 "sdk_catalog_sha256": self.knowledge.sdk_catalog.manifest["records_sha256"],
                 "evidence_scope": "sdk_usage_only", "device_support": "unknown",
-                "example_build_status": "unknown",
+                "example_build_status": (
+                    "unknown" if any(row.get("doc_type") in {"example", "build"}
+                                     for row in matches) else "not_applicable"),
                 "matches": [{key: row[key] for key in (
                     "kb_id", "title", "answer", "sdk_layer", "doc_type", "version",
                     "build", "platform", "symbols", "code_tokens", "confidence", "last_verified")}
@@ -345,12 +454,99 @@ class DaqToolBox:
                 return ToolResult(status="tool_error", content={"error": "invalid_tool_arguments"})
             text = self.question or query
             lowered = text.casefold()
-            note_intent = ("viewer" in lowered or "变更日志" in text or
-                           "更新说明" in text or "发布说明" in text or
-                           "changelog" in lowered or "release note" in lowered)
+            explicit_note = ("变更日志" in text or "更新说明" in text or
+                             "发布说明" in text or "changelog" in lowered or
+                             "release note" in lowered)
+            dated_builds = {
+                re.sub(r'\D', '', match.group())[:8] for match in re.finditer(
+                    r'(?<!\d)20\d{2}[-/]?\d{2}[-/]?\d{2}(?:\d{2,4})?(?!\d)', text)
+            }
+            dated_comparison = bool(
+                len(dated_builds) >= 2 and
+                re.search(r'与|和|差异|变化|相同|一致|区别|compare|different',
+                          text, re.I))
+            scoped_log_probe = bool(
+                dated_builds and re.search(r'\.[ch]pp\b|\.c\b|\.h\b', text, re.I) and
+                re.search(r'能确定|仍可用|是否可用|已恢复|还能', text) and
+                re.search(r'\bSDK\b|OrbbecSDK', text, re.I))
+            note_intent = explicit_note or dated_comparison or scoped_log_probe
             if note_intent:
+                # A tool query cannot supply a product the user did not name.
+                # Report the identity gap, rather than implying that neither
+                # product has a release note for the requested version.
+                firmware_goals = [requirement for requirement in self.requirements
+                                  if isinstance(requirement, dict)
+                                  and requirement.get('capability') == 'search_knowledge'
+                                  and 'firmware_version' in (
+                                      requirement.get('conditions') or {})]
+                typed_identity = (all(
+                    _firmware_identity(' '.join(str(entity) for entity in
+                                               requirement.get('entities', [])))
+                    in {'dual', 'pro'} for requirement in firmware_goals)
+                    if firmware_goals else False)
+                disclaimed_identity = bool(re.search(
+                    r'(?:没|未|不)(?:说明|明确|确定|清楚|知道)[^。？！]*'
+                    r'(?:双目|四目|ego\s*(?:pro|dual))', text, re.I))
+                alternative_identity = bool(re.search(
+                    r'(?:双目|四目|ego\s*(?:pro|dual))[^。？！]{0,12}'
+                    r'(?:还是|或者|或|/)[^。？！]{0,12}'
+                    r'(?:双目|四目|pro|dual)', text, re.I))
+                identity_confirmed = ((typed_identity or
+                                       bool(_firmware_scopes(text))) and
+                                      not disclaimed_identity and
+                                      not alternative_identity)
+                if (_mentioned_families(text) == ['firmware']
+                        and not identity_confirmed):
+                    return ToolResult(status='not_found', content={
+                        'release_id': self.knowledge.release_id,
+                        'reason': 'firmware_product_identity_required',
+                        'availability_checked': False,
+                        'claim_status': 'unknown', 'matches': [],
+                        'matched_requirement_ids': [],
+                    })
                 notes = self.knowledge.sdk_catalog.release_notes
                 matches = notes.search(text, self.role)
+                if scoped_log_probe and len(dated_builds) == 1:
+                    # When a dated source sample is used to infer a feature is
+                    # *still* available, include the earlier statements for
+                    # that source topic. Their log scope remains distinct from
+                    # both API usage and tested device support.
+                    source_topics = {match.group(1).casefold() for match in
+                                     re.finditer(r'\b([a-z][a-z0-9_-]*)\.[ch]pp\b',
+                                                 text, re.I)}
+                    if len(source_topics) == 1:
+                        latest = next(iter(dated_builds))
+                        for row in notes.records:
+                            if (self.role in row.get('view_roles', [])
+                                    and row.get('family', '').casefold() == 'orbbecsdk'
+                                    and row.get('build', '') < latest
+                                    and source_topics & set(row.get('topics', []))
+                                    and row not in matches):
+                                matches.append(row)
+                # A software version mentioned only in a support question is
+                # not a request for that software's change log. Keep source
+                # attribution within the families of typed log goals.
+                log_families = set()
+                for requirement in self.requirements:
+                    if (not isinstance(requirement, dict)
+                            or requirement.get('capability') != 'search_knowledge'):
+                        continue
+                    conditions = requirement.get('conditions') or {}
+                    if not isinstance(conditions, dict):
+                        continue
+                    if 'firmware_version' in conditions:
+                        log_families.add('firmware')
+                    if ('sdk_release_date' in conditions or
+                            'sdk_version' in conditions or
+                            conditions.get('sdk') == 'OrbbecSDK'):
+                        log_families.add('orbbecsdk')
+                    if ('viewer_release_date' in conditions or
+                            'viewer_version' in conditions):
+                        log_families.add('egoviewer')
+                if log_families:
+                    matches = [row for row in matches if any(
+                        family in row['family'].casefold()
+                        for family in log_families)]
                 if matches:
                     return ToolResult(status="ok", content={
                         "release_id": self.knowledge.release_id,
@@ -360,7 +556,7 @@ class DaqToolBox:
                         "matches": [{key: row[key] for key in (
                             "title", "answer", "family", "version", "build", "platform")}
                             for row in matches],
-                        "matched_requirement_ids": [],
+                        "matched_requirement_ids": self._release_note_requirement_ids(matches),
                     }, sources=[{
                         "type": ("daq_governed_release_note" if getattr(
                             self.knowledge.sdk_catalog, "published", False)
@@ -415,6 +611,20 @@ class DaqToolBox:
             target = (self.knowledge.ground_question(self.question)
                       if getattr(self.knowledge, "is_candidate_preview", False)
                       else self.knowledge.ground_question(self.question, role=self.role))
+            supplied = arguments.get('conditions') or {}
+            if (len(eligible_entities) > 1 and isinstance(supplied, dict)
+                    and not any(key in supplied for key in (
+                        'variant', 'resolution_variant', 'hardware_revision'))
+                    and any(requirement.get('capability') == 'lookup_spec'
+                            and not any(key in requirement.get('conditions', {}) for key in (
+                                'variant', 'resolution_variant', 'hardware_revision'))
+                            and any(_identity_text(str(name)) == requested_key
+                                    for name in requirement.get('entities', []))
+                            for requirement in self.requirements)):
+                # A phrase can mention a variant while rejecting an exclusive
+                # claim about it. The generic schema goal, not that mention,
+                # controls whether a variant was actually selected.
+                target = {}
             entities = target.get("entities", [])
             field = arguments.get("field")
             if isinstance(field, str):
@@ -647,6 +857,17 @@ class DaqToolBox:
             candidate_preview=(governed_operating if name in {
                 'inspect_topology', 'lookup_procedure', 'selection'} else candidate_preview))
                    and formal_question_safe(row)]
+        if (not matches and name == 'inspect_topology'
+                and getattr(self.knowledge, 'is_operator_pro_v2', False)
+                and self.question):
+            # A model-written tool query can paraphrase a reviewed Chinese
+            # topology into English. Retry against the user's actual question;
+            # the same entity, scope, and source checks still apply.
+            original_arguments = {**arguments, 'query': self.question}
+            matches = [row for row in rows if self._matches(
+                name, original_arguments, row, entities, topologies,
+                topology_identity_records, candidate_preview=True)
+                and formal_question_safe(row)]
         attempted = self._attempted_requirement_ids(name, attempt_arguments)
         if name in {'check_software_support', 'sdk_evidence'} and len({
             row['status'] for row in matches
@@ -711,18 +932,22 @@ class DaqToolBox:
                           and _field_intent_matches(field, str(row['data']['field']))
                           and entity in self._entity_names(row, entities, topologies)
                           and self._scope_selectors_match(row['scope'], supplied)]
-                mismatched = {}
+                mismatched_scopes = {}
                 for row in scoped:
                     for key, value in row['data']['conditions'].items():
                         if key in supplied and supplied[key] != value:
-                            mismatched.setdefault(key, {})[
-                                json.dumps(value, ensure_ascii=False, sort_keys=True)] = value
-                if mismatched:
+                            scope = {
+                                'entity_id': row['data']['entity_id'],
+                                'resolution_variant': row['scope'].get('resolution_variant'),
+                                'conditions': row['data']['conditions'],
+                            }
+                            mismatched_scopes[json.dumps(
+                                scope, ensure_ascii=False, sort_keys=True)] = scope
+                if mismatched_scopes:
                     return ToolResult(status='not_found', content={
                         'reason': 'claim_conditions_mismatch', 'claim_status': 'unknown',
-                        'available_claim_conditions': {
-                            key: [value for _, value in sorted(values.items())]
-                            for key, values in sorted(mismatched.items())},
+                        'available_claim_condition_scopes': [
+                            scope for _, scope in sorted(mismatched_scopes.items())],
                         'matches': [], 'matched_requirement_ids': attempted,
                     })
         if not matches and name == "lookup_spec" and hasattr(self.knowledge, "ground_question"):
@@ -733,11 +958,21 @@ class DaqToolBox:
                     str(arguments.get("entity") or ""), str(arguments.get("field") or ""),
                     role=self.role))
             if choices:
+                entity_scopes = {}
+                for row in visible_entities:
+                    if str(arguments.get('entity') or '').casefold() not in self._entity_names(
+                            row, entities, topologies):
+                        continue
+                    for selector in row['scope'].get('required_selectors', []):
+                        entity_scopes.setdefault(selector, set()).add(
+                            str(row['scope'][selector]))
                 return ToolResult(status="not_found", content={
                     "reason": "variant_selector_required", "claim_status": "unknown",
                     ("source_checked_variant_scopes" if getattr(
                         self.knowledge, "is_candidate_preview", False)
                      else "verified_variant_scopes"): choices,
+                    "visible_entity_variant_scopes": {
+                        key: sorted(values) for key, values in sorted(entity_scopes.items())},
                     "variant_scopes_exhaustive": False,
                     "matches": [], "matched_requirement_ids": attempted,
                 })
@@ -777,7 +1012,11 @@ class DaqToolBox:
             })
         catalog_summary = _catalog_summary(
             matches, candidate_preview=bool(getattr(
-                self.knowledge, 'is_candidate_preview', False))) if name == 'catalog' else None
+                self.knowledge, 'is_candidate_preview', False)),
+            category_counts_requested=bool(
+                re.search(r'设备|HUB|变体|部件|类别|类型', self.question, re.I)
+                and re.search(r'各|分别|多少条|几条|按类别|按类型|类型分布',
+                              self.question, re.I))) if name == 'catalog' else None
         if name != 'catalog':
             matches = matches[:20]
         field_coverage = {}
@@ -812,7 +1051,7 @@ class DaqToolBox:
             **({'question_targets_not_claim_conditions': question_targets}
                if question_targets else {}),
             **({'variant_scopes_exhaustive': False}
-               if name == 'lookup_spec' and any(
+               if name in {'lookup_spec', 'resolve_entity'} and any(
                    row['scope'].get('required_selectors') for row in matches) else {}),
             **({"query_scope_normalized": scope_normalized} if
                getattr(self.knowledge, "is_candidate_preview", False) else {}),
@@ -1058,7 +1297,8 @@ class DaqToolBox:
                 conditions[canonical] = value
             if conditions is None or set(conditions) - {
                     "sdk_version", "sdk_release_date", "platform", "language", "sample_type",
-                    "sdk", "task", "api", "export_files", "feature",
+                    "sdk", "task", "api", "export_files", "source_files",
+                    "feature", "connection",
             }:
                 continue
             entities = requirement.get("entities") or []
@@ -1067,11 +1307,16 @@ class DaqToolBox:
             for row in matches:
                 layer = row["sdk_layer"]
                 labels_by_layer = {
-                    "host_cpp": {"ego", "orbbecsdk", "orbbecsdk2.9.0"},
-                    "device_c": {"四目ego", "libobkit", "rk3576"},
-                    "android_java": {"ego", "orbbecsdk", "orbbecsdkandroidwrapper"},
-                    "ble_cpp": {"egolowble"},
-                    "ios_framework": {"orbbecsdk"},
+                    "host_cpp": {"ego", "entity:ego-1600", "entity:ego-1920",
+                                 "orbbecsdk", "orbbecsdk2.9.0"},
+                    "device_c": {"四目ego", "egopro", "entity:ego-pro",
+                                 "libobkit", "rk3576"},
+                    "android_java": {"ego", "entity:ego-1600", "entity:ego-1920",
+                                     "orbbecsdk", "orbbecsdkandroidwrapper"},
+                    "ble_cpp": {"egolowble", "ego", "entity:ego-1600",
+                                "entity:ego-1920"},
+                    "ios_framework": {"orbbecsdk", "ego", "entity:ego-1600",
+                                      "entity:ego-1920"},
                 }
                 labels = labels_by_layer.get(layer, set())
                 if any(_identity_text(str(entity)) not in labels for entity in entities):
@@ -1083,32 +1328,61 @@ class DaqToolBox:
                 if ("sdk_release_date" in conditions and
                         re.sub(r"\D", "", str(conditions["sdk_release_date"])) != row["build"]):
                     continue
+                if (conditions.get('connection') and not (
+                        conditions['connection'] == 'network'
+                        and any('network' in str(item).casefold()
+                                for item in row.get('usage_tasks', [])))):
+                    continue
                 if ("platform" in conditions and
-                        _identity_text(str(conditions["platform"])) not in
+                        _identity_text({"linux_x64": "Linux x86_64",
+                                        "linux_x86_64": "Linux x86_64",
+                                        "windows_x64": "Windows x64"}.get(
+                                            str(conditions["platform"]),
+                                            str(conditions["platform"]))) not in
                         _identity_text(row["platform"]) and not (
                             str(conditions["platform"]) == "device_side" and
                             row["sdk_layer"] == "device_c") and not (
                             str(conditions["platform"]) == "host_side" and
                             row["sdk_layer"] == "host_cpp")):
                     continue
-                sdk_name = _identity_text(str(conditions.get("sdk", "")))
+                sdk_name = _identity_text(str(conditions.get("sdk", ""))).replace('_', '')
                 sdk_aliases = {
                     "host_cpp": {"orbbecsdk"}, "device_c": {"libobkit"},
-                    "android_java": {"orbbecsdk", "orbbecsdkandroidwrapper", "androidwrapper"},
+                    "android_java": {"orbbecsdk", "orbbecsdkandroidwrapper",
+                                     "orbbecsdkandroidjavawrapper", "androidwrapper",
+                                     "androidjavawrapper", "orbbecsdkjavawrapper"},
                     "ble_cpp": {"egolowble"}, "ios_framework": {"orbbecsdk"},
                 }
                 if sdk_name and sdk_name not in sdk_aliases.get(layer, set()):
                     continue
-                if ("api" in conditions and not _sdk_api_selector_matches(
-                        str(conditions["api"]), row)):
+                apis = conditions.get('api', [])
+                apis = [apis] if isinstance(apis, str) else apis
+                if (not isinstance(apis, list) or any(
+                        not isinstance(api, str) or
+                        not _sdk_api_selector_matches(api, row)
+                        for api in apis)):
                     continue
-                if ("feature" in conditions and not _sdk_usage_descriptor_matches(
-                        str(conditions["feature"]), row)):
+                features = conditions.get('feature', [])
+                features = [features] if isinstance(features, str) else features
+                if (not isinstance(features, list) or any(
+                        not isinstance(feature, str) or
+                        not _sdk_usage_descriptor_matches(feature, row)
+                        for feature in features)):
                     continue
                 export_files = conditions.get("export_files", [])
                 if (not isinstance(export_files, list) or
                         any(not isinstance(name, str) or name not in row.get("outputs", [])
                             for name in export_files)):
+                    continue
+                source_files = conditions.get("source_files", [])
+                if (not isinstance(source_files, list) or any(
+                        not isinstance(name, str) or not re.fullmatch(
+                            r'[A-Za-z][A-Za-z0-9_.-]*\.(?:cpp|c|h|hpp|java|swift)', name)
+                        or not any(
+                            str(ref.get("member", "")).replace("\\", "/").rsplit("/", 1)[-1] == name
+                            and re.fullmatch(r'[0-9a-f]{64}', str(ref.get("member_sha256", "")))
+                            for ref in row.get("source_refs", []))
+                        for name in source_files)):
                     continue
                 requested_tasks = conditions.get("task", [])
                 requested_tasks = ([requested_tasks] if isinstance(requested_tasks, str)
@@ -1134,6 +1408,90 @@ class DaqToolBox:
                     continue
                 if isinstance(requirement.get("id"), str):
                     ids.append(requirement["id"])
+                break
+        return sorted(set(ids))
+
+    def _release_note_requirement_ids(self, matches: list[dict]) -> list[str]:
+        """Attribute a log statement to its dated search goal, never to support."""
+        feature_terms = {
+            'magnetometer': ('磁力计', 'magnetometer'),
+            'network_device_enumeration': ('网络设备枚举',),
+            'master_slave_sync': ('主从', '同步'),
+        }
+        ids = []
+        for requirement in self.requirements:
+            if (not isinstance(requirement, dict)
+                    or requirement.get('capability') != 'search_knowledge'
+                    or not isinstance(requirement.get('id'), str)
+                    or requirement.get('conditions_authority') ==
+                    'platform_context_unverified'):
+                continue
+            conditions = requirement.get('conditions') or {}
+            entities = requirement.get('entities') or []
+            if (not isinstance(conditions, dict) or not isinstance(entities, list)
+                    or set(conditions) - {
+                        'platform', 'sdk', 'sdk_release_date',
+                        'viewer_release_date', 'viewer_version',
+                        'firmware_version', 'feature', 'sdk_version'}):
+                continue
+            for row in matches:
+                body = ' '.join(str(row.get(key, '')) for key in
+                                ('title', 'answer', 'family'))
+                family = _identity_text(str(row.get('family', '')))
+                build = re.sub(r'\D', '', str(row.get('build', '')))
+                if ('sdk_release_date' in conditions and
+                        not family.startswith('orbbecsdk')):
+                    continue
+                if ('viewer_release_date' in conditions and
+                        not family.startswith('egoviewer')):
+                    continue
+                if ('viewer_version' in conditions and
+                        not family.startswith('egoviewer')):
+                    continue
+                if ('sdk_version' in conditions and
+                        (not family.startswith('orbbecsdk') or
+                         str(conditions['sdk_version']).lstrip('vV') !=
+                         str(row.get('version', '')).lstrip('vV'))):
+                    continue
+                if ('firmware_version' in conditions and
+                        'firmware' not in family):
+                    continue
+                if 'firmware' in family:
+                    target = _firmware_requirement_identity(
+                        self.question, entities, conditions.get('firmware_version'))
+                    if target is None or target not in family:
+                        continue
+                if any(_identity_text(str(entity)) not in _identity_text(body)
+                       for entity in entities):
+                    continue
+                if (conditions.get('sdk') and
+                        _identity_text(str(conditions['sdk'])) != family):
+                    continue
+                if (conditions.get('platform') and
+                        _identity_text(str(conditions['platform'])) not in
+                        _identity_text(str(row.get('platform', '')))):
+                    continue
+                if any(not _release_build_matches(conditions[key], build)
+                       for key in ('sdk_release_date', 'viewer_release_date')
+                       if key in conditions):
+                    continue
+                if (conditions.get('viewer_version') and
+                        str(conditions['viewer_version']).lstrip('vV') !=
+                        str(row.get('version', '')).lstrip('vV')):
+                    continue
+                if conditions.get('firmware_version'):
+                    wanted_version = str(conditions['firmware_version']).lstrip('vV')
+                    current_version = str(row.get('version', '')).lstrip('vV')
+                    if (wanted_version != current_version and not re.search(
+                            r'(?<![0-9.])v?' + re.escape(wanted_version) +
+                            r'(?![0-9.])', str(row.get('answer', '')), re.I)):
+                        continue
+                feature = conditions.get('feature')
+                if feature and not any(term.casefold() in body.casefold()
+                                       for term in feature_terms.get(
+                                           str(feature), (str(feature),))):
+                    continue
+                ids.append(requirement['id'])
                 break
         return sorted(set(ids))
 
@@ -1348,7 +1706,8 @@ class DaqToolBox:
                  (_candidate_alias_match(row, task) or
                   row['status'] == 'verified' and
                   task in data.get('task_intents', []) and
-                  _candidate_query_scope_safe(row, task)))) and \
+                  _candidate_query_scope_safe(row, task) or
+                  _procedure_task_paraphrase_matches(task, row)))) and \
                 (entity in cls._entity_names(row, entities, topologies)
                  or candidate_preview and topology is not None and
                  _candidate_topology_entities_match(
@@ -1418,8 +1777,10 @@ class DaqToolBox:
         )):
             return False
         conditions = requirement.get("conditions") or {}
-        if not isinstance(conditions, dict) or not cls._scope_selectors_match(
-            row["scope"], conditions
+        if not isinstance(conditions, dict) or (
+            not (requirement.get('capability') == 'resolve_entity'
+                 and row['kind'] == 'entity' and not conditions)
+            and not cls._scope_selectors_match(row["scope"], conditions)
         ):
             return False
         known = {**row["scope"], **row["data"].get("conditions", {})}
@@ -1477,7 +1838,9 @@ class DaqToolBox:
                 intents = row['data'].get('task_intents', [])
                 if isinstance(intents, list) and intents:
                     return bool(tasks) and all(
-                        str(item).casefold() in intents for item in tasks)
+                        str(item).casefold() in intents or
+                        _procedure_task_paraphrase_matches(str(item), row)
+                        for item in tasks)
             return (cls._condition_supported(row, key, value, entity_records or {})
                     if key == 'scope' else known.get(key) == value)
 

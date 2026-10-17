@@ -478,6 +478,17 @@ def prepare_turn(message: str, *, previous=None, updates=None, topic_switch=None
                         goal_conditions = {key: value for key, value in
                                            goal_conditions.items()
                                            if key in _IDENTITY_SELECTOR_KEYS}
+                if (goal.capability == 'search_knowledge' and
+                        any(key in goal_conditions for key in (
+                            'sdk_release_date', 'viewer_release_date',
+                            'firmware_version', 'viewer_version'))):
+                    # A dated release-note goal has its own version scope.
+                    # Other versions in the turn may belong to support goals.
+                    for key in ('sdk_version', 'sdk_release_date',
+                                'viewer_version', 'viewer_release_date',
+                                'firmware_version'):
+                        if key not in goal_conditions:
+                            goal_scope['conditions'].pop(key, None)
                 if shared_grounding_safe and grounded_targets and grounded_targets.get('entities'):
                     # This ID was resolved from the role-visible published
                     # entity view; the model's surface name remains a user

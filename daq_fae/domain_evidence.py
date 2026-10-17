@@ -36,6 +36,7 @@ class _Requirement:
 class DaqEvidencePolicy:
     def __init__(self, *, allow_dev_source_check: bool = False,
                  service_contract: ServiceContract | None = None,
+                 question: str = '',
                  answer_language: str = 'zh',
                  allowed_chinese_terms: tuple[str, ...] = (),
                  allowed_tools: frozenset[str] | None = None):
@@ -43,6 +44,7 @@ class DaqEvidencePolicy:
             raise ValueError('daq_answer_language_invalid')
         self.allow_dev_source_check = allow_dev_source_check
         self.service_contract = service_contract
+        self.question = question
         self.answer_language = answer_language
         self.allowed_chinese_terms = allowed_chinese_terms
         self.allowed_tools = allowed_tools
@@ -79,6 +81,7 @@ class DaqEvidencePolicy:
             raise ValueError("daq_requirements_empty")
         return DaqEvidenceSession(tuple(parsed), allow_dev_source_check=self.allow_dev_source_check,
                                   service_contract=self.service_contract,
+                                  question=self.question,
                                   answer_language=self.answer_language,
                                   allowed_chinese_terms=self.allowed_chinese_terms,
                                   allowed_tools=self.allowed_tools)
@@ -88,6 +91,7 @@ class DaqEvidenceSession:
     def __init__(self, requirements: tuple[_Requirement, ...], *,
                  allow_dev_source_check: bool = False,
                  service_contract: ServiceContract | None = None,
+                 question: str = '',
                  answer_language: str = 'zh',
                  allowed_chinese_terms: tuple[str, ...] = (),
                  allowed_tools: frozenset[str] | None = None):
@@ -105,6 +109,8 @@ class DaqEvidenceSession:
         self._observed_user_sources = {item.id: set() for item in requirements}
         self._internal_provenance: set[str] = set()
         self._public_sdk_symbols: set[str] = set()
+        self._reviewed_interface_text: list[str] = []
+        self.question = question
         self.allow_dev_source_check = allow_dev_source_check
         self.answer_language = answer_language
         self.allowed_chinese_terms = allowed_chinese_terms
@@ -138,6 +144,10 @@ class DaqEvidenceSession:
         if result.status == "ok":
             for match in content.get("matches", []):
                 if isinstance(match, dict):
+                    self._reviewed_interface_text.extend(
+                        value for key in ('answer', 'summary', 'statement', 'title', 'text')
+                        if isinstance((value := match.get(key)), str)
+                    )
                     if tool_name == "sdk_evidence":
                         sdk_tokens = []
                         for field in ("symbols", "code_tokens"):
@@ -219,6 +229,25 @@ class DaqEvidenceSession:
                   submission.pending_confirmation, submission.handoff_reason,
                   submission.unresolved_constraints)
         visible_text = '\n'.join(value for value in fields if value)
+        if r'\n' in visible_text:
+            return EvidenceDecision(
+                'request_evidence', 'daq_literal_escape_in_answer',
+                ('Replace literal backslash-n sequences with actual paragraph or '
+                 'list breaks. Keep the same facts, conditions and outcome.'
+                 if self.answer_language == 'en' else
+                 '请把正文中的字面量反斜杠 n 改成真正的换行或列表分行；'
+                 '保留原有事实、适用条件和终态。'),
+            )
+        if re.search(r'(?i)\b[A-Za-z][A-Za-z0-9_.-]*\.(?:cpp|c|h|hpp|java|swift)\b',
+                     visible_text):
+            return EvidenceDecision(
+                'request_evidence', 'daq_source_filename_in_answer',
+                ('Describe the verified API or example without source file names. '
+                 'Keep public API symbols, output names, conditions and outcome.'
+                 if self.answer_language == 'en' else
+                 '请改写正文中的源码文件名，只说明已核对的接口或示例；'
+                 '保留公开 API、输出文件名、适用条件和终态。'),
+            )
         if self.answer_language == 'en':
             for term in self.allowed_chinese_terms:
                 if isinstance(term, str) and term:
@@ -248,18 +277,34 @@ class DaqEvidenceSession:
                                r'(?![a-z0-9_])', '', code_scan)
         if (re.search(r'\b[a-z]+(?:_[a-z]+)+\b(?!\.[a-z0-9]+)', code_scan)
                 or re.search(r'\b(?:claim|entity|topology|procedure|software|link):[a-z0-9_.:-]+', prose)
+                or re.search(r'第\s*\d+\s*(?:行|页)|\b(?:line|page)\s+\d+\b', prose)
                 or any(token in prose for token in self._internal_provenance)):
             return EvidenceDecision(
                 "request_evidence", "daq_internal_provenance_in_answer",
                 ("Rewrite the answer in natural English. Remove internal record IDs, "
-                 "field codes, tool status codes and source file paths from every answer "
+                 "field codes, tool status codes, source file paths and page/line locators from every answer "
                  "field. Keep the same facts, conditions, evidence gaps and outcome. "
                  "Sources are already attached as structured metadata."
                  if self.answer_language == 'en' else
                  "请重新提交终稿：正文只用自然中文说明结论、适用条件和必要缺口；"
-                 "删除内部记录 ID、英文内部字段代码和原始文件路径。"
+                 "删除内部记录 ID、英文内部字段代码、原始文件路径和页码行号。"
                  "来源已保留在结构化 sources，不必重复取证。"),
             )
+        if self.question and 'sdk_evidence' in self.actual:
+            grounded_text = (self.question + '\n' +
+                             '\n'.join(self._reviewed_interface_text)).casefold()
+            for pattern in (r'\busb\b', r'\bwi[ -]?fi\b', r'蓝牙|\bble\b',
+                            r'\bhub\b', r'网络|\bnetwork\b', r'以太网|\bethernet\b'):
+                if re.search(pattern, prose, re.I) and not re.search(
+                        pattern, grounded_text, re.I):
+                    return EvidenceDecision(
+                        'request_evidence', 'daq_unrequested_interface_in_answer',
+                        ('Remove connection types that were only guessed in tool calls. '
+                         'State the verified package facts and ask for the actual connection.'
+                         if self.answer_language == 'en' else
+                         '删除仅在工具调用中猜测、用户与已核对来源均未给出的连接方式；'
+                         '保留包内事实，并只询问实际连接方式。'),
+                    )
         if self.tool_failed:
             return EvidenceDecision("reject", "daq_evidence_tool_failure")
         if self.attachment_failed and submission.outcome == "resolved":
@@ -329,9 +374,19 @@ def _has_governed_source(result: ToolResult, *, allow_dev_source_check: bool = F
         isinstance(source, dict)
         and ((source.get("type") in {"daq_governed_claim", "daq_governed_sdk"}
               and source.get("verification_status") == "verified")
+             or (isinstance(result.content, dict)
+                 and result.content.get('evidence_scope') ==
+                 'release_note_statement_only'
+                 and source.get('type') == 'daq_governed_release_note'
+                 and source.get('verification_status') == 'verified')
              or (allow_dev_source_check and source.get("type") in {
                  "daq_dev_source_checked_claim", "daq_sdk_source_checked"}
-                 and source.get("verification_status") == "source_checked"))
+                 and source.get("verification_status") == "source_checked")
+             or (allow_dev_source_check and isinstance(result.content, dict)
+                 and result.content.get('evidence_scope') ==
+                 'release_note_statement_only'
+                 and source.get('type') == 'daq_release_note_source_checked'
+                 and source.get('verification_status') == 'source_checked'))
         and isinstance(source.get("release_id"), str)
         and bool(source["release_id"].strip())
         and isinstance(source.get("source_id"), str)

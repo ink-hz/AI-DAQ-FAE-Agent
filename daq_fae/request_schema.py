@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from daq_fae.knowledge.reviewed_view import reviewed_name_in_query
-from daq_fae.knowledge.sdk_catalog import SdkCatalog
+from daq_fae.knowledge.sdk_catalog import SdkCatalog, sdk_usage_descriptor_matches
 
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -28,7 +28,8 @@ _ATTACHMENT = {'search_attachments', 'analyze_image'}
 _CONDITIONS = {
     'variant', 'resolution_variant', 'hardware_revision', 'resolution',
     'platform', 'connection', 'connection_mode', 'viewer_version',
-    'sdk', 'sdk_name', 'sdk_version', 'sdk_release_date', 'language', 'language_binding', 'api', 'feature', 'export_files', 'firmware_version', 'task', 'per_port', 'power',
+    'viewer_release_date',
+    'sdk', 'sdk_name', 'sdk_version', 'sdk_release_date', 'language', 'language_binding', 'api', 'feature', 'export_files', 'source_files', 'firmware_version', 'task', 'per_port', 'power',
     'recording_format', 'storage', 'simultaneous_port_count',
     'scope', 'sensor', 'camera_type', 'camera_config', 'stereo_pair',
     'lens_type', 'port', 'host_connection', 'standalone',
@@ -169,6 +170,221 @@ class SchemaExtractionError(ValueError):
 
 def _normalized(value: str) -> str:
     return re.sub(r'\s+', '', unicodedata.normalize('NFKC', value).casefold().replace('×', 'x'))
+
+
+def _sdk_platform_grounded(value: object, words: str) -> bool:
+    if not isinstance(value, str):
+        return False
+    patterns = {
+        'linux_x64': r'\blinux[\s_-]+(?:x64|x86_64)\b',
+        'linux_x86_64': r'\blinux[\s_-]+x86_64\b',
+        'windows_x64': r'\bwindows[\s_-]+x64\b',
+    }
+    return bool(value in patterns and re.search(patterns[value], words, re.I))
+
+
+def _sdk_name_grounded(value: object, words: str) -> bool:
+    if not isinstance(value, str):
+        return False
+    if value == 'android_wrapper':
+        return bool(re.search(r'Android\s+(?:Java\s+)?Wrapper', words, re.I))
+    if value == 'OrbbecSDK Android Java Wrapper':
+        return bool(re.search(r'Android\s+Java\s+Wrapper', words, re.I))
+    if value == 'android_java_wrapper':
+        return bool(re.search(r'Android\s+Java\s+Wrapper', words, re.I))
+    if value == 'orbbecsdk_java_wrapper':
+        return bool(re.search(r'Android\s+Java\s+Wrapper', words, re.I))
+    return False
+
+
+def _normalize_encoded_sdk_selectors(capability: str, conditions: dict[str, Any],
+                                     words: str) -> dict[str, Any]:
+    """Recover typed, user-quoted selectors misplaced in a model's steps list."""
+    if capability not in {'search_knowledge', 'sdk_evidence', 'check_software_support'}:
+        return conditions
+    steps = conditions.get('steps')
+    if not isinstance(steps, list) or not steps:
+        return conditions
+    allowed = {'sdk', 'sdk_release_date', 'feature', 'source_files'}
+    assignments = []
+    for step in steps:
+        if not isinstance(step, str):
+            return conditions
+        match = re.fullmatch(r'\s*([a-z_]+)\s*=\s*([^=\s][^=]*)\s*', step, re.I)
+        if not match or match.group(1) not in allowed:
+            return conditions
+        key, value = match.group(1), match.group(2).strip()
+        if key == 'source_files' and capability != 'sdk_evidence':
+            return conditions
+        if key == 'sdk_release_date' and capability == 'check_software_support':
+            return conditions
+        if value.casefold() not in words.casefold():
+            # A typed selector invented by the model must not become evidence.
+            return conditions
+        assignments.append((key, value))
+    normalized = dict(conditions)
+    normalized.pop('steps')
+    for key, value in assignments:
+        if key in normalized and normalized[key] != value:
+            raise SchemaExtractionError('schema_encoded_selector_conflict')
+        normalized[key] = value
+    return normalized
+
+
+def _normalize_sdk_conditions(capability: str, conditions: dict[str, Any],
+                              words: str,
+                              sdk_catalog: SdkCatalog | None = None) -> dict[str, Any]:
+    if capability not in {'sdk_evidence', 'search_knowledge'}:
+        return conditions
+    normalized = dict(conditions)
+    version = normalized.get('sdk_version')
+    if isinstance(version, str) and re.fullmatch(r'20\d{2}-\d{2}-\d{2}', version):
+        existing = normalized.get('sdk_release_date')
+        if existing is not None and existing != version:
+            raise SchemaExtractionError('schema_sdk_build_date_conflict')
+        normalized.pop('sdk_version')
+        normalized['sdk_release_date'] = version
+    if capability != 'sdk_evidence':
+        return normalized
+    if isinstance(sdk_catalog, SdkCatalog):
+        # A model may put its own explanation of the question into selectors
+        # and even encode selectors as "steps". Two exact, source-reviewed
+        # symbols in the user's words provide a safer retrieval anchor.
+        def exact_symbol(symbol: str) -> bool:
+            return bool(re.search(r'(?<![A-Za-z0-9_])' + re.escape(symbol)
+                                  + r'(?![A-Za-z0-9_])', words, re.I))
+
+        symbol_rows = [row for row in sdk_catalog.search(words, 'internal_fae')
+                       if sum(exact_symbol(symbol)
+                              for symbol in row.get('symbols', [])
+                              if isinstance(symbol, str) and len(symbol) >= 4) >= 2]
+        if symbol_rows:
+            for key in ('task', 'feature'):
+                value = normalized.get(key)
+                source_field = 'usage_tasks' if key == 'task' else 'topics'
+                if (isinstance(value, str)
+                        and value not in {item for row in symbol_rows
+                                          for item in row.get(source_field, [])}
+                        and value.replace('_', ' ').casefold()
+                        not in words.casefold()):
+                    normalized.pop(key)
+            steps = normalized.get('steps')
+            if (isinstance(steps, list) and steps and all(
+                    isinstance(step, str) and re.match(
+                        r'^\s*[a-z_]+\s*=', step, re.I)
+                    for step in steps)):
+                normalized.pop('steps')
+    if (normalized.get('standalone') is True
+            and not re.search(r'单机|独立|单设备|standalone|single.device',
+                              words, re.I)):
+        # Device-side SDK use does not imply standalone acquisition. A model
+        # default must not turn a package-usage goal into an impossible scope.
+        normalized.pop('standalone')
+    if normalized.get('standalone') is False:
+        # A model default about device topology cannot narrow package API use.
+        normalized.pop('standalone')
+    task_aliases = {
+        'framework_embedding': 'embed_framework',
+        'demo_and_build_materials': 'inspect_package',
+    }
+    if (normalized.get('task') == 'integration'
+            and _normalized(str(normalized.get('sdk', ''))) == 'egolowble'
+            and re.search(r'\bDLL\b', words, re.I)
+            and re.search(r'集成|integrat', words, re.I)
+            and re.search(r'windows', words, re.I)):
+        # The user's DLL clause is the reviewed Windows BLE install task;
+        # the neighboring device/firmware comparison is a separate goal.
+        task_aliases['integration'] = 'dll_integration'
+    feature_aliases = {
+        'simulator_artifact': 'simulator_artifacts',
+        'master_slave_sync': 'multi_device_sync_mode_check_and_set',
+        'prebuilt_demo_inclusion': 'inspect_package',
+    }
+    for key, aliases in (('task', task_aliases), ('feature', feature_aliases)):
+        if isinstance(normalized.get(key), str):
+            normalized[key] = aliases.get(normalized[key], normalized[key])
+    platform_aliases = {
+        'device': 'device_side',
+        'windows-x64': 'windows_x64',
+        'linux-x64': 'linux_x64',
+        'linux-x86_64': 'linux_x86_64',
+    }
+    if isinstance(normalized.get('platform'), str):
+        normalized['platform'] = platform_aliases.get(
+            normalized['platform'].casefold(), normalized['platform'])
+    if normalized.get('feature') == 'bluetooth' and re.search(
+            r'蓝牙|\b(?:BLE|bluetooth)\b', words, re.I):
+        normalized['feature'] = 'ble'
+    if (normalized.get('feature') == 'invocation_and_completion_handling'
+            and re.search(r'调用|invok', words, re.I)
+            and re.search(r'完成|completion', words, re.I)):
+        # How to call and finish are the requested answer shape, not a
+        # separate SDK capability or compatibility selector.
+        normalized.pop('feature')
+    if normalized.get('steps') == []:
+        normalized.pop('steps')
+    files = normalized.get('export_files')
+    files = [files] if isinstance(files, str) else files
+    if (isinstance(files, list) and files and
+            all(isinstance(name, str) and re.fullmatch(
+                r'[A-Za-z][A-Za-z0-9_.-]*\.(?:cpp|c|h|hpp|java|swift)', name)
+                and name in words for name in files)):
+        normalized.pop('export_files')
+        if 'source_files' in normalized and normalized['source_files'] != files:
+            raise SchemaExtractionError('schema_sdk_source_file_conflict')
+        normalized['source_files'] = files
+    source_files = normalized.get('source_files')
+    if source_files is not None:
+        values = [source_files] if isinstance(source_files, str) else source_files
+        if (not isinstance(values, list) or not values or any(
+                not isinstance(name, str) or not re.fullmatch(
+                    r'[A-Za-z][A-Za-z0-9_.-]*\.(?:cpp|c|h|hpp|java|swift)', name)
+                or name not in words for name in values)):
+            raise SchemaExtractionError('schema_sdk_source_file_not_grounded')
+        normalized['source_files'] = values
+    api = normalized.get('api')
+    if isinstance(api, str) and re.search(r'[,，;；/]', api):
+        parts = [part.strip() for part in re.split(r'[,，;；/]', api)]
+        if (2 <= len(parts) <= 8 and
+                all(re.fullmatch(r'[A-Za-z][A-Za-z0-9_]*', part) and
+                    re.search(r'(?<![A-Za-z0-9_])' + re.escape(part) +
+                              r'(?![A-Za-z0-9_])', words, re.I)
+                    for part in parts)):
+            normalized['api'] = parts
+    return normalized
+
+
+def _normalize_spec_conditions(capability: str, conditions: dict[str, Any],
+                               question: str) -> dict[str, Any]:
+    """Keep a model's misplaced measured mode as an evidence selector."""
+    if capability != 'lookup_spec':
+        return conditions
+    conditions = dict(conditions)
+    if (conditions.get('standalone') is False
+            and not re.search(r'非单机|不能单机|不独立|非独立|not.standalone|multi.device',
+                              question, re.I)):
+        conditions.pop('standalone')
+    if 'steps' not in conditions:
+        return conditions
+    steps = conditions['steps']
+    if not isinstance(steps, list) or len(steps) != 1 or not isinstance(steps[0], str):
+        raise SchemaExtractionError('schema_spec_steps_invalid')
+    match = re.fullmatch(r'\s*resolution\s*[=:]\s*(\d{3,4}\s*[x×X]\s*\d{3,4})\s*',
+                         steps[0], re.I)
+    if not match:
+        raise SchemaExtractionError('schema_spec_steps_invalid')
+    resolution = _normalized(match.group(1))
+    normalized_question = _normalized(question)
+    if resolution not in normalized_question:
+        raise SchemaExtractionError('schema_spec_resolution_not_grounded')
+    explicit_modes = set(re.findall(r'(\d{3,4}x\d{3,4})@\d+(?:\.\d+)?',
+                                    normalized_question))
+    if len(explicit_modes) == 1 and resolution not in explicit_modes:
+        raise SchemaExtractionError('schema_spec_resolution_target_conflict')
+    if 'resolution' in conditions and _normalized(str(conditions['resolution'])) != resolution:
+        raise SchemaExtractionError('schema_spec_resolution_target_conflict')
+    return {**{key: value for key, value in conditions.items() if key != 'steps'},
+            'resolution': resolution}
 
 
 _RESOLUTION_PAIR = re.compile(r'(?<!\d)(\d{3,4}x\d{3,4})(?!\d)')
@@ -382,6 +598,7 @@ def _requested_frame_rate_modes(question: str, versions: set[str]) -> tuple[tupl
         sentence_asked_fps = False
         for clause in re.split(r'[，,]+', sentence):
             local_modes = set()
+            inline_fps_modes = set()
             for mode in modes:
                 mode_context = (r'(?:在|以|切到|切换到|切换为|改用|改为|改成).{0,12}'
                                 + re.escape(mode))
@@ -393,9 +610,14 @@ def _requested_frame_rate_modes(question: str, versions: set[str]) -> tuple[tupl
                 if re.search(r'(?:切到|切换到|切换为|改用|改为|改成).{0,12}'
                              + re.escape(height) + r'(?:后|下|时)', clause):
                     local_modes.add(mode)
+                if re.search(re.escape(mode) + r'@\d+(?:\.\d+)?(?:fps)?', clause, re.I):
+                    local_modes.add(mode)
+                    inline_fps_modes.add(mode)
             pending_modes.update(local_modes)
             asks_fps = bool(re.search(r'(?:fps|帧率|帧)', clause, re.I)
                             and re.search(r'多少|几|最高|能到|达到|可达|能否|能跑|吗|上限', clause))
+            asks_fps = asks_fps or bool(inline_fps_modes and re.search(
+                r'是否|支持|能否|能|可|吗|多少|几', clause))
             asks_fps = asks_fps or bool(previous_fps_question and
                                          re.search(r'又(?:是)?多少|那(?:又)?是多少', clause))
             if not asks_fps:
@@ -531,14 +753,16 @@ class DaqRequestSchema:
                 raise SchemaExtractionError('entity_not_grounded')
             if kind != 'product' and entities:
                 raise SchemaExtractionError('schema_goal_scope_invalid')
-            field = raw.get('field')
-            if field is not None and (kind != 'product' or not isinstance(field, str)
+            # Only a spec lookup consumes a claim field. A model can place
+            # status names or API labels into `field` on an SDK goal; discard
+            # that unused value before validating spec field syntax. The raw
+            # signature below still detects distinct goals collapsed by this
+            # normalization instead of silently merging obligations.
+            field = raw.get('field') if (kind == 'product' and
+                                         capability == 'lookup_spec') else None
+            if field is not None and (not isinstance(field, str)
                                       or not _SAFE_CODE.fullmatch(field)):
                 raise SchemaExtractionError('schema_field_invalid')
-            # Only a spec lookup can require a claim field. Entity, topology,
-            # procedure and compatibility tools return other evidence kinds.
-            if kind == 'product' and capability != 'lookup_spec':
-                field = None
             conditions = raw.get('conditions', {})
             if not isinstance(conditions, dict) or len(conditions) > 16 or any(
                 not isinstance(key, str) or not _SAFE_CODE.fullmatch(key) or
@@ -547,11 +771,135 @@ class DaqRequestSchema:
                 for key, value in conditions.items()
             ) or len(json.dumps(conditions, ensure_ascii=False)) > 600:
                 raise SchemaExtractionError('schema_conditions_invalid')
+            if (capability == 'search_knowledge'
+                    and isinstance(sdk_catalog, SdkCatalog)
+                    and isinstance(conditions.get('sdk'), str)
+                    and re.search(r'包|package|demo|示例|构建资料', question, re.I)
+                    and not re.search(r'变更日志|更新说明|发布说明|changelog|release.note',
+                                      question, re.I)
+                    and sdk_catalog.search(question, 'internal_fae')):
+                # Package contents are typed SDK evidence, even if the model
+                # proposes a generic knowledge search for one subquestion.
+                capability = 'sdk_evidence'
             try:
                 raw_signature = json.dumps(raw, ensure_ascii=False, sort_keys=True)
             except (TypeError, ValueError) as exc:
                 raise SchemaExtractionError('schema_goal_invalid') from exc
             conditions = _normalize_operating_conditions(capability, conditions)
+            conditions = _normalize_encoded_sdk_selectors(
+                capability, conditions, question + ' ' + prior_user_context)
+            if (capability == 'lookup_procedure'
+                    and conditions.get('host_connection') == 'none'
+                    and not _operating_condition_grounded(
+                        'host_connection', 'none', question + ' ' + prior_user_context)):
+                # Independent capture alone does not assert that the user has
+                # ruled out a computer or phone data host. Drop this model
+                # inference instead of making it an unfillable evidence goal.
+                conditions.pop('host_connection')
+            if capability == 'resolve_entity' and type(conditions.get('standalone')) is bool:
+                words = question + ' ' + prior_user_context
+                pattern = (r'单机|独立|脱机|standalone|single.device'
+                           if conditions['standalone'] else
+                           r'非单机|不能单机|不独立|非独立|not.standalone|multi.device')
+                if not re.search(pattern, words, re.I):
+                    # Standalone mode is task context, not product identity;
+                    # discard a model default only when the user never said it.
+                    conditions.pop('standalone')
+            if (capability == 'catalog' and conditions.get('standalone') is False
+                    and not re.search(r'非单机|不能单机|不支持单机|without standalone',
+                                      question + ' ' + prior_user_context, re.I)):
+                # A model default is not a user requested catalog filter.
+                conditions.pop('standalone')
+            conditions = _normalize_spec_conditions(
+                capability, conditions, question + ' ' + prior_user_context)
+            conditions = _normalize_sdk_conditions(
+                capability, conditions, question + ' ' + prior_user_context,
+                sdk_catalog)
+            if (capability == 'sdk_evidence' and
+                    any(_normalized(entity) == '网络ego' for entity in entities)):
+                # "网络 EGO" names an EGO connection in an SDK usage question,
+                # not a separate product. Preserve network as an exact usage
+                # selector; the separate support goal keeps device identity.
+                if any(conditions.get(key) not in (None, 'network')
+                       for key in ('connection', 'connection_mode')):
+                    raise SchemaExtractionError('schema_network_ego_connection_conflict')
+                entities = ['EGO' if _normalized(entity) == '网络ego' else entity
+                            for entity in entities]
+                conditions.pop('connection_mode', None)
+                conditions['connection'] = 'network'
+            api = conditions.get('api')
+            if (capability == 'sdk_evidence' and isinstance(api, str)
+                    and not re.search(r'(?<![A-Za-z0-9_])' + re.escape(api) +
+                                      r'(?![A-Za-z0-9_])', question + ' ' + prior_user_context, re.I)
+                    and isinstance(sdk_catalog, SdkCatalog)
+                    and sdk_catalog.grounds_selector(question, 'task', api)):
+                # The model may name a user-described operation as if it were
+                # an API symbol. An existing task can express the same
+                # operation, so discard the redundant pseudo-API only when
+                # both descriptors bind the same source-checked usage row.
+                # Explicitly named APIs still require an exact source symbol.
+                task = conditions.get('task')
+                if task is None:
+                    conditions['task'] = conditions.pop('api')
+                elif isinstance(task, str) and any(
+                        sdk_usage_descriptor_matches(api, row)
+                        and sdk_usage_descriptor_matches(task, row)
+                        for row in sdk_catalog.search(question, 'internal_fae')):
+                    conditions.pop('api')
+            if capability == 'search_knowledge':
+                document_type = conditions.get('document_type')
+                if (isinstance(document_type, str)
+                        and _normalized(document_type) in {
+                            'changelog', 'release_note', 'release_notes', '变更日志'}
+                        and re.search(r'变更日志|更新说明|发布说明|changelog|release.note',
+                                      question + ' ' + prior_user_context, re.I)):
+                    # The selected knowledge goal already asks for a release
+                    # note. This model-generated alias adds no source scope.
+                    conditions.pop('document_type')
+                if (conditions.get('aspect') == 'master_slave_sync' and
+                        re.search(r'主从|同步|master.slave|sync',
+                                  question + ' ' + prior_user_context, re.I)):
+                    conditions.pop('aspect')
+                    if 'feature' in conditions and conditions['feature'] != 'master_slave_sync':
+                        raise SchemaExtractionError('schema_note_feature_conflict')
+                    conditions['feature'] = 'master_slave_sync'
+                if (any(re.search(r'viewer', entity, re.I) for entity in entities)
+                        and _normalized(str(conditions.get('sdk', ''))) == 'egoviewer'):
+                    conditions.pop('sdk')
+                    for old, new in (('sdk_version', 'viewer_version'),
+                                     ('sdk_release_date', 'viewer_release_date')):
+                        if old in conditions:
+                            value = conditions.pop(old)
+                            if new in conditions and conditions[new] != value:
+                                raise SchemaExtractionError('schema_viewer_version_conflict')
+                            conditions[new] = value
+            if (capability == 'sdk_evidence' and
+                    _normalized(str(conditions.get('sdk', ''))) == 'libobkit' and
+                    entities == ['EGO'] and re.search(
+                        r'四目\s*EGO', question + ' ' + prior_user_context, re.I)):
+                entities = ['四目 EGO']
+            if capability == 'search_knowledge' and 'build_date' in conditions:
+                date_key = ('viewer_release_date' if 'viewer_version' in conditions
+                            or any(re.search(r'viewer', entity, re.I)
+                                   for entity in entities)
+                            else 'sdk_release_date' if 'sdk' in conditions else None)
+                if date_key:
+                    date = conditions.pop('build_date')
+                    if date_key in conditions and conditions[date_key] != date:
+                        raise SchemaExtractionError('schema_release_date_conflict')
+                    conditions[date_key] = date
+            if (capability == 'sdk_evidence' and conditions.get('source_files')
+                    and entities and re.search(
+                        r'包(?:里|中|内)|\bpackage\b|\barchive\b',
+                        question + ' ' + prior_user_context, re.I)
+                    and any(isinstance(peer, dict)
+                            and peer.get('capability') == 'check_software_support'
+                            and isinstance(peer.get('entities'), list)
+                            and set(entities) <= set(peer['entities'])
+                            for peer in raw_goals)):
+                # A package member is SDK evidence. The separate support goal
+                # retains the device selector; it must not leak into this goal.
+                entities = []
             if capability == 'lookup_spec' and field in {
                     'downstream_port_power_output',
                     'total_downstream_port_power_output'}:
@@ -723,10 +1071,36 @@ class DaqRequestSchema:
                         and sdk_catalog.grounds_selector(question, key, value)):
                     unmapped.discard(key)
                     continue
-                if (capability == 'sdk_evidence' and key == 'platform'
+                if (capability == 'search_knowledge' and key == 'feature'
+                        and isinstance(value, str) and (
+                            (value == 'network_device_enumeration' and
+                             re.search(r'网络设备枚举|network.device.enumerat', user_words, re.I))
+                            or (value == 'master_slave_sync' and
+                                re.search(r'主从|同步|master.slave|sync', user_words, re.I))
+                            or (value == 'magnetometer' and
+                                re.search(r'磁力计|magnetometer', user_words, re.I)))):
+                    continue
+                if (capability == 'check_software_support' and key == 'feature'
+                        and value == 'bluetooth' and re.search(
+                            r'蓝牙|\b(?:BLE|bluetooth)\b', user_words, re.I)):
+                    continue
+                if (capability == 'sdk_evidence' and key == 'sdk'
+                        and _sdk_name_grounded(value, user_words)):
+                    continue
+                if (capability == 'sdk_evidence' and key == 'connection'
+                        and value == 'network'
+                        and re.search(r'网络|\bnetwork\b', user_words, re.I)):
+                    continue
+                if (capability in {'sdk_evidence', 'check_software_support'}
+                        and key == 'platform'
                         and isinstance(value, str) and (
                             (value == 'device_side' and re.search(r'设备端|device.side', user_words, re.I))
-                            or (value == 'host_side' and re.search(r'主机侧|host.side', user_words, re.I)))):
+                            or (value == 'host_side' and re.search(r'主机侧|host.side', user_words, re.I))
+                            or _sdk_platform_grounded(value, user_words))):
+                    continue
+                if (capability == 'sdk_evidence' and key == 'language'
+                        and value == 'cpp'
+                        and re.search(r'\bC\+\+\b|\bC\+\+(?!\w)', user_words, re.I)):
                     continue
                 if key == 'scope':
                     if not isinstance(value, str) or value not in {
@@ -895,6 +1269,51 @@ class DaqRequestSchema:
         if len(scoped_goals) > 16:
             raise SchemaExtractionError('schema_goals_expansion_limit')
         goals = scoped_goals
+        # A dated source example cannot settle whether a named device feature
+        # is *still* available. When reviewed change logs exist for that exact
+        # source topic and device, require the historical statement as a
+        # separate evidence goal instead of hoping the loop searches for it.
+        if (isinstance(sdk_catalog, SdkCatalog)
+                and sdk_catalog.release_notes is not None
+                and not any(goal.capability == 'search_knowledge' for goal in goals)
+                and re.search(r'仍可用|还能用|已恢复|是否可用|still available|restored',
+                              question, re.I)):
+            stems = {match.group(1).casefold() for match in re.finditer(
+                r'\b([A-Za-z][A-Za-z0-9_-]*)\.(?:cpp|hpp|c|h)\b',
+                question, re.I)}
+            builds = {re.sub(r'\D', '', match.group()) for match in re.finditer(
+                r'(?<!\d)20\d{2}[-/]?\d{2}[-/]?\d{2}(?!\d)', question)}
+            if len(stems) == len(builds) == 1:
+                stem, build = next(iter(stems)), next(iter(builds))
+                for support in goals:
+                    if (support.capability != 'check_software_support'
+                            or len(support.entities) != 1
+                            or str(support.condition_map().get('feature', '')).casefold()
+                            != stem):
+                        continue
+                    entity = support.entities[0]
+                    history = [row for row in sdk_catalog.release_notes.records
+                               if row.get('family', '').casefold() == 'orbbecsdk'
+                               and row.get('build', '') < build
+                               and stem in row.get('topics', [])
+                               and _normalized(entity) in _normalized(
+                                   row.get('title', '') + row.get('answer', ''))]
+                    if history:
+                        conditions = {'sdk': 'OrbbecSDK', 'feature': stem}
+                        payload = ['product', 'search_knowledge', [entity], None,
+                                   conditions]
+                        digest = hashlib.sha256(json.dumps(
+                            payload, ensure_ascii=False, sort_keys=True).encode()
+                            ).hexdigest()[:16]
+                        goal_id = 'goal_' + digest
+                        if goal_id not in ids:
+                            ids.add(goal_id)
+                            goals.append(DaqGoal(goal_id, 'product',
+                                                 'search_knowledge', (entity,), None,
+                                                 tuple(sorted(conditions.items()))))
+                    break
+            if len(goals) > 16:
+                raise SchemaExtractionError('schema_goals_expansion_limit')
         kinds = {goal.kind for goal in goals if goal.kind != 'unknown'}
         for requested_mode, requested_variant, requested_channel in requested_modes:
             if not any(goal.capability == 'lookup_spec'
@@ -944,10 +1363,22 @@ class DaqRequestSchema:
             dependency = 'unknown'
         elif image_present and any(goal.capability == 'analyze_image' for goal in goals):
             dependency = 'required_for_answer'
-        language = selected_answer_language or candidate.get('answer_language')
-        if language is None:
-            language = ('en' if re.search(r'[A-Za-z]{2,}', question)
-                        and not re.search(r'[\u3400-\u9fff]', question) else 'zh')
+        # Presentation follows the user's words or explicit UI selection.
+        # SDK symbols and enum names must not make a Chinese question English.
+        if selected_answer_language is not None:
+            language = selected_answer_language
+        elif re.search(r'(?:请|请你)?\s*(?:用|使用|以)\s*英文(?:回答|作答|回复|说明|解释|写|输出)?'
+                       r'|answer\s+in\s+English\b', question, re.IGNORECASE):
+            language = 'en'
+        elif re.search(r'(?:请|请你)?\s*(?:用|使用|以)\s*中文(?:回答|作答|回复|说明|解释|写|输出)?'
+                       r'|answer\s+in\s+Chinese\b', question, re.IGNORECASE):
+            language = 'zh'
+        elif re.search(r'[\u3400-\u9fff]', question):
+            language = 'zh'
+        elif re.search(r'[A-Za-z]{2,}', question):
+            language = 'en'
+        else:
+            language = candidate.get('answer_language') or 'zh'
         if language not in {'zh', 'en'}:
             raise SchemaExtractionError('answer_language_invalid')
         return cls(question, effective, request_kind, tuple(goals), topic_switch,
@@ -1029,6 +1460,14 @@ def extract_request_schema(question: str, *, adapter, prior_user_context: str = 
                 goal.capability == 'lookup_procedure' and
                 'steps' in goal.unmapped_condition_keys for goal in schema.goals):
             raise SchemaExtractionError('schema_step_value_unverified')
+        if not any(goal.capability == 'catalog' for goal in schema.goals):
+            # Product inventory is a governed catalog question. A service
+            # coverage contract may count records but cannot enumerate or
+            # deduplicate product identities.
+            from daq_fae.task_context import prepare_turn
+            baseline = prepare_turn(question)
+            if 'catalog' in baseline.planned_capabilities:
+                raise SchemaExtractionError('schema_missing_catalog_goal')
         if (knowledge is not None and
                 not getattr(knowledge, 'is_candidate_preview', False) and
                 hasattr(knowledge, 'ground_question') and
@@ -1098,6 +1537,10 @@ def extract_request_schema(question: str, *, adapter, prior_user_context: str = 
                       '请按产品与变体逐项补充 `lookup_spec` goal，保留原有其他目标；'
                       '不要把分辨率版本当成测量条件或第二个产品。'
                       if str(exc) == 'schema_missing_explicit_spec_goal' else
+                      '上一次把产品数量或清单问题归入服务覆盖，漏掉了产品目录取证目标。'
+                      '本轮必须列 `product/catalog` goal，并按目录实际返回的实体和产品名计数；'
+                      '服务合同的实体记录数不能代替产品款数。现在只调用结构化工具一次。'
+                      if str(exc) == 'schema_missing_catalog_goal' else
                       '上一次沿用了历史中的 HUB 目标，但本轮明确提到了另一个已核实产品。'
                       '请按本轮产品重新列取证目标；若每口含义不明，应澄清，'
                       '不要用历史 HUB 的单口或总量规格回答。现在只调用结构化工具一次。'

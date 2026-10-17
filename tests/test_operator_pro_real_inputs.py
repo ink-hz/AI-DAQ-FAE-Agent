@@ -12,6 +12,8 @@ from pathlib import Path
 import pytest
 
 from daq_fae.domain_tools import DaqToolBox
+from daq_fae.domain_evidence import DaqEvidencePolicy
+from daq_fae.request_schema import DaqRequestSchema
 from daq_fae.knowledge.adjudication import digest
 from daq_fae.knowledge.code_identity import daq_code_sha
 from daq_fae.knowledge.operator_release import (
@@ -43,7 +45,7 @@ def test_current_25_records_and_pro_rows_formal_loader_static_sentinel(tmp_path)
              PRIVATE / 'pro-offline-reviewed-graph-v6/dependency-bundle.json',
              PRIVATE / 'v6-pro-reviewed-records-prod-ee908.json',
              PRIVATE / 'dev-source-checked-pro-offline-v6.json',
-             PRIVATE / 'v7-ego-pro-identity-alias-row.json')
+             PRIVATE / 'v8-ego-pro-identity-alias-row.json')
     if any(not path.is_file() for path in paths):
         pytest.skip('private reviewed originals absent from this checkout')
     origin = _json(ORIGIN)
@@ -51,9 +53,11 @@ def test_current_25_records_and_pro_rows_formal_loader_static_sentinel(tmp_path)
     prep = _json(paths[3])
     ledger = _json(paths[4])
     alias_row = _json(paths[5])
-    assert alias_row['data']['aliases'] == ['EGO Pro 四目']
-    assert alias_row['source_refs'][-1]['locator'] == {
+    assert alias_row['data']['aliases'] == ['EGO Pro 四目', '四目 EGO']
+    assert alias_row['source_refs'][-2]['locator'] == {
         'kind': 'lines', 'start': 1, 'end': 5}
+    assert alias_row['source_refs'][-1]['locator'] == {
+        'kind': 'lines', 'start': 23, 'end': 39}
     assert len(prep['records']) == 2
     topology = next(row for row in prep['records'] if row['kind'] == 'topology')
     assert topology['data']['sync_target'] == 'unknown'
@@ -158,6 +162,9 @@ def test_current_25_records_and_pro_rows_formal_loader_static_sentinel(tmp_path)
     assert knowledge.ground_question(
         '一台 EGO Pro 四目不连接电脑或手机时，单机采集如何供电？',
         role='internal_fae')['entities'] == ['entity:ego-pro']
+    assert knowledge.ground_question(
+        '四目 EGO 设备端 libobkit 示例怎么编译？',
+        role='internal_fae')['entities'] == ['entity:ego-pro']
     def dispatch(question, tool, arguments, role='internal_fae'):
         return DaqToolBox(question=question, knowledge=knowledge, role=role,
                           requirements=[]).dispatch(tool, arguments)
@@ -167,12 +174,53 @@ def test_current_25_records_and_pro_rows_formal_loader_static_sentinel(tmp_path)
     assert [source['source_id'] for source in result.sources] == [
         'topology:ego-pro-standalone']
     assert result.sources[0]['type'] == 'daq_governed_claim'
+    # The model may paraphrase the grounded Chinese question into an English
+    # tool query. The governed topology still has to be retrieved from the
+    # original question after exact product and operating-scope checks.
+    original = ('一台 EGO Pro 四目不连接电脑或手机时，单机独立采集的'
+                '供电、连接与存储拓扑是什么？')
+    translated = dispatch(original, 'inspect_topology', {
+        'query': 'EGO Pro 四目 standalone capture topology power connection storage no host'})
+    assert translated.status == 'ok'
+    assert [source['source_id'] for source in translated.sources] == [
+        'topology:ego-pro-standalone']
     question = '一台 EGO Pro 四目用本机 TF 卡独立录制，如何开机、开始和停止？'
     result = dispatch(question, 'lookup_procedure',
                       {'task': 'local_recording', 'entity': 'EGO Pro 四目'})
     assert result.status == 'ok'
     assert [source['source_id'] for source in result.sources] == [
         'procedure:ego-pro-standalone']
+    for task, entity in (
+        ('recording local TF card', 'EGO Pro'),
+        ('插卡 开机 开始录制 停止录制 TF 卡本地录制', 'EGO Pro'),
+        ('录制操作步骤 语音提示 绿灯指示灯', 'EGO Pro 四目'),
+    ):
+        paraphrased = dispatch(question, 'lookup_procedure',
+                               {'task': task, 'entity': entity})
+        assert paraphrased.status == 'ok', task
+        assert [source['source_id'] for source in paraphrased.sources] == [
+            'procedure:ego-pro-standalone']
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [
+            {'kind': 'product', 'capability': 'lookup_procedure',
+             'entities': ['EGO Pro 四目'],
+             'conditions': {'task': '本机 TF 卡独立录制'}}]})
+    requirement = {'id': 'recording', 'capability': 'lookup_procedure',
+                   'entities': list(schema.goals[0].entities),
+                   'conditions': schema.goals[0].condition_map()}
+    attributed = DaqToolBox(question=question, knowledge=knowledge,
+                            role='internal_fae', requirements=[requirement]).dispatch(
+                                'lookup_procedure',
+                                {'task': '本机 TF 卡独立录制', 'entity': 'EGO Pro 四目'})
+    assert attributed.status == 'ok'
+    assert attributed.content['matched_requirement_ids'] == ['recording']
+    policy = DaqEvidencePolicy().begin({'requirements': [requirement]})
+    policy.observe('lookup_procedure', attributed)
+    assert policy.status['recording'] == 'satisfied'
+    for medium in ('本地 SSD 录制', 'local SSD recording', '本机 NVMe 录制'):
+        assert dispatch('一台 EGO Pro 四目用' + medium + '，如何开机、开始和停止？',
+                        'lookup_procedure', {'task': medium,
+                                             'entity': 'EGO Pro 四目'}).status == 'not_found'
     assert dispatch(question, 'lookup_procedure',
                     {'task': 'local_recording', 'entity': 'EGO Pro 四目'},
                     role='channel').status == 'not_found'

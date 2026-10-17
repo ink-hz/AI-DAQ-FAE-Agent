@@ -46,6 +46,19 @@ def test_preloop_only_exposes_tools_for_the_product_goals():
     assert allowed_tools_for(visual) == frozenset({'session_state'})
 
 
+@pytest.mark.parametrize('capability', ['sdk_evidence', 'check_software_support'])
+def test_sdk_questions_can_read_release_notes_without_treating_them_as_support(capability):
+    schema = DaqRequestSchema.from_candidate(
+        'OrbbecSDK 2026-09-21 与 2026-09-23 变更日志如何记载 UMI Finger 磁力计？', {
+            'confidence': 'high', 'goals': [
+                {'kind': 'product', 'capability': capability,
+                 'entities': ['UMI Finger']}],
+        })
+    allowed = allowed_tools_for(schema)
+    assert 'search_knowledge' in allowed
+    assert 'read_doc' in allowed
+
+
 class SemanticAdapter:
     def __init__(self, goals):
         self.goals = goals
@@ -56,6 +69,34 @@ class SemanticAdapter:
         assert required_tool == 'submit_daq_request_schema'
         yield {'type': 'tool_call', 'name': required_tool,
                'arguments': {'confidence': 'high', 'goals': self.goals}}
+
+
+def test_generic_family_question_does_not_bind_variant_named_in_negative_clause():
+    from daq_fae.knowledge.dev_candidate import DevCandidateKnowledge
+
+    rows = []
+    for variant in ('1600x1200', '1920x1200'):
+        rows.append({
+            'id': 'entity:ego-' + variant[:4], 'kind': 'entity',
+            'status': 'verified',
+            'scope': {'product': 'ego', 'required_selectors': ['resolution_variant'],
+                      'resolution_variant': variant},
+            'data': {'name': 'EGO', 'entity_type': 'variant'}, 'source_refs': [],
+        })
+    knowledge = DevCandidateKnowledge('candidate-dev-' + 'a' * 64, [], rows, {})
+    question = '泛称 EGO 是否支持 1600×1300@30？能否因此说它只支持 1600×1200？'
+    assert knowledge.ground_question(question)['entities'] == ['entity:ego-1600']
+    adapter = SemanticAdapter([{
+        'kind': 'product', 'capability': 'lookup_spec', 'entities': ['EGO'],
+        'field': 'rgb_max_frame_rate', 'conditions': {'resolution': '1600x1300'},
+    }])
+    prepared = prepare_workflow(
+        question, adapter=adapter, knowledge=knowledge, role='internal_fae',
+        runtime_release='runtime-dev',
+        grounded_targets=knowledge.ground_question(question))
+    requirement = prepared.plan.requirements[0]
+    assert requirement['entities'] == ['EGO']
+    assert requirement['conditions'] == {'resolution': '1600x1300'}
 
 
 def test_service_workflow_has_no_product_evidence_need():

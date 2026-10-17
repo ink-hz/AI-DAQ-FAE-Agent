@@ -1,18 +1,20 @@
 # DAQ SDK knowledge
 
-This is a source-checked **Dev usage catalog** built from the local 2026-10-15 archive. It follows the camera FAE `Knowledge_SDK` split between API/example facts and tested device support. `sdk_evidence` can return these usage records during isolated Dev replay. Exact device, firmware, connection and platform support remains under `check_software_support`; these 22 records do not certify it.
+This is a source-checked SDK usage catalog built from the local 2026-10-15 archive. Its 23 usage records and 17 unique change-note records passed isolated Dev replay and independent semantic review on 2026-10-17, and were staged as immutable release `ee6b77ad30fc8f449cfe59f10d823987347a860f8521308784bfc4f3aadf0805`. Staging is separate from production activation; check production `/health` for the active ID. It follows the camera FAE `Knowledge_SDK` split between API/example facts and tested device support. Exact device, firmware, connection and platform support remains under `check_software_support`; these records do not certify it.
 
 ## Scope
 
 | Layer | Source build | Records | Role |
 | --- | --- | ---: | --- |
-| Host C++ EGO examples | OrbbecSDK 2.9.0, 2026-09-21/23/29 Linux x86_64 packages | 13 | internal FAE |
+| Host C++ EGO examples | OrbbecSDK 2.9.0, 2026-09-21/23/29 Linux x86_64 packages | 14 | internal FAE |
 | Device C API | libobkit 2026-09-09, RK3576/AArch64 | 3 | internal FAE |
 | Android Java API | OrbbecSDK Android Wrapper beta2.2.5, 2026-09-29 | 3 | internal FAE |
 | BLE C++ integration | EgoLowBle 1.1.8, 2026-09-29 Windows x64 and Linux x64 | 2 | internal FAE |
 | iPhoneOS framework integration | OrbbecSDK 2.9.0, 2026-09-29 iOS ARM64 | 1 | internal FAE |
 
-The catalog has 55 source references to exact archive members and line spans. The source archive is ignored by Git and hash verified. The committed JSONL has facts and provenance only, not binary packages. `curated.json` is the human-readable source review input. The manifest binds the generated JSONL and original archive manifest. The 2026-10-16 additions cover one network UID hot-plug example plus source-checked Android Java, BLE and iPhoneOS package guidance. They are not in the active published release until Dev replay and independent answer review pass.
+The catalog has 57 source references to exact archive members and line spans. The source archive is ignored by Git and hash verified. The committed JSONL has facts and provenance only, not binary packages. `curated.json` is the human-readable source review input. The manifest binds the generated JSONL and original archive manifest. The 2026-10-16 additions cover network UID and magnetometer examples plus source-checked Android Java, BLE and iPhoneOS package guidance. Their frozen Dev replay and independent answer review are recorded in the [2026-10-17 release review](../docs/reviews/2026-10-17-daq-knowledge-dev-release.md).
+
+The `answer` field in `curated.json` and `release_notes_curated.json` contains only source-supported statements from the cited members or log lines. Reviewer inferences about what a source cannot prove belong in the independent review and the typed `device_support` / `evidence_scope` boundary, not in that field; otherwise an answer can misattribute reviewer reasoning to the original document. Keep source paths and line numbers in `source_refs`, never in answer prose. A changed statement gets a new record hash and must be independently reviewed and replayed before activation.
 
 Each generated record also carries code identifiers found within its selected source spans. The answer policy permits those identifiers in SDK usage prose while still rejecting internal record IDs and source paths. These identifiers are not a `code_verified` complete snippet and do not authorize a generated copyable program.
 
@@ -22,7 +24,7 @@ The archived packages outside this first slice are listed in [`audit/coverage_ga
 
 `material_inventory.jsonl` is a separate offline asset index for all 143 originals. It records path, hash, size, platform/date hints, byte duplicates and intake scope; every row has `device_support=unknown` and `download_authority=unverified`. A local FAE reviewer can query artifact identity with `scripts.build_daq_sdk_material_inventory --query EgoLowBle` after verifying the original archive. This index is not loaded into SDK usage coverage or software compatibility checks.
 
-`Release_Notes.jsonl` is a separate Dev-candidate catalog of what the archived SDK, EgoViewer and firmware change logs **state**. The 22 log files yield 17 distinct file hashes: five Linux/Windows Viewer log pairs have identical bytes and count as one statement each. Each record binds an exact file hash and line span, build, platform and `internal_fae` role. Search results have `evidence_scope=release_note_statement_only` and `device_support=unknown`; they cannot satisfy an SDK API goal or `check_software_support`. The two `.url` shortcuts are absent from this catalog. These notes require frozen Dev replay and independent answer review before publication.
+`Release_Notes.jsonl` is a separate catalog of what the archived SDK, EgoViewer and firmware change logs **state**. The 22 log files yield 17 distinct file hashes: five Linux/Windows Viewer log pairs have identical bytes and count as one statement each. Each record binds an exact file hash and line span, build, platform and `internal_fae` role. Search results have `evidence_scope=release_note_statement_only` and `device_support=unknown`; they cannot satisfy an SDK API goal or `check_software_support`. The two `.url` shortcuts are absent from this catalog. These notes passed frozen Dev replay and independent answer review in the release named above.
 
 ## Rebuild and check
 

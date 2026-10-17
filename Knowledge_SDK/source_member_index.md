@@ -68,6 +68,11 @@
 
 - OrbbecSDK_v2.9.0_202609291326_7947205a_linux_x86_64/examples/src/6.ego/ego_direction_key.cpp:84-132 (member SHA-256 `6d729380c80adbe4ebf9fabca35c54ab51f7478b1a55e28e8622dbb78092082d`)
 
+## daq-sdk-host-magnetometer-sample-023
+
+- OrbbecSDK_v2.9.0_202609291326_7947205a_linux_x86_64/examples/src/6.ego/magnetometer.cpp:4-47 (member SHA-256 `21145f6ad6ae194065323cd8160bbacdbe12f213a040d51506aba3d6da392cef`)
+- OrbbecSDK_v2.9.0_202609291326_7947205a_linux_x86_64/examples/src/6.ego/CMakeLists.txt:17-18 (member SHA-256 `e1337da0838740a51bf1db0ba9b3e8dd0f1b30de715995af341346059b020593`)
+
 ## daq-sdk-host-net-uid-hotplug-016
 
 - OrbbecSDK_v2.9.0_202609291326_7947205a_linux_x86_64/examples/src/6.ego/ego_net_uid_hotplug.cpp:42-95 (member SHA-256 `1e7d9db9d0bdfe6e9da3f702ad50b6ffab128e34da649b1639be30efe3c4ab66`)

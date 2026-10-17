@@ -14,6 +14,26 @@ def test_service_identity_is_not_planned_as_missing_product_evidence():
     assert plan.requirements[0]['evidence_class'] == 'service_contract'
 
 
+def test_firmware_log_goals_do_not_inherit_sdk_version_from_support_question():
+    from daq_fae.request_schema import DaqRequestSchema
+    question = ('双目 EGO 固件日志 v1.1.9 与 v1.1.10 分别记了什么？'
+                '这能证明与 OrbbecSDK 2.9.0 已配对吗？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [
+            {'kind': 'product', 'capability': 'search_knowledge',
+             'entities': ['EGO'], 'conditions': {'firmware_version': version}}
+            for version in ('v1.1.9', 'v1.1.10')
+        ] + [{'kind': 'product', 'capability': 'check_software_support',
+              'entities': ['EGO'], 'conditions': {'sdk_version': '2.9.0'}}]})
+    plan = prepare_turn(question, request_schema=schema)
+    logs = [item for item in plan.requirements
+            if item['capability'] == 'search_knowledge']
+    assert len(logs) == 2
+    assert {item['conditions']['firmware_version'] for item in logs} == {
+        'v1.1.9', 'v1.1.10'}
+    assert all('sdk_version' not in item['conditions'] for item in logs)
+
+
 def test_service_and_product_request_keeps_two_independent_goals():
     from daq_fae.request_schema import DaqRequestSchema
     question = '介绍一下你自己，再说说 EGO 双目 1600×1200 版本的水平视场角。'

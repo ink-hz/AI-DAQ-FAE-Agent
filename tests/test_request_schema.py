@@ -1,6 +1,229 @@
 import pytest
+import json
+from pathlib import Path
 
 from daq_fae.request_schema import DaqRequestSchema, SchemaExtractionError, extract_request_schema
+from daq_fae.knowledge.sdk_catalog import SdkCatalog
+
+
+def test_dated_sdk_sample_does_not_silently_skip_feature_change_history():
+    archive = Path('data/knowledge/local_archive/sdk-originals-1015-local-20261015')
+    if not archive.is_dir():
+        pytest.skip('local ignored SDK originals unavailable')
+    catalog = SdkCatalog.load(Path('Knowledge_SDK'), archive)
+    question = ('2026-09-29 SDK 包里还带有 magnetometer.cpp，'
+                '就能确定 UMI Finger 磁力计仍可用吗？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [
+            {'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+             'conditions': {'sdk_release_date': '2026-09-29',
+                            'source_files': ['magnetometer.cpp']}},
+            {'kind': 'product', 'capability': 'check_software_support',
+             'entities': ['UMI Finger'],
+             'conditions': {'feature': 'magnetometer'}},
+        ],
+    }, sdk_catalog=catalog)
+    history = [goal for goal in schema.goals
+               if goal.capability == 'search_knowledge']
+    assert len(history) == 1
+    assert history[0].entities == ('UMI Finger',)
+    assert history[0].condition_map() == {
+        'sdk': 'OrbbecSDK', 'feature': 'magnetometer'}
+    assert history[0].critical is True
+
+
+def test_release_note_document_type_is_redundant_to_search_goal():
+    question = '四目 EGO Pro 固件 v1.0.7 的变更日志写了什么？'
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [{
+            'kind': 'product', 'capability': 'search_knowledge',
+            'entities': ['四目 EGO Pro'],
+            'conditions': {'firmware_version': 'v1.0.7',
+                           'document_type': 'changelog'},
+        }],
+    })
+    assert schema.goals[0].condition_map() == {'firmware_version': 'v1.0.7'}
+    assert schema.goals[0].unmapped_condition_keys == ()
+    wrong = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [{
+            'kind': 'product', 'capability': 'search_knowledge',
+            'entities': ['四目 EGO Pro'],
+            'conditions': {'firmware_version': 'v1.0.7',
+                           'document_type': 'datasheet'},
+        }],
+    })
+    assert wrong.goals[0].unmapped_condition_keys == ('document_type',)
+
+
+def _reviewed_sdk_row(kb_id: str) -> SdkCatalog:
+    row = next(json.loads(line) for line in Path('Knowledge_SDK/SDK_Knowledge.jsonl').read_text().splitlines()
+               if json.loads(line)['kb_id'] == kb_id)
+    return SdkCatalog([row], {})
+
+
+def test_network_ego_sdk_usage_keeps_product_and_network_scope():
+    question = ('2026-09-29 Android Wrapper beta2.2.5 的 Java API，网络 EGO 的 '
+                'SD 卡文件信息与本地下载该怎么调用？这证明具体固件支持吗？')
+    catalog = _reviewed_sdk_row('daq-sdk-android-sdcard-018')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'medium', 'goals': [
+            {'kind': 'product', 'capability': 'sdk_evidence',
+             'entities': ['网络 EGO'],
+             'conditions': {'language': 'java', 'platform': 'android',
+                            'sdk': 'Android Wrapper',
+                            'sdk_release_date': '2026-09-29',
+                            'sdk_version': 'beta2.2.5',
+                            'task': 'sd_card_file_info_and_local_download'}},
+            {'kind': 'product', 'capability': 'check_software_support',
+             'entities': ['网络 EGO'], 'conditions': {}},
+        ],
+    }, sdk_catalog=catalog)
+    usage = next(goal for goal in schema.goals if goal.capability == 'sdk_evidence')
+    assert usage.entities == ('EGO',)
+    assert usage.condition_map()['connection'] == 'network'
+    assert next(goal for goal in schema.goals if goal.capability ==
+                'check_software_support').entities == ('网络 EGO',)
+
+    from daq_fae.domain_tools import DaqToolBox
+    catalog.manifest['records_sha256'] = '0' * 64
+
+    class Knowledge:
+        release_id = 'dev-sdk'
+        sdk_catalog = catalog
+
+        def records_for(self, role):
+            return []
+
+        def sections_for(self, role):
+            return []
+
+    result = DaqToolBox(question=question, knowledge=Knowledge(),
+                        role='internal_fae', requirements=[
+                            {'id': 'usage', 'capability': 'sdk_evidence',
+                             'entities': list(usage.entities),
+                             'conditions': usage.condition_map()},
+                        ]).dispatch('sdk_evidence', {'query': question})
+    assert result.status == 'ok'
+    assert result.content['matched_requirement_ids'] == ['usage']
+
+
+def test_sdk_schema_drops_model_metadata_when_exact_apis_ground_the_source():
+    question = ('Android Wrapper 中 SAVING 和 RECORD_SAVED 有何区别？'
+                'setEgoStateCallback 与 setEgoRecordingResultCallback 各适合什么？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [{
+            'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+            'conditions': {
+                'feature': 'saving_vs_record_saved', 'standalone': True,
+                'steps': ['sdk="android_wrapper"', 'platform="android"',
+                          'api=["setEgoStateCallback","setEgoRecordingResultCallback"]'],
+                'task': 'android_recording_state_callback_semantics',
+            },
+        }],
+    }, sdk_catalog=_reviewed_sdk_row('daq-sdk-android-record-state-019'))
+    goal = schema.goals[0]
+    assert goal.condition_map() == {}
+    assert goal.unmapped_condition_keys == ()
+    from daq_fae.domain_tools import DaqToolBox
+    catalog = _reviewed_sdk_row('daq-sdk-android-record-state-019')
+    catalog.manifest['records_sha256'] = '0' * 64
+
+    class Knowledge:
+        release_id = 'dev-sdk'
+        sdk_catalog = catalog
+
+        def records_for(self, role):
+            return []
+
+        def sections_for(self, role):
+            return []
+
+    result = DaqToolBox(question=question, knowledge=Knowledge(),
+                        role='internal_fae', requirements=[
+                            {'id': 'usage', 'capability': 'sdk_evidence',
+                             'entities': [], 'conditions': goal.condition_map()},
+                        ]).dispatch('sdk_evidence', {'query': question})
+    assert result.status == 'ok'
+    assert result.content['matched_requirement_ids'] == ['usage']
+
+
+def test_sdk_uid_callback_task_is_not_mistaken_for_an_api_symbol():
+    question = ('用 2026-09-29 Linux x86_64 OrbbecSDK 2.9.0 C++ 示例，'
+                '怎样核对网络设备移除回调中的 UID？不要推断我的设备和固件已经兼容。')
+    catalog = _reviewed_sdk_row('daq-sdk-host-net-uid-hotplug-016')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [{
+            'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+            'conditions': {
+                'sdk': 'OrbbecSDK', 'sdk_version': '2.9.0',
+                'sdk_release_date': '2026-09-29', 'platform': 'linux_x86_64',
+                'language': 'c++', 'api': 'network_device_removal_callback',
+                'task': 'verify_uid_in_network_device_removal_callback',
+            },
+        }],
+    }, sdk_catalog=catalog)
+    goal = schema.goals[0]
+    assert 'api' not in goal.condition_map()
+    assert goal.condition_map()['task'] == 'verify_uid_in_network_device_removal_callback'
+    assert goal.unmapped_condition_keys == ()
+    from daq_fae.domain_tools import DaqToolBox
+    catalog.manifest['records_sha256'] = '0' * 64
+
+    class Knowledge:
+        release_id = 'dev-sdk'
+        sdk_catalog = catalog
+
+        def records_for(self, role):
+            return []
+
+        def sections_for(self, role):
+            return []
+
+    result = DaqToolBox(question=question, knowledge=Knowledge(),
+                        role='internal_fae', requirements=[
+                            {'id': 'usage', 'capability': 'sdk_evidence',
+                             'entities': [], 'conditions': goal.condition_map()},
+                        ]).dispatch('sdk_evidence', {'query': question})
+    assert result.status == 'ok'
+    assert result.content['matched_requirement_ids'] == ['usage']
+
+
+def test_sdk_schema_keeps_real_operational_steps_and_explicit_standalone():
+    question = ('Android Wrapper 单机独立运行时，先开机再开始录制的步骤是什么？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [{
+            'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+            'conditions': {'standalone': True, 'steps': ['开机', '开始录制']},
+        }],
+    }, sdk_catalog=_reviewed_sdk_row('daq-sdk-android-record-state-019'))
+    assert schema.goals[0].condition_map() == {
+        'standalone': True, 'steps': ['开机', '开始录制']}
+
+
+@pytest.mark.parametrize('standalone', [True, False])
+def test_identity_goal_ignores_unasked_standalone_model_default(standalone):
+    question = ('泛称 EGO 是否支持 1600×1300@30？'
+                '能否因此说它只支持 1600×1200？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'medium', 'goals': [
+            {'kind': 'product', 'capability': 'resolve_entity',
+             'entities': ['EGO'], 'conditions': {'standalone': standalone}},
+            {'kind': 'product', 'capability': 'lookup_spec',
+             'entities': ['EGO'], 'field': 'rgb_max_frame_rate',
+             'conditions': {'resolution': '1600x1300'}},
+        ],
+    })
+    assert schema.goals[0].condition_map() == {}
+
+
+def test_identity_goal_keeps_explicit_standalone_as_separate_context():
+    with pytest.raises(SchemaExtractionError, match='schema_identity_context_condition'):
+        DaqRequestSchema.from_candidate('EGO 单机独立采集时是什么产品？', {
+            'confidence': 'medium', 'goals': [{
+                'kind': 'product', 'capability': 'resolve_entity',
+                'entities': ['EGO'], 'conditions': {'standalone': True},
+            }],
+        })
 
 
 def test_repeated_software_goal_does_not_fail_entire_request():
@@ -20,6 +243,112 @@ def test_repeated_software_goal_does_not_fail_entire_request():
     assert [goal.capability for goal in schema.goals] == [
         'check_software_support', 'sdk_evidence', 'official_links']
     assert len({goal.id for goal in schema.goals}) == 3
+
+
+def test_sdk_source_file_is_not_misclassified_as_export_output():
+    question = '2026-09-29 OrbbecSDK 包里还有 magnetometer.cpp 示例吗？'
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [{
+            'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+            'conditions': {'sdk': 'OrbbecSDK', 'sdk_release_date': '2026-09-29',
+                           'export_files': 'magnetometer.cpp'},
+        }],
+    })
+    assert schema.goals[0].condition_map() == {
+        'sdk': 'OrbbecSDK', 'sdk_release_date': '2026-09-29',
+        'source_files': ['magnetometer.cpp']}
+
+
+def test_sdk_package_file_goal_is_separate_from_device_support_goal():
+    question = ('2026-09-29 SDK 包里还带有 magnetometer.cpp，'
+                '就能确定 UMI Finger 磁力计仍可用吗？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [
+            {'kind': 'product', 'capability': 'sdk_evidence',
+             'entities': ['UMI Finger'],
+             'conditions': {'sdk_release_date': '2026-09-29',
+                            'source_files': ['magnetometer.cpp']}},
+            {'kind': 'product', 'capability': 'check_software_support',
+             'entities': ['UMI Finger'],
+             'conditions': {'feature': 'magnetometer'}},
+        ],
+    })
+    sdk = next(goal for goal in schema.goals if goal.capability == 'sdk_evidence')
+    support = next(goal for goal in schema.goals if goal.capability ==
+                   'check_software_support')
+    assert sdk.entities == ()
+    assert support.entities == ('UMI Finger',)
+
+
+def test_viewer_build_date_alias_keeps_dated_note_goal_mapped():
+    question = ('Android EgoViewer 都显示 v1.0.11，2026-09-23 与 2026-09-29 '
+                '的网络设备枚举行为能当作相同吗？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [
+            {'kind': 'product', 'capability': 'search_knowledge',
+             'entities': ['EgoViewer'],
+             'conditions': {'viewer_version': 'v1.0.11', 'platform': 'android',
+                            'build_date': date}}
+            for date in ('2026-09-23', '2026-09-29')
+        ],
+    })
+    assert [goal.condition_map()['viewer_release_date'] for goal in schema.goals] == [
+        '2026-09-23', '2026-09-29']
+    assert all(not goal.unmapped_condition_keys for goal in schema.goals)
+
+
+def test_viewer_log_model_sdk_aliases_keep_exact_viewer_build_goals():
+    question = ('Android EgoViewer 都显示 v1.0.11，2026-09-23 与 2026-09-29 '
+                '的网络设备枚举行为能当作相同吗？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [
+            {'kind': 'product', 'capability': 'search_knowledge',
+             'entities': ['EgoViewer'],
+             'conditions': {'feature': 'network_device_enumeration',
+                            'platform': 'android', 'sdk': 'egoviewer',
+                            'sdk_release_date': date, 'sdk_version': '1.0.11'}}
+            for date in ('2026-09-23', '2026-09-29')
+        ],
+    })
+    assert [goal.condition_map() for goal in schema.goals] == [
+        {'feature': 'network_device_enumeration', 'platform': 'android',
+         'viewer_release_date': date, 'viewer_version': '1.0.11'}
+        for date in ('2026-09-23', '2026-09-29')]
+    assert all(not goal.unmapped_condition_keys for goal in schema.goals)
+
+
+def test_firmware_log_master_slave_aspect_is_a_grounded_note_feature():
+    question = ('双目 EGO 固件变更日志在 v1.1.9 与 v1.1.10 分别记载了哪些'
+                '主从/同步修改？这些历史说明能证明与 OrbbecSDK 2.9.0 已配对实测吗？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [
+            {'kind': 'product', 'capability': 'search_knowledge',
+             'entities': ['EGO'],
+             'conditions': {'aspect': 'master_slave_sync',
+                            'firmware_version': version}}
+            for version in ('v1.1.9', 'v1.1.10')
+        ]})
+    assert [goal.condition_map() for goal in schema.goals] == [
+        {'feature': 'master_slave_sync', 'firmware_version': version}
+        for version in ('v1.1.9', 'v1.1.10')]
+    assert all(not goal.unmapped_condition_keys for goal in schema.goals)
+
+
+def test_android_wrapper_alias_and_slash_separated_apis_are_grounded():
+    question = ('Android Java Wrapper 的 exportFirmwareLogs 与 Linux C++ OrbbecSDK '
+                'startFirmwareLogExport/stopFirmwareLogExport 如何调用？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [
+            {'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+             'conditions': {'sdk': 'orbbecsdk_java_wrapper',
+                            'api': 'exportFirmwareLogs'}},
+            {'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+             'conditions': {'sdk': 'OrbbecSDK',
+                            'api': 'startFirmwareLogExport/stopFirmwareLogExport'}},
+        ]})
+    assert all(not goal.unmapped_condition_keys for goal in schema.goals)
+    assert schema.goals[1].condition_map()['api'] == [
+        'startFirmwareLogExport', 'stopFirmwareLogExport']
 
 
 def test_identity_goal_rejects_task_context_as_an_evidence_condition():
@@ -62,6 +391,23 @@ def test_normalization_collision_cannot_erase_distinct_software_fields():
                 {**shared, 'field': 'sdk_version'},
             ],
         })
+
+
+def test_sdk_status_question_discards_spurious_non_spec_field():
+    question = ('Android Wrapper 中 SAVING 和 RECORD_SAVED 有何区别？'
+                'setEgoStateCallback 与 setEgoRecordingResultCallback 各适合什么？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [{
+            'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+            'field': 'SAVING / RECORD_SAVED',
+            'conditions': {'sdk': 'Android Wrapper', 'platform': 'android',
+                           'api': 'setEgoStateCallback'},
+        }],
+    })
+    assert len(schema.goals) == 1
+    assert schema.goals[0].field is None
+    assert schema.goals[0].capability == 'sdk_evidence'
+    assert schema.goals[0].condition_map()['api'] == 'setEgoStateCallback'
 
 
 def test_normalization_collision_cannot_erase_unknown_goal_detail():
@@ -186,40 +532,34 @@ def test_peer_variant_is_not_copied_to_other_product_or_comparison():
 
 
 def test_generic_ego_output_modes_do_not_become_reviewed_variant_selectors():
-    from daq_fae.task_context import prepare_turn
     question = ('泛称 EGO 是否支持 1600×1300@30？能否因此说它只支持 '
                 '1600×1200？请按已核对的机型、变体、固件与构建范围回答。')
-    schema = DaqRequestSchema.from_candidate(question, {
-        'confidence': 'medium', 'goals': [
-            {'kind': 'product', 'capability': 'lookup_spec',
-             'entities': ['EGO'], 'field': 'rgb_max_frame_rate',
-             'conditions': {'resolution_variant': '1600x1300'}},
-            {'kind': 'product', 'capability': 'lookup_spec',
-             'entities': ['EGO'], 'field': 'resolution_options',
-             'conditions': {}},
-        ],
-    })
-    assert len(schema.goals) == 2
-    assert schema.goals[0].condition_map()['resolution_variant'] == '1600x1300'
-    assert 'resolution_variant' in schema.goals[0].unmapped_condition_keys
-    assert schema.goals[1].condition_map() == {}
-    assert prepare_turn(question, request_schema=schema).requirements[0]['reason'] == \
-        'unmapped_condition_unverified'
+    with pytest.raises(SchemaExtractionError, match='schema_missing_measurement_mode'):
+        DaqRequestSchema.from_candidate(question, {
+            'confidence': 'medium', 'goals': [
+                {'kind': 'product', 'capability': 'lookup_spec',
+                 'entities': ['EGO'], 'field': 'rgb_max_frame_rate',
+                 'conditions': {'resolution_variant': '1600x1300'}},
+                {'kind': 'product', 'capability': 'lookup_spec',
+                 'entities': ['EGO'], 'field': 'resolution_options',
+                 'conditions': {}},
+            ],
+        })
 
 
 def test_generic_ego_output_mode_cannot_borrow_published_1200_variant():
     question = 'EGO 只支持 1600×1200 吗？1600×1300@30 能不能用？'
-    schema = DaqRequestSchema.from_candidate(question, {
-        'confidence': 'medium', 'goals': [
-            {'kind': 'product', 'capability': 'lookup_spec',
-             'entities': ['EGO'], 'field': 'rgb_max_frame_rate',
-             'conditions': {'resolution_variant': '1600x1200'}},
-            {'kind': 'product', 'capability': 'lookup_spec',
-             'entities': ['EGO'], 'field': 'resolution_options',
-             'conditions': {}},
-        ],
-    })
-    assert 'resolution_variant' in schema.goals[0].unmapped_condition_keys
+    with pytest.raises(SchemaExtractionError, match='schema_missing_measurement_mode'):
+        DaqRequestSchema.from_candidate(question, {
+            'confidence': 'medium', 'goals': [
+                {'kind': 'product', 'capability': 'lookup_spec',
+                 'entities': ['EGO'], 'field': 'rgb_max_frame_rate',
+                 'conditions': {'resolution_variant': '1600x1200'}},
+                {'kind': 'product', 'capability': 'lookup_spec',
+                 'entities': ['EGO'], 'field': 'resolution_options',
+                 'conditions': {}},
+            ],
+        })
 
 
 def test_single_ego_variant_does_not_scope_unrelated_umi_goal():
@@ -836,6 +1176,79 @@ def test_field02_fps_target_is_not_a_claim_measurement_condition():
     }
 
 
+def test_spec_goal_keeps_user_resolution_when_model_encodes_it_as_step():
+    from daq_fae.task_context import prepare_turn
+    question = '泛称 EGO 是否支持 1600×1300@30？能否因此说它只支持 1600×1200？'
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [{
+            'kind': 'product', 'capability': 'lookup_spec',
+            'entities': ['EGO'], 'field': 'rgb_max_frame_rate',
+            'conditions': {'steps': ['resolution=1600x1300']},
+        }],
+    })
+    goal, = schema.goals
+    assert goal.condition_map() == {'resolution': '1600x1300'}
+    requirement, = prepare_turn(question, request_schema=schema).requirements
+    assert requirement['conditions']['resolution'] == '1600x1300'
+    assert 'steps' not in requirement.get('question_constraints', {})
+
+
+def test_spec_goal_drops_unasked_standalone_false_while_recovering_mode():
+    question = '泛称 EGO 是否支持 1600×1300@30？能否因此说它只支持 1600×1200？'
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [{
+            'kind': 'product', 'capability': 'lookup_spec',
+            'entities': ['EGO'], 'field': 'rgb_max_frame_rate',
+            'conditions': {'standalone': False,
+                           'steps': ['resolution=1600x1300']},
+        }],
+    })
+    assert schema.goals[0].condition_map() == {'resolution': '1600x1300'}
+
+
+def test_procedure_drops_model_inferred_no_host_from_independent_recording():
+    question = ('一台 EGO Pro 四目用本机 TF 卡独立录制：从断电插卡、开机到开始和停止录制，'
+                '应按什么顺序操作？各步的语音和绿灯状态如何核对？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [{
+            'kind': 'product', 'capability': 'lookup_procedure',
+            'entities': ['EGO Pro 四目'],
+            'conditions': {'standalone': True, 'host_connection': 'none',
+                           'recording_mode': 'local_tf_card',
+                           'steps': ['insert_card_power_off', 'power_on',
+                                     'start_recording', 'stop_recording'],
+                           'indicators': ['voice_prompt', 'green_led']},
+        }],
+    })
+    goal = schema.goals[0]
+    assert 'host_connection' not in goal.condition_map()
+    assert 'host_connection' not in goal.unmapped_condition_keys
+
+
+def test_spec_goal_rejects_other_mentioned_resolution_as_mode_target():
+    question = '泛称 EGO 是否支持 1600×1300@30？能否因此说它只支持 1600×1200？'
+    with pytest.raises(SchemaExtractionError, match='schema_spec_resolution_target_conflict'):
+        DaqRequestSchema.from_candidate(question, {
+            'confidence': 'high', 'goals': [{
+                'kind': 'product', 'capability': 'lookup_spec',
+                'entities': ['EGO'], 'field': 'rgb_max_frame_rate',
+                'conditions': {'steps': ['resolution=1600x1200']},
+            }],
+        })
+
+
+def test_at_fps_mode_is_required_even_without_the_word_fps():
+    question = '泛称 EGO 是否支持 1600×1300@30？能否因此说它只支持 1600×1200？'
+    with pytest.raises(SchemaExtractionError, match='schema_missing_measurement_mode'):
+        DaqRequestSchema.from_candidate(question, {
+            'confidence': 'high', 'goals': [{
+                'kind': 'product', 'capability': 'lookup_spec',
+                'entities': ['EGO'], 'field': 'rgb_max_frame_rate',
+                'conditions': {},
+            }],
+        })
+
+
 def test_field01_capture_task_does_not_filter_static_fov_claim():
     from daq_fae.task_context import prepare_turn
     question = 'EGO 双目 1600×1200 版本做手部动作采集，水平视场角是多少？'
@@ -1321,6 +1734,22 @@ def test_english_question_requests_english_presentation():
     assert schema.answer_language == 'en'
 
 
+def test_chinese_sdk_question_with_english_api_names_stays_chinese():
+    candidate = {'confidence': 'high', 'answer_language': 'en', 'goals': [{
+        'kind': 'product', 'capability': 'sdk_evidence',
+    }]}
+    question = ('Android Wrapper 中 SAVING 和 RECORD_SAVED 有何区别？'
+                'setEgoStateCallback 与 setEgoRecordingResultCallback 各适合什么？')
+    assert DaqRequestSchema.from_candidate(question, candidate).answer_language == 'zh'
+    assert DaqRequestSchema.from_candidate(
+        '请用英文回答：SAVING 和 RECORD_SAVED 有何区别？', candidate,
+    ).answer_language == 'en'
+    assert DaqRequestSchema.from_candidate(
+        '请用英文回答：SAVING 和 RECORD_SAVED 有何区别？', candidate,
+        selected_answer_language='zh',
+    ).answer_language == 'zh'
+
+
 def test_selected_answer_language_overrides_model_and_question_language():
     candidate = {'confidence': 'high', 'answer_language': 'zh', 'goals': [
         {'kind': 'service', 'capability': 'service_identity'}]}
@@ -1473,6 +1902,192 @@ def test_schema_retry_explains_normalization_collision_for_software_components()
         'check_software_support', 'sdk_evidence', 'official_links']
     assert len(adapter.calls) == 2
     assert '非规格目标不要填写 field' in adapter.calls[1][0][0]['content']
+
+
+def test_product_count_cannot_be_reduced_to_service_coverage():
+    question = '你知道多少款数采产品'
+    def event(goals):
+        return [{'type': 'tool_call', 'name': 'submit_daq_request_schema',
+                 'arguments': {'confidence': 'high', 'goals': goals}}]
+    adapter = SequencedSchemaAdapter([
+        event([{'kind': 'service', 'capability': 'service_coverage'}]),
+        event([{'kind': 'product', 'capability': 'catalog'}]),
+    ])
+    schema = extract_request_schema(question, adapter=adapter)
+    assert [goal.capability for goal in schema.goals] == ['catalog']
+    assert len(adapter.calls) == 2
+    assert 'catalog' in adapter.calls[1][0][0]['content']
+
+
+def test_catalog_ignores_unasked_default_standalone_false():
+    question = '你们有哪些数采产品？请按已发布资料列出名称。'
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [
+            {'kind': 'product', 'capability': 'catalog',
+             'conditions': {'standalone': False}},
+            {'kind': 'service', 'capability': 'service_coverage'},
+        ],
+    })
+    catalog = next(goal for goal in schema.goals if goal.capability == 'catalog')
+    assert catalog.condition_map() == {}
+
+
+def test_sdk_package_usage_ignores_unasked_default_standalone_false():
+    question = ('用 2026-09-29 Linux x86_64 OrbbecSDK 2.9.0 C++ 示例，'
+                '怎样核对网络设备移除回调中的 UID？不要推断设备固件兼容。')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [{
+            'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+            'conditions': {'sdk': 'OrbbecSDK', 'sdk_version': '2.9.0',
+                           'sdk_release_date': '2026-09-29',
+                           'platform': 'linux_x86_64', 'language': 'c++',
+                           'feature': 'network_device_enumeration',
+                           'task': 'check_uid_in_network_device_removal_callback',
+                           'standalone': False},
+        }],
+    })
+    assert schema.goals[0].condition_map() == {
+        'sdk': 'OrbbecSDK', 'sdk_version': '2.9.0',
+        'sdk_release_date': '2026-09-29', 'platform': 'linux_x86_64',
+        'language': 'c++', 'feature': 'network_device_enumeration',
+        'task': 'check_uid_in_network_device_removal_callback',
+    }
+
+
+def test_device_side_libobkit_build_goal_drops_unasked_standalone_and_maps_platform():
+    question = ('四目 EGO 设备端 libobkit 示例怎么编译和部署？'
+                '它能和任意整机镜像搭配吗？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'medium', 'goals': [
+            {'kind': 'product', 'capability': 'sdk_evidence',
+             'entities': ['四目 EGO'],
+             'conditions': {'platform': 'device', 'sdk': 'libobkit',
+                            'standalone': True, 'task': 'compile_and_deploy'}},
+            {'kind': 'product', 'capability': 'check_software_support',
+             'entities': ['EGO'], 'conditions': {'sdk': 'libobkit'}},
+        ],
+    }, sdk_catalog=_reviewed_sdk_row('daq-sdk-device-build-012'))
+    sdk_goal = next(goal for goal in schema.goals
+                    if goal.capability == 'sdk_evidence')
+    assert sdk_goal.condition_map() == {
+        'platform': 'device_side', 'sdk': 'libobkit',
+        'task': 'compile_and_deploy',
+    }
+    assert sdk_goal.unmapped_condition_keys == ()
+
+
+def test_umi_note_history_encoded_selectors_are_typed_not_operating_steps():
+    question = ('OrbbecSDK 2026-09-21 与 2026-09-23 两份变更日志分别如何记载 '
+                'UMI Finger 磁力计？2026-09-29 包中仍有 magnetometer.cpp，'
+                '能据此说后续构建已恢复或设备已实测吗？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [
+            {'kind': 'product', 'capability': 'search_knowledge',
+             'entities': ['UMI Finger'], 'conditions': {'steps': [
+                 'sdk=OrbbecSDK', 'sdk_release_date=2026-09-21',
+                 'feature=magnetometer']}},
+            {'kind': 'product', 'capability': 'search_knowledge',
+             'entities': ['UMI Finger'], 'conditions': {'steps': [
+                 'sdk=OrbbecSDK', 'sdk_release_date=2026-09-23',
+                 'feature=magnetometer']}},
+            {'kind': 'product', 'capability': 'sdk_evidence',
+             'entities': ['UMI Finger'], 'conditions': {'steps': [
+                 'sdk=OrbbecSDK', 'sdk_release_date=2026-09-29',
+                 'source_files=magnetometer.cpp']}},
+            {'kind': 'product', 'capability': 'check_software_support',
+             'entities': ['UMI Finger'], 'conditions': {'steps': [
+                 'sdk=OrbbecSDK', 'feature=magnetometer']}},
+        ],
+    }, sdk_catalog=_reviewed_sdk_row('daq-sdk-host-magnetometer-sample-023'))
+    assert [goal.condition_map() for goal in schema.goals] == [
+        {'sdk': 'OrbbecSDK', 'sdk_release_date': '2026-09-21',
+         'feature': 'magnetometer'},
+        {'sdk': 'OrbbecSDK', 'sdk_release_date': '2026-09-23',
+         'feature': 'magnetometer'},
+        {'sdk': 'OrbbecSDK', 'sdk_release_date': '2026-09-29',
+         'source_files': ['magnetometer.cpp']},
+        {'sdk': 'OrbbecSDK', 'feature': 'magnetometer'},
+    ]
+    assert all(not goal.unmapped_condition_keys for goal in schema.goals)
+    assert next(goal for goal in schema.goals
+                if goal.capability == 'sdk_evidence').entities == ()
+
+
+def test_ble_linux_package_goals_share_reviewed_sdk_usage_scope():
+    question = ('EgoLowBle 1.1.8 Linux x64 包提供什么 demo 和构建资料？'
+                '预编译 demo 是否必定包含？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'medium', 'goals': [
+            {'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+             'conditions': {'sdk': 'EgoLowBle', 'sdk_version': '1.1.8',
+                            'platform': 'linux_x64',
+                            'task': 'demo_and_build_materials'}},
+            {'kind': 'product', 'capability': 'search_knowledge', 'entities': [],
+             'conditions': {'sdk': 'EgoLowBle', 'sdk_version': '1.1.8',
+                            'platform': 'linux_x64',
+                            'feature': 'prebuilt_demo_inclusion'}},
+        ],
+    }, sdk_catalog=_reviewed_sdk_row('daq-sdk-ble-linux-install-021'))
+    assert [goal.capability for goal in schema.goals] == [
+        'sdk_evidence', 'sdk_evidence']
+    assert [goal.condition_map().get('task') or goal.condition_map().get('feature')
+            for goal in schema.goals] == ['inspect_package', 'inspect_package']
+    assert all(not goal.unmapped_condition_keys for goal in schema.goals)
+
+
+def test_ios_package_phrases_bind_reviewed_framework_and_simulator_scope():
+    question = ('2026-09-29 OrbbecSDK 2.9.0 iOS 包应如何嵌入 framework？'
+                '这个包是否包含 Simulator 产物、能否据此确认 EGO 固件兼容？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [
+            {'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+             'conditions': {'sdk': 'OrbbecSDK', 'sdk_version': '2.9.0',
+                            'platform': 'ios', 'task': 'framework_embedding'}},
+            {'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+             'conditions': {'sdk': 'OrbbecSDK', 'sdk_version': '2.9.0',
+                            'platform': 'ios', 'feature': 'simulator_artifact'}},
+        ],
+    }, sdk_catalog=_reviewed_sdk_row('daq-sdk-ios-framework-022'))
+    assert [goal.condition_map().get('task') or goal.condition_map().get('feature')
+            for goal in schema.goals] == ['embed_framework', 'simulator_artifacts']
+    assert all(not goal.unmapped_condition_keys for goal in schema.goals)
+
+
+def test_host_sync_phrase_binds_reviewed_sdk_mode_example():
+    question = ('用 2026-09-29 的 OrbbecSDK 2.9.0 C++ 示例，'
+                'EGO 多设备主从同步模式应该怎样检查并设置？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [{
+            'kind': 'product', 'capability': 'sdk_evidence', 'entities': ['EGO'],
+            'conditions': {'sdk': 'OrbbecSDK', 'sdk_version': '2.9.0',
+                           'sdk_release_date': '2026-09-29', 'language': 'c++',
+                           'feature': 'master_slave_sync'},
+        }],
+    }, sdk_catalog=_reviewed_sdk_row('daq-sdk-host-sync-001'))
+    assert schema.goals[0].condition_map()['feature'] == 'multi_device_sync_mode_check_and_set'
+    assert schema.goals[0].unmapped_condition_keys == ()
+
+
+def test_sdk_build_dates_are_not_sdk_versions_in_log_and_package_goals():
+    question = ('OrbbecSDK 2026-09-21 与 2026-09-23 两份变更日志分别如何记载'
+                ' UMI Finger 磁力计？2026-09-29 包中仍有 magnetometer.cpp，'
+                '能据此说后续构建已恢复或设备已实测吗？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'medium', 'goals': [
+            {'kind': 'product', 'capability': 'search_knowledge',
+             'entities': ['UMI Finger'],
+             'conditions': {'feature': 'magnetometer',
+                            'sdk_release_date': date, 'sdk_version': date}}
+            for date in ('2026-09-21', '2026-09-23')
+        ] + [{
+            'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+            'conditions': {'sdk_version': '2026-09-29',
+                           'source_files': ['magnetometer.cpp']},
+        }],
+    }, sdk_catalog=_reviewed_sdk_row('daq-sdk-host-magnetometer-sample-023'))
+    assert [goal.condition_map().get('sdk_release_date') for goal in schema.goals] == [
+        '2026-09-21', '2026-09-23', '2026-09-29']
+    assert all('sdk_version' not in goal.condition_map() for goal in schema.goals)
 
 
 def test_schema_retries_when_explicit_spec_question_was_reduced_to_identity():

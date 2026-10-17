@@ -42,7 +42,7 @@
 
 ## host_cpp_20260929
 
-11 records; build 20260929; Linux x86_64.
+12 records; build 20260929; Linux x86_64.
 
 - daq-sdk-host-audio-007: EGO 音频文件播放与停止
 - daq-sdk-host-build-010: EGO C++ 示例目标与构建选项
@@ -50,6 +50,7 @@
 - daq-sdk-host-depth-009: EGO Depth 网络预设与流 Profile 查询
 - daq-sdk-host-fwlog-003: 导出 EGO 固件日志
 - daq-sdk-host-key-008: 注册 EGO 方向键事件回调
+- daq-sdk-host-magnetometer-sample-023: 2026-09-29 OrbbecSDK Linux x86_64 包内 EGO 磁力计示例
 - daq-sdk-host-net-uid-hotplug-016: EGO 网络设备 UID 热插拔回调核对
 - daq-sdk-host-record-dir-004: 设置并回读 EGO 录制目录
 - daq-sdk-host-sdcard-005: 通过网络列出和下载 EGO SD 卡文件

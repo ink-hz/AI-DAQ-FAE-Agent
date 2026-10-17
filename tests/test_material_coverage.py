@@ -11,6 +11,22 @@ from scripts.audit_daq_material_coverage import (
     verify_sdk_material_inventory, write_private_report)
 
 
+def test_audit_loads_note_bearing_sdk_with_code_and_main_identity(monkeypatch, tmp_path):
+    from scripts import audit_daq_material_coverage as audit
+    seen = {}
+
+    def load(root, **kwargs):
+        seen.update(root=root, **kwargs)
+        return 'loaded'
+
+    monkeypatch.setattr(audit, 'load_active_sdk_release', load)
+    monkeypatch.setattr(audit, 'daq_code_sha', lambda: 'a' * 64)
+    assert audit._load_sdk_for_audit(tmp_path, 'daq-a', 'b' * 40, 'c' * 64) == 'loaded'
+    assert seen == {'root': tmp_path, 'runtime_release': 'daq-a',
+                    'upstream_sha': 'b' * 40, 'daq_code_sha256': 'a' * 64,
+                    'knowledge_release': 'c' * 64}
+
+
 def _source(path, digest):
     return {"path": path, "sha256": digest, "size": 3}
 

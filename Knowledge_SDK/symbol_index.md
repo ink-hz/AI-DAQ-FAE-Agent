@@ -13,6 +13,7 @@ Generated from `SDK_Knowledge.jsonl`; source scope is recorded in each row.
 - **EgoLowBle.lib**: daq-sdk-ble-windows-install-020
 - **EgoLowBleDemo.cpp**: daq-sdk-ble-linux-install-021
 - **enable_mask**: daq-sdk-device-capture-013
+- **enableMagStream**: daq-sdk-host-magnetometer-sample-023
 - **enableNetDeviceEnumeration**: daq-sdk-host-net-uid-hotplug-016
 - **exportFirmwareLogs**: daq-sdk-android-fwlog-017
 - **FirmwareLogExportTask**: daq-sdk-android-fwlog-017
@@ -31,6 +32,7 @@ Generated from `SDK_Knowledge.jsonl`; source scope is recorded in each row.
 - **libobkit.so**: daq-sdk-device-scope-011
 - **LINUX_GUIDE.md**: daq-sdk-ble-linux-install-021
 - **loadPreset**: daq-sdk-host-depth-009
+- **magnetometer.cpp**: daq-sdk-host-magnetometer-sample-023
 - **make**: daq-sdk-device-build-012
 - **ob_capture_config_t**: daq-sdk-device-capture-013
 - **ob_capture_configure**: daq-sdk-device-capture-013
@@ -39,12 +41,14 @@ Generated from `SDK_Knowledge.jsonl`; source scope is recorded in each row.
 - **ob_capture_start**: daq-sdk-device-capture-013
 - **ob_capture_stop**: daq-sdk-device-capture-013
 - **ob_ego_calib_yaml_export**: daq-sdk-host-build-010
+- **ob_ego_magnetometer**: daq-sdk-host-magnetometer-sample-023
 - **ob_ego_multi_device_sync**: daq-sdk-host-build-010
 - **ob_ego_sample**: daq-sdk-host-build-010
 - **ob_event_deinit**: daq-sdk-device-capture-013
 - **ob_event_init**: daq-sdk-device-capture-013
 - **ob_event_register**: daq-sdk-device-capture-013
 - **ob_event_unregister**: daq-sdk-device-capture-013
+- **OB_FRAME_MAG**: daq-sdk-host-magnetometer-sample-023
 - **OB_RAW_DATA_ALIGN_CALIB_YAML**: daq-sdk-host-calib-002
 - **OB_RAW_DATA_IMU_CALIB_YAML**: daq-sdk-host-calib-002
 - **OB_STRUCT_EGO_STATE_REPORT**: daq-sdk-host-state-006
