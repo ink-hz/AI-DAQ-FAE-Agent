@@ -65,7 +65,7 @@ def _firmware_scopes(query: str) -> dict[str, dict]:
     """Keep a named firmware product and its versions in the same clause."""
     scopes: dict[str, dict] = {}
     current = None
-    for clause in re.split(r"(?:与|和|以及|及|、|[;,；，]|\band\b)", query,
+    for clause in re.split(r"(?:与|和|以及|及|、|[;,；，。？！?]|\band\b)", query,
                            flags=re.IGNORECASE):
         families = _mentioned_families(clause)
         identity = _firmware_identity(clause)

@@ -528,6 +528,39 @@ def test_dual_and_pro_firmware_comparison_keeps_each_product_version():
     assert box._release_note_requirement_ids([pro]) == ['pro']
 
 
+def test_pro_firmware_note_in_prior_sentence_is_not_erased_by_dual_upgrade_question():
+    if not ARCHIVE.is_dir():
+        pytest.skip('local ignored SDK originals unavailable')
+    catalog = SdkCatalog.load(DIRECTORY, ARCHIVE)
+    question = ('我只知道设备叫 EGO，看到 EGO Pro 固件 v1.0.7 变更日志。'
+                '可以据此给我的 EGO 双目升级建议吗？')
+    assert {row['kb_id'] for row in catalog.release_notes.search(
+        question, 'internal_fae')} == {'daq-note-firmware-pro-107'}
+
+    class Knowledge:
+        release_id = 'dev-main'
+        sdk_catalog = catalog
+
+        def records_for(self, role):
+            return []
+
+        def sections_for(self, role):
+            return []
+
+    result = DaqToolBox(
+        question=question, knowledge=Knowledge(), role='internal_fae',
+        requirements=[{'id': 'pro_note', 'capability': 'search_knowledge',
+                       'entities': ['EGO Pro'],
+                       'conditions': {'firmware_version': 'v1.0.7'}}],
+    ).dispatch('search_knowledge', {
+        'query': 'EGO Pro 固件 v1.0.7 变更日志',
+    })
+    assert result.status == 'ok'
+    assert [source['source_id'] for source in result.sources] == [
+        'daq-note-firmware-pro-107']
+    assert result.content['matched_requirement_ids'] == ['pro_note']
+
+
 def test_viewer_version_goal_cannot_be_covered_by_sdk_note():
     if not ARCHIVE.is_dir():
         pytest.skip('local ignored SDK originals unavailable')
