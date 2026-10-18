@@ -13,7 +13,7 @@
 | 27 条主知识 Pro 增量 | `3c8df43e43d4c2bc585d4e3f9a6120070b552f486b880eee086a2c2e89c215a7` |
 | 23 条 SDK 用法、17 条日志 | `ee6b77ad30fc8f449cfe59f10d823987347a860f8521308784bfc4f3aadf0805` |
 
-源码提交 `50dc7e96f28df4aa4b4b64516f5be97fd9c835c0` 已部署到生产 DAQ 容器，镜像 `sha256:da2420fa528c10fd73a971503974bb40b1a82cf1e77b3c8622ec4bbb0bd5f098`；内部 `/health` 确认上表的运行时、主知识和 SDK 身份。数采和相机容器均健康、重启 0。公网 `/daq/` 及前端资源返回 200，匿名会话与历史接口返回 401 且 `Cache-Control: no-store`；生产未调用模型评测。部署、备份和只读烟测见[生产发布记录](docs/reviews/2026-10-18-daq-knowledge-production-release.md)。Git 推送和本机 staging 与生产切换分别记录。
+当前生产 DAQ 源码提交为 `e24920b5152e9b334d17cebeb9dc47dca289f009`，镜像 `sha256:1c4b61dbe80c010bfd6b58c89a16ec057b3a76777b3b53e629ecd27517f00391`。本次仅更新数采 WebUI 的企业会话恢复，内部 `/health` 的运行时、主知识和 SDK 身份保持上表版本；相机镜像未切换。两服务均健康、重启 0。公网 `/daq/` 及前端资源返回 200，匿名会话与历史接口返回 401；生产未调用模型评测。知识发布过程见[生产发布记录](docs/reviews/2026-10-18-daq-knowledge-production-release.md)，本次 403 修复和烟测见[会话恢复记录](docs/reviews/2026-10-18-daq-chat-403-session-recovery.md)。
 
 原件覆盖审计为产品 **9 已支撑内部可答发布 / 42 仅候选 / 225 仅归档**，SDK 侧 **30 / 0 / 113**。这是文件数，不能替代 27/23/17 条知识记录数。主候选图另有 715 条未发布记录；图像候选、软件兼容、官网链接、复杂组合及设备实测仍须按来源和条件单独审核。参见[完整覆盖审计](docs/reviews/2026-10-16-daq-full-material-coverage.md)。
 
