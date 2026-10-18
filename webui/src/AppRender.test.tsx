@@ -602,6 +602,85 @@ function clickByText(container: HTMLElement, text: string) {
 }
 
 describe('App partner-aware identity surface', () => {
+  it('keeps the rejected question and files for explicit resend after an account switch', async () => {
+    await bootstrapIdentity(PARTNER_SESSION);
+    let chatAttempts = 0;
+    const fetchMock = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+      if (String(input) === '/chat' && init?.method === 'POST') {
+        chatAttempts += 1;
+        if (chatAttempts === 1) {
+          return Promise.resolve(new Response(JSON.stringify({
+            error: { code: 'enterprise_csrf_invalid' },
+          }), { status: 403 }));
+        }
+      }
+      if (String(input) === '/enterprise/session') {
+        return Promise.resolve(new Response(JSON.stringify({
+          ...PARTNER_SESSION,
+          display_name: '坐席乙',
+          csrf_token: 'new-partner-csrf',
+        })));
+      }
+      return authenticatedFetch(input, init);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const { container } = renderInteractiveApp();
+    await flushEffects();
+
+    await chooseFiles(container, [new File(['log'], 'capture.log', { type: 'text/plain' })]);
+    await sendQuestion(container, '你知道多少款数采产品');
+
+    expect(chatCalls(fetchMock)).toHaveLength(1);
+    expect(container.querySelector('textarea')?.value).toBe('你知道多少款数采产品');
+    expect(container.querySelectorAll('.message')).toHaveLength(0);
+    expect(container.querySelector('.account-name')?.textContent).toBe('坐席乙');
+    expect(container.textContent).toContain('核对当前账号后重新发送');
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="重试 capture.log"]'))
+      .not.toBeNull();
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('button[aria-label="重试 capture.log"]')?.click();
+      await Promise.resolve();
+    });
+    await flushEffects();
+    expect(attachmentUploadCalls(fetchMock)).toHaveLength(2);
+    await sendQuestion(container, '你知道多少款数采产品');
+    expect(chatCalls(fetchMock)).toHaveLength(2);
+    expect(new Headers((chatCalls(fetchMock)[1][1] as RequestInit).headers)
+      .get('X-DAQ-Enterprise-CSRF')).toBe('new-partner-csrf');
+  });
+
+  it('does not restore prior-account history after a session-change rejection', async () => {
+    await bootstrapIdentity(PARTNER_SESSION);
+    const pendingHistory = deferred<Response>();
+    const fetchMock = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+      if (String(input) === '/authenticated/conversations/session-1') return pendingHistory.promise;
+      if (String(input) === '/chat' && init?.method === 'POST') {
+        return Promise.resolve(new Response(JSON.stringify({
+          error: { code: 'enterprise_csrf_invalid' },
+        }), { status: 403 }));
+      }
+      if (String(input) === '/enterprise/session') {
+        return Promise.resolve(new Response(JSON.stringify({
+          ...PARTNER_SESSION, display_name: '坐席乙', csrf_token: 'new-partner-csrf',
+        })));
+      }
+      return authenticatedFetch(input, init);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const { container } = renderInteractiveAppAt('/app/conversations/session-1');
+    await flushEffects();
+
+    await sendQuestion(container, '待确认的问题');
+    pendingHistory.resolve(historyDetailResponse());
+    await flushEffects();
+
+    expect(container.querySelectorAll('.message')).toHaveLength(0);
+    expect(container.querySelector('textarea')?.value).toBe('待确认的问题');
+    expect(window.location.pathname).toBe('/app/');
+    expect(container.querySelector('.session-meta code')?.textContent).toBe('new');
+  });
+
   it('renders an explicit not-found page for unknown FAE browser routes', () => {
     const html = renderToStaticMarkup(<App initialPath="/app/unknown-route" />);
 

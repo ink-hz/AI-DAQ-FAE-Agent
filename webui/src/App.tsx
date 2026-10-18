@@ -28,7 +28,11 @@ import {
 import { AuthenticatedSessionNav } from './AuthenticatedSessionNav';
 import { BRAND_LOGO_PATH } from './brandAssets';
 import { shouldSubmitComposer } from './composerKeys';
-import { currentAuthenticatedAccount } from './enterpriseIdentity';
+import {
+  EnterpriseSessionChangedError,
+  currentAuthenticatedAccount,
+  currentEnterpriseSessionVersion,
+} from './enterpriseIdentity';
 import { buildFeedbackPayload } from './feedbackPayload';
 import { MessageArticle } from './MessageArticle';
 import { ReviewCenter } from './ReviewCenter';
@@ -126,6 +130,7 @@ function ChatWorkspace({
   const [isStreaming, setIsStreaming] = useState(false);
   const [activeAssistantId, setActiveAssistantId] = useState<string | undefined>();
   const [error, setError] = useState<string | null>(null);
+  const [sessionChangeError, setSessionChangeError] = useState(false);
   const [visionEnabled, setVisionEnabled] = useState(false);
   const [partnerLoginAvailable, setPartnerLoginAvailable] = useState(false);
   const [attachmentDrafts, dispatchAttachments] = useReducer(attachmentReducer, []);
@@ -320,6 +325,7 @@ function ChatWorkspace({
     setInput('');
     dispatchAttachments({ type: 'clear' });
     setError(null);
+    setSessionChangeError(false);
     setIsStreaming(true);
 
     const abort = new AbortController();
@@ -350,7 +356,35 @@ function ChatWorkspace({
       });
     } catch (err) {
       if (!abort.signal.aborted) {
-        if (err instanceof ChatStreamError) {
+        if (err instanceof EnterpriseSessionChangedError) {
+          // No server turn was created. Keep the user's draft, but discard
+          // prior-session state and attachment IDs before any explicit resend.
+          restoreVersionRef.current += 1;
+          setInput((current) => current ? `${text}\n${current}` : text);
+          dispatchAttachments({
+            type: 'add',
+            drafts: attachmentDrafts.map((draft) => ({
+              ...draft,
+              status: 'failed',
+              attachmentId: undefined,
+              sourceId: undefined,
+              parseCoverage: undefined,
+              warnings: undefined,
+              error: '企业会话已更新，请重新上传',
+            })),
+          });
+          setMessages([]);
+          setSessionId(undefined);
+          setReadOnlyHistory(false);
+          setActiveAssistantId(undefined);
+          window.history.replaceState(null, '', surfaceRootPath());
+          setSessionChangeError(true);
+          setError(responseLanguage === 'en-US'
+            ? (err.restored
+              ? 'Enterprise session changed. Check the current account before sending again.'
+              : 'Enterprise session expired. Reload the page before sending again.')
+            : err.message);
+        } else if (err instanceof ChatStreamError) {
           const shortRequestId = err.clientRequestId.slice(0, 8);
           setError(`${err.phase}: ${err.message}（请求 ${shortRequestId}）`);
           if (err.partialTurn.sessionId) setSessionId(err.partialTurn.sessionId);
@@ -382,6 +416,7 @@ function ChatWorkspace({
     setReadOnlyHistory(false);
     setActiveAssistantId(undefined);
     setError(null);
+    setSessionChangeError(false);
     setIsStreaming(false);
     if (options.updateHistory !== false) {
       window.history.replaceState(null, '', surfaceRootPath());
@@ -414,6 +449,7 @@ function ChatWorkspace({
     setReadOnlyHistory(conversation.readOnly);
     setActiveAssistantId(undefined);
     setError(null);
+    setSessionChangeError(false);
     setIsStreaming(false);
   }
 
@@ -535,7 +571,8 @@ function ChatWorkspace({
           <a className="partner-login-link" href="/partner/login">合作方客服登录</a>
         )}
 
-        {account && <AuthenticatedSessionNav onOpen={openRestoredConversation}
+        {account && <AuthenticatedSessionNav key={currentEnterpriseSessionVersion()}
+          onOpen={openRestoredConversation}
           responseLanguage={responseLanguage} />}
 
         <nav className="turn-list" aria-label="对话列表">
@@ -581,7 +618,7 @@ function ChatWorkspace({
           ))}
         </div>
 
-        {error && <div className="error-line">{responseLanguage === 'en-US'
+        {error && <div className="error-line">{responseLanguage === 'en-US' && !sessionChangeError
           ? 'The operation failed. Please try again.' : error}</div>}
 
         {readOnlyHistory && (

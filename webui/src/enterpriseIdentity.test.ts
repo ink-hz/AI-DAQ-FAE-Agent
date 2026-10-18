@@ -32,6 +32,33 @@ afterEach(() => {
 
 
 describe('FAE enterprise identity bootstrap', () => {
+  it('reads the final cookie session after an internal launch exchange', async () => {
+    const launchCode = 'l'.repeat(43);
+    setInternalFaeSurface(`/daq/#platform_launch=${launchCode}`);
+    const session = (csrf: string, name: string) => new Response(JSON.stringify({
+      authenticated: true,
+      authentication_mode: 'platform_enterprise',
+      display_name: name,
+      partner_display_name: null,
+      csrf_token: csrf,
+    }));
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(session('first-launch-csrf', '账号甲'))
+      .mockResolvedValueOnce(session('current-cookie-csrf', '账号乙'));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await bootstrapEnterpriseIdentity();
+
+    expect(fetchMock.mock.calls.map(([input]) => String(input)))
+      .toEqual(['/daq/api/enterprise/session', '/daq/api/enterprise/session']);
+    expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe('POST');
+    expect((fetchMock.mock.calls[1][1] as RequestInit).method).toBe('GET');
+    expect(enterpriseMutationHeaders()).toEqual({
+      'X-DAQ-Enterprise-CSRF': 'current-cookie-csrf',
+    });
+    expect(currentAuthenticatedAccount()?.displayName).toBe('账号乙');
+  });
+
   it('removes the launch fragment before exchanging it', async () => {
     const launchCode = 'l'.repeat(43);
     window.history.replaceState(

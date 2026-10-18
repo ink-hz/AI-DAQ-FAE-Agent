@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchAuthenticatedConversation, fetchAuthenticatedConversations } from './api';
 import {
   conversationListTitle,
@@ -22,23 +22,29 @@ export function AuthenticatedSessionNav({ onOpen, responseLanguage = 'zh-CN' }: 
   const [listError, setListError] = useState<string | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
   const [openingId, setOpeningId] = useState<string | null>(null);
+  const mountedRef = useRef(false);
 
   const loadPage = useCallback(async (nextCursor?: string) => {
     setLoading(true);
     setListError(null);
     try {
       const page = await fetchAuthenticatedConversations(nextCursor);
+      if (!mountedRef.current) return;
       setItems((current) => (nextCursor ? [...current, ...page.items] : page.items));
       setCursor(page.next_cursor);
     } catch {
-      setListError(responseLanguage === 'en-US' ? 'Could not load conversation history' : '历史会话加载失败');
+      if (mountedRef.current) {
+        setListError(responseLanguage === 'en-US' ? 'Could not load conversation history' : '历史会话加载失败');
+      }
     } finally {
-      setLoading(false);
+      if (mountedRef.current) setLoading(false);
     }
   }, [responseLanguage]);
 
   useEffect(() => {
+    mountedRef.current = true;
     void loadPage();
+    return () => { mountedRef.current = false; };
   }, [loadPage]);
 
   async function openConversation(sessionId: string) {
@@ -46,13 +52,16 @@ export function AuthenticatedSessionNav({ onOpen, responseLanguage = 'zh-CN' }: 
     setOpenError(null);
     try {
       const detail = await fetchAuthenticatedConversation(sessionId);
+      if (!mountedRef.current) return;
       const conversation = normalizeRestoredConversation(detail);
       onOpen(conversation);
       window.history.pushState(null, '', sessionConversationPath(conversation.sessionId));
     } catch {
-      setOpenError(responseLanguage === 'en-US' ? 'Could not open conversation' : '会话打开失败');
+      if (mountedRef.current) {
+        setOpenError(responseLanguage === 'en-US' ? 'Could not open conversation' : '会话打开失败');
+      }
     } finally {
-      setOpeningId(null);
+      if (mountedRef.current) setOpeningId(null);
     }
   }
 

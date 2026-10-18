@@ -32,6 +32,7 @@ let authenticationMode: EnterpriseAuthenticationMode = 'public_customer';
 let authenticatedAccount: AuthenticatedAccount | null = null;
 let csrfToken: string | null = null;
 let bootstrapPromise: Promise<EnterpriseAuthenticationMode> | null = null;
+let sessionVersion = 0;
 
 function safeName(value: unknown): string | null {
   if (typeof value !== 'string') return null;
@@ -233,10 +234,22 @@ async function initializeEnterpriseIdentity(): Promise<EnterpriseAuthenticationM
         : '企业身份暂时无法验证，请稍后重试',
     );
   }
-  const projection = parsePayload(await response.json());
+  // A second Platform launch in another tab can replace the shared cookie
+  // while this exchange is finishing. Read the cookie-backed session once
+  // before showing the internal workspace so the first chat uses its token.
+  const activeResponse = launchCode && isInternalFaeSurface()
+    ? await fetch(faeApiPath('/enterprise/session'), {
+      method: 'GET', cache: 'no-store',
+    })
+    : response;
+  if (!activeResponse.ok) {
+    throw new Error('企业身份会话未建立，请返回 Agent Platform 重新打开');
+  }
+  const projection = parsePayload(await activeResponse.json());
   csrfToken = projection.csrfToken;
   authenticatedAccount = projection.account;
   authenticationMode = projection.account.mode;
+  sessionVersion += 1;
   if (launchCode) restoreInternalReturnPathAfterLaunch();
   return authenticationMode;
 }
@@ -250,6 +263,53 @@ export function enterpriseMutationHeaders(): Record<string, string> {
   return csrfToken ? { 'X-DAQ-Enterprise-CSRF': csrfToken } : {};
 }
 
+export class EnterpriseSessionChangedError extends Error {
+  readonly restored: boolean;
+
+  constructor(restored: boolean) {
+    super(restored
+      ? '企业会话已更新，请核对当前账号后重新发送'
+      : '企业会话已失效，请刷新页面重新进入');
+    this.name = 'EnterpriseSessionChangedError';
+    this.restored = restored;
+  }
+}
+
+export async function fetchWithEnterpriseCsrfRecovery(
+  url: string,
+  init: RequestInit,
+): Promise<Response> {
+  const send = () => {
+    if (!csrfToken) return fetch(url, init);
+    const headers = new Headers(init.headers);
+    headers.set('X-DAQ-Enterprise-CSRF', csrfToken);
+    return fetch(url, { ...init, headers });
+  };
+  const response = await send();
+  if (response.status !== 403 || !csrfToken) return response;
+  const payload = await response.clone().json().catch(() => null) as {
+    error?: { code?: unknown };
+  } | null;
+  if (payload?.error?.code !== 'enterprise_csrf_invalid') return response;
+  try {
+    const current = await fetch(faeApiPath('/enterprise/session'), {
+      cache: 'no-store',
+      signal: init.signal,
+    });
+    if (!current.ok) throw new Error('enterprise_session_restore_failed');
+    const projection = parsePayload(await current.json());
+    csrfToken = projection.csrfToken;
+    authenticatedAccount = projection.account;
+    authenticationMode = projection.account.mode;
+    sessionVersion += 1;
+  } catch {
+    throw new EnterpriseSessionChangedError(false);
+  }
+  // The browser session may now belong to another person. Only an explicit
+  // user action can submit the original request with the refreshed token.
+  throw new EnterpriseSessionChangedError(true);
+}
+
 export function currentAuthenticationMode(): EnterpriseAuthenticationMode {
   return authenticationMode;
 }
@@ -258,9 +318,14 @@ export function currentAuthenticatedAccount(): AuthenticatedAccount | null {
   return authenticatedAccount;
 }
 
+export function currentEnterpriseSessionVersion(): number {
+  return sessionVersion;
+}
+
 export function resetEnterpriseIdentityForTests(): void {
   authenticationMode = 'public_customer';
   authenticatedAccount = null;
   csrfToken = null;
   bootstrapPromise = null;
+  sessionVersion = 0;
 }

@@ -64,7 +64,13 @@ function renderNav(onOpen = vi.fn()) {
   document.body.appendChild(container);
   mountedRoots.push({ container, root });
   act(() => root.render(<AuthenticatedSessionNav onOpen={onOpen} />));
-  return { container, onOpen };
+  return { container, onOpen, root };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((settle) => { resolve = settle; });
+  return { promise, resolve };
 }
 
 async function flush() {
@@ -105,6 +111,24 @@ afterEach(() => {
 });
 
 describe('AuthenticatedSessionNav', () => {
+  it('ignores a history detail that arrives after its account nav unmounts', async () => {
+    window.history.replaceState(null, '', '/app/');
+    const pending = deferred<Response>();
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(firstPage(null))
+      .mockReturnValueOnce(pending.promise));
+    const { container, onOpen, root } = renderNav();
+    await flush();
+    await clickText(container, 'Gemini 335L 配置');
+
+    act(() => root.unmount());
+    pending.resolve(conversationDetail());
+    await flush();
+
+    expect(onOpen).not.toHaveBeenCalled();
+    expect(window.location.pathname).toBe('/app/');
+  });
+
   it('pushes a canonical deep conversation URL after opening a history item', async () => {
     document.head.innerHTML = '<meta name="fae-browser-base" content="/daq">';
     window.history.replaceState(null, '', '/daq/');

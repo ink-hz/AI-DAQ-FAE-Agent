@@ -18,7 +18,11 @@ import type {
   StreamFailurePhase,
   TurnDecisionPayload,
 } from './types';
-import { enterpriseMutationHeaders } from './enterpriseIdentity';
+import {
+  EnterpriseSessionChangedError,
+  enterpriseMutationHeaders,
+  fetchWithEnterpriseCsrfRecovery,
+} from './enterpriseIdentity';
 import { faeApiPath } from './runtimePaths';
 
 export const AUTHENTICATED_PAGE_LIMIT = 30;
@@ -48,6 +52,22 @@ export class ChatStreamError extends Error {
     this.clientRequestId = clientRequestId;
     this.partialTurn = partialTurn;
   }
+}
+
+async function chatHttpErrorMessage(response: Response): Promise<string> {
+  if (response.status === 403) {
+    const payload = await response.clone().json().catch(() => null) as {
+      error?: { code?: unknown };
+    } | null;
+    if (payload?.error?.code === 'enterprise_csrf_invalid') {
+      return '企业会话已更新，请刷新页面重试';
+    }
+    if (payload?.error?.code === 'daq_subject_not_authorized'
+      || payload?.error?.code === 'daq_knowledge_role_required') {
+      return '没有数采 FAE 使用权限';
+    }
+  }
+  return `AI DAQ FAE request failed: ${response.status} ${response.statusText}`;
 }
 
 function errorMessage(error: unknown): string {
@@ -102,11 +122,10 @@ export async function streamChat(params: {
   let turn = createEmptyAssistantTurn();
   let response: Response;
   try {
-    response = await fetch(faeApiPath('/chat'), {
+    response = await fetchWithEnterpriseCsrfRecovery(faeApiPath('/chat'), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...enterpriseMutationHeaders(),
       },
       body: JSON.stringify({
         message: params.message,
@@ -119,6 +138,7 @@ export async function streamChat(params: {
       signal: params.signal,
     });
   } catch (error) {
+    if (error instanceof EnterpriseSessionChangedError) throw error;
     throw new ChatStreamError(
       'connect',
       params.clientRequestId,
@@ -127,7 +147,7 @@ export async function streamChat(params: {
     );
   }
   if (!response.ok) {
-    throw new Error(`AI DAQ FAE request failed: ${response.status} ${response.statusText}`);
+    throw new Error(await chatHttpErrorMessage(response));
   }
   if (!response.body) {
     throw new ChatStreamError(

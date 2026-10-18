@@ -15,11 +15,158 @@ import {
   deleteAttachment,
   fetchAttachmentCapabilities,
 } from './api';
+import { bootstrapEnterpriseIdentity, resetEnterpriseIdentityForTests } from './enterpriseIdentity';
 
 describe('AI DAQ FAE WebUI API helpers', () => {
   afterEach(() => {
     document.head.innerHTML = '';
+    resetEnterpriseIdentityForTests();
     vi.unstubAllGlobals();
+  });
+
+  it('refreshes CSRF without automatically sending a chat to a changed account', async () => {
+    const session = (csrf: string, name: string) => new Response(JSON.stringify({
+      authenticated: true,
+      authentication_mode: 'platform_enterprise',
+      display_name: name,
+      partner_display_name: null,
+      csrf_token: csrf,
+    }));
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(session('first-session-csrf', '账号甲'))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        error: { code: 'enterprise_csrf_invalid' },
+      }), { status: 403 }))
+      .mockResolvedValueOnce(session('current-session-csrf', '账号乙'));
+    vi.stubGlobal('fetch', fetchMock);
+    await bootstrapEnterpriseIdentity();
+
+    await expect(streamChat({
+      message: '你知道多少款数采产品',
+      clientRequestId: 'same-request-id',
+      onEvent: vi.fn(),
+    })).rejects.toThrow('企业会话已更新');
+
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      '/enterprise/session', '/chat', '/enterprise/session',
+    ]);
+    expect(new Headers((fetchMock.mock.calls[1][1] as RequestInit).headers)
+      .get('X-DAQ-Enterprise-CSRF')).toBe('first-session-csrf');
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('keeps the old token after a rejected upload so the next chat detects the account change', async () => {
+    const session = (csrf: string) => new Response(JSON.stringify({
+      authenticated: true,
+      authentication_mode: 'platform_enterprise',
+      display_name: 'FAE',
+      partner_display_name: null,
+      csrf_token: csrf,
+    }));
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(session('old-csrf'))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        error: { code: 'enterprise_csrf_invalid' },
+      }), { status: 403 }))
+      .mockResolvedValueOnce(session('new-csrf'));
+    vi.stubGlobal('fetch', fetchMock);
+    await bootstrapEnterpriseIdentity();
+
+    await expect(uploadAttachments([new File(['a'], 'a.log')]))
+      .rejects.toThrow('附件上传失败：403');
+
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      '/enterprise/session', '/attachments',
+    ]);
+  });
+
+  it('does not retry a knowledge permission denial as a CSRF failure', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        authenticated: true, authentication_mode: 'platform_enterprise',
+        display_name: 'FAE', partner_display_name: null, csrf_token: 'csrf',
+      })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        error: { code: 'daq_knowledge_role_required' },
+      }), { status: 403 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await bootstrapEnterpriseIdentity();
+
+    await expect(streamChat({
+      message: 'Q', clientRequestId: 'denied-request', onEvent: vi.fn(),
+    })).rejects.toThrow('没有数采 FAE 使用权限');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('makes a later explicit chat send use the refreshed CSRF', async () => {
+    const session = (csrf: string) => new Response(JSON.stringify({
+      authenticated: true, authentication_mode: 'platform_enterprise',
+      display_name: 'FAE', partner_display_name: null, csrf_token: csrf,
+    }));
+    const invalid = () => new Response(JSON.stringify({
+      error: { code: 'enterprise_csrf_invalid' },
+    }), { status: 403 });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(session('old'))
+      .mockResolvedValueOnce(invalid())
+      .mockResolvedValueOnce(session('current'))
+      .mockResolvedValueOnce(new Response('event: done\ndata: {"outcome":"resolved"}\n\n'));
+    vi.stubGlobal('fetch', fetchMock);
+    await bootstrapEnterpriseIdentity();
+
+    await expect(streamChat({
+      message: 'Q', clientRequestId: 'still-stale', onEvent: vi.fn(),
+    })).rejects.toThrow('企业会话已更新');
+    const result = await streamChat({
+      message: 'Q', clientRequestId: 'user-clicked-again', onEvent: vi.fn(),
+    });
+    expect(result.done?.outcome).toBe('resolved');
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(new Headers((fetchMock.mock.calls[3][1] as RequestInit).headers)
+      .get('X-DAQ-Enterprise-CSRF')).toBe('current');
+  });
+
+  it('does not refresh the identity silently after rejected feedback', async () => {
+    const session = (csrf: string) => new Response(JSON.stringify({
+      authenticated: true, authentication_mode: 'platform_enterprise',
+      display_name: 'FAE', partner_display_name: null, csrf_token: csrf,
+    }));
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(session('old'))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        error: { code: 'enterprise_csrf_invalid' },
+      }), { status: 403 }))
+      .mockResolvedValueOnce(session('current'));
+    vi.stubGlobal('fetch', fetchMock);
+    await bootstrapEnterpriseIdentity();
+
+    await expect(sendFeedback({ sessionId: 's1', messageIndex: 1, rating: 'good' }))
+      .rejects.toThrow('Feedback failed: 403');
+
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      '/enterprise/session', '/feedback',
+    ]);
+  });
+
+  it('does not refresh the identity silently after a rejected deletion', async () => {
+    const session = (csrf: string) => new Response(JSON.stringify({
+      authenticated: true, authentication_mode: 'platform_enterprise',
+      display_name: 'FAE', partner_display_name: null, csrf_token: csrf,
+    }));
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(session('old'))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        error: { code: 'enterprise_csrf_invalid' },
+      }), { status: 403 }))
+      .mockResolvedValueOnce(session('current'));
+    vi.stubGlobal('fetch', fetchMock);
+    await bootstrapEnterpriseIdentity();
+
+    await expect(deleteAttachment('att-1')).rejects.toThrow('附件删除失败：403');
+
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      '/enterprise/session', '/attachments/att-1',
+    ]);
   });
 
   it('parses named SSE events and preserves partial trailing buffers', () => {
