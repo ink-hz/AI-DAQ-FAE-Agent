@@ -2,7 +2,7 @@
 
 数采 FAE 是独立版本、独立知识发布和回滚的内部服务，复用固定源码版本的通用 FAE 运行时。生产入口为 [数采 FAE](https://agent.orbbec.com.cn/daq/)。
 
-## 当前状态（2026-10-17，生产切换前）
+## 当前状态（2026-10-18，已部署）
 
 本轮在本机隔离 Dev 核对 276 份产品原件和 143 份 SDK、Viewer、固件原件，封版 27 条主知识、23 条 SDK 包内用法及 17 条唯一变更日志记录。主知识五题、SDK 19 题及目录、固件身份回归已完成真实模型问答和独立语义复核。Python 全量 **1314 passed**、WebUI **246 passed** 且生产构建通过；本轮没有改动共享 `src/`。详见[发布前复核](docs/reviews/2026-10-17-daq-knowledge-dev-release.md)。
 
@@ -13,7 +13,7 @@
 | 27 条主知识 Pro 增量 | `3c8df43e43d4c2bc585d4e3f9a6120070b552f486b880eee086a2c2e89c215a7` |
 | 23 条 SDK 用法、17 条日志 | `ee6b77ad30fc8f449cfe59f10d823987347a860f8521308784bfc4f3aadf0805` |
 
-切换前的生产只读核查仍是运行时 `daq-145d6b4d587e`、主知识 `ee9083f9891630f6727766c276e6dc123ab0b6b79641dada133159871eeaacdb`、SDK `83948bb66f50c978cd5ea1b91a5a898e5f1e820d520c155d546f260b6c95c64a`；数采和相机容器健康。**Git 推送和本机发布包 staging 不等于生产部署。** 真实模型评测只在 Dev 进行。
+源码提交 `50dc7e96f28df4aa4b4b64516f5be97fd9c835c0` 已部署到生产 DAQ 容器，镜像 `sha256:da2420fa528c10fd73a971503974bb40b1a82cf1e77b3c8622ec4bbb0bd5f098`；内部 `/health` 确认上表的运行时、主知识和 SDK 身份。数采和相机容器均健康、重启 0。公网 `/daq/` 及前端资源返回 200，匿名会话与历史接口返回 401 且 `Cache-Control: no-store`；生产未调用模型评测。部署、备份和只读烟测见[生产发布记录](docs/reviews/2026-10-18-daq-knowledge-production-release.md)。Git 推送和本机 staging 与生产切换分别记录。
 
 原件覆盖审计为产品 **9 已支撑内部可答发布 / 42 仅候选 / 225 仅归档**，SDK 侧 **30 / 0 / 113**。这是文件数，不能替代 27/23/17 条知识记录数。主候选图另有 715 条未发布记录；图像候选、软件兼容、官网链接、复杂组合及设备实测仍须按来源和条件单独审核。参见[完整覆盖审计](docs/reviews/2026-10-16-daq-full-material-coverage.md)。
 
@@ -47,4 +47,4 @@ npm --prefix webui run build
 
 原件保存在 Git 忽略的 `data/knowledge/local_archive/`，逐文件按 SHA-256 核验。高频更新先比较来源、实体、变体、字段含义、测量条件和依赖关系；改变或撤回的事实不能继承旧审核状态。新事实完成来源核对、Dev 真实问答及独立答案复核后，生成不可变主知识或 SDK 发布包，最后切换对应指针。知识发布不改变相机服务。
 
-清洗和增量设计见[知识专项任务书](docs/superpowers/plans/2026-10-10-daq-knowledge-workstream-task-brief.md)、[完整设计](docs/2026-10-08-数采FAE完整设计.md)、[SDK 目录说明](Knowledge_SDK/README.md)与[历史生产发布记录](docs/reviews/2026-10-15-daq-sdk-production-release.md)。
+清洗和增量设计见[知识专项任务书](docs/superpowers/plans/2026-10-10-daq-knowledge-workstream-task-brief.md)、[完整设计](docs/2026-10-08-数采FAE完整设计.md)、[SDK 目录说明](Knowledge_SDK/README.md)与[本次生产发布记录](docs/reviews/2026-10-18-daq-knowledge-production-release.md)。

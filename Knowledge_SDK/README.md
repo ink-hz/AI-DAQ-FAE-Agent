@@ -1,6 +1,6 @@
 # DAQ SDK knowledge
 
-This is a source-checked SDK usage catalog built from the local 2026-10-15 archive. Its 23 usage records and 17 unique change-note records passed isolated Dev replay and independent semantic review on 2026-10-17, and were staged as immutable release `ee6b77ad30fc8f449cfe59f10d823987347a860f8521308784bfc4f3aadf0805`. Staging is separate from production activation; check production `/health` for the active ID. It follows the camera FAE `Knowledge_SDK` split between API/example facts and tested device support. Exact device, firmware, connection and platform support remains under `check_software_support`; these records do not certify it.
+This is a source-checked SDK usage catalog built from the local 2026-10-15 archive. Its 23 usage records and 17 unique change-note records passed isolated Dev replay and independent semantic review on 2026-10-17, and were staged as immutable release `ee6b77ad30fc8f449cfe59f10d823987347a860f8521308784bfc4f3aadf0805`. The release was activated in production on 2026-10-18; check production `/health` for the active ID. It follows the camera FAE `Knowledge_SDK` split between API/example facts and tested device support. Exact device, firmware, connection and platform support remains under `check_software_support`; these records do not certify it.
 
 ## Scope
 
