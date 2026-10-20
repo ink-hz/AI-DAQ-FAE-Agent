@@ -1,6 +1,6 @@
 # DAQ FAE / 相机 FAE 对照分析索引
 
-**启动/完成可访问证据审查**：2026-10-20。**任务书**：[A0–A10 分析任务](../../superpowers/plans/2026-10-20-daq-camera-fae-comparison-analysis-task-brief.md)。**状态**：A0–A10 的本机源码、历史 trace、发布知识、独立复审和确定性合同已全部核查；当前生产请求身份与用户样本因无内部只读入口/具体 trace 保持精确观测阻断。先看[完整结论](11-analysis-summary.md)和[发现/反证](10-findings.md)。表中 `confirmed_gap` 可能只针对历史 Dev 或本机发布快照，必须打开记录核对时间属性。
+**启动/完成可访问证据审查**：2026-10-20。**任务书**：[A0–A10 分析任务](../../superpowers/plans/2026-10-20-daq-camera-fae-comparison-analysis-task-brief.md)。**后续执行**：[DAQ 回答质量改进总任务书](../../superpowers/plans/2026-10-20-daq-fae-quality-improvement-task-brief.md)。**状态**：A0–A10 的本机源码、历史 trace、发布知识、独立复审和确定性合同已全部核查；当前生产请求身份与用户样本因无内部只读入口/具体 trace 保持精确观测阻断。先看[完整结论](11-analysis-summary.md)和[发现/反证](10-findings.md)。表中 `confirmed_gap` 可能只针对历史 Dev 或本机发布快照，必须打开记录核对时间属性。
 
 | 层 | 能力记录 | 状态 | 主要证据 / 待取得项 | 关联案例 / 发现 |
 | --- | --- | --- | --- | --- |
