@@ -62,6 +62,10 @@ def test_extension_binds_existing_release_source_and_dev_review(tmp_path):
     manifest, _ = releases._read_release(root, rid)
     assert manifest['record_count'] == baseline['record_count'] + 1
     verify_operator_manifest(manifest, runtime_release=runtime, upstream_sha=upstream)
+    releases._write_active_pointer(root, rid)
+    from daq_fae.knowledge.reviewed_view import ReviewedKnowledge
+    assert ReviewedKnowledge.load_active(
+        root, runtime_release=runtime, upstream_sha=upstream).release_id == rid
     bad = deepcopy(manifest)
     next(item for item in bad['records'] if item['id'] == row['id'])['data']['value'] = 'bogus'
     with pytest.raises(ValueError):

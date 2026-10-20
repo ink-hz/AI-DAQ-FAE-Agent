@@ -323,7 +323,8 @@ class ReviewedKnowledge:
         if any(active['manifest'].get(key) for key in ('sources', 'records', 'sections')):
             if active['manifest'].get('review', {}).get('operator_release', {}).get('mode') in {\
                     'owner_directed_source_checked_v1', 'owner_directed_source_checked_v2',
-                    'owner_directed_runtime_rebind_v3'}:
+                    'owner_directed_runtime_rebind_v3',
+                    'owner_directed_source_checked_specs_v4'}:
                 from .operator_release import _checked_operator
                 _checked_operator(root, active['release_id'], runtime_release=runtime_release,
                                   upstream_sha=upstream_sha)
