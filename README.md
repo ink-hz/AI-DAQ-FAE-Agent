@@ -2,18 +2,17 @@
 
 数采 FAE 是独立版本、独立知识发布和回滚的内部服务，复用固定源码版本的通用 FAE 运行时。生产入口为 [数采 FAE](https://agent.orbbec.com.cn/daq/)。
 
-## 当前状态（2026-10-18，已部署）
+## 当前状态（2026-10-20，已部署）
 
-本轮在本机隔离 Dev 核对 276 份产品原件和 143 份 SDK、Viewer、固件原件，封版 27 条主知识、23 条 SDK 包内用法及 17 条唯一变更日志记录。主知识五题、SDK 19 题及目录、固件身份回归已完成真实模型问答和独立语义复核。Python 全量 **1314 passed**、WebUI **246 passed** 且生产构建通过；本轮没有改动共享 `src/`。详见[发布前复核](docs/reviews/2026-10-17-daq-knowledge-dev-release.md)。
+当前生产保留 27 条已审主知识，SDK 知识为 24 条包内用法及 17 条唯一变更日志记录。2026-10-20 的数采场景与证据范围升级已部署；代码和提示词的本机 Dev 静态回归为 **1618 passed**，聚焦真实问答和独立复审结果、未完成的全量回放范围见[本次发布记录](docs/reviews/2026-10-20-daq-scenario-production-release.md)。本轮没有改动共享 `src/`，没有对生产回答接口发送模型评测题。
 
-| 对象 | 本机 Dev 封版身份 |
+| 对象 | 当前生产身份 |
 | --- | --- |
-| DAQ 代码 | `56940355daa0fd2b3f67b5f1fe74f1317a179b51021ea5024fff7cfb52fe2dde`；运行时 `daq-56940355daa0` |
-| 主知识基底 | `370570f70f1cd8121f38437a1d7158b6489b7be6edea8ca3d654c31b88d70e91` |
-| 27 条主知识 Pro 增量 | `3c8df43e43d4c2bc585d4e3f9a6120070b552f486b880eee086a2c2e89c215a7` |
-| 23 条 SDK 用法、17 条日志 | `ee6b77ad30fc8f449cfe59f10d823987347a860f8521308784bfc4f3aadf0805` |
+| DAQ 源码与运行时 | `7d7232902cdd6cdea2baf4d61ccc0960ef1ab428`；`daq-ba50906bd98b` |
+| 27 条主知识 | `19d1a31b7606df155fda7d1ca8e336a845e3b78d19f15818af89e7127d2f18c0` |
+| 24 条 SDK 用法、17 条日志 | `2bfd0538e0fa1ba46e607d8a55b63a06f9b397141b2c0192b9a6a84e2bd66d44` |
 
-当前生产 DAQ 源码提交为 `e24920b5152e9b334d17cebeb9dc47dca289f009`，镜像 `sha256:1c4b61dbe80c010bfd6b58c89a16ec057b3a76777b3b53e629ecd27517f00391`。本次仅更新数采 WebUI 的企业会话恢复，内部 `/health` 的运行时、主知识和 SDK 身份保持上表版本；相机镜像未切换。两服务均健康、重启 0。公网 `/daq/` 及前端资源返回 200，匿名会话与历史接口返回 401；生产未调用模型评测。知识发布过程见[生产发布记录](docs/reviews/2026-10-18-daq-knowledge-production-release.md)，本次 403 修复和烟测见[会话恢复记录](docs/reviews/2026-10-18-daq-chat-403-session-recovery.md)。
+当前生产 DAQ 镜像为 `sha256:564a0e39eeb5402ae5e579276b1a6949a9f44b8d45b094ccd124b0889d6d6b0c`。数采与相机容器均健康、重启 0，相机镜像未切换。公网 `/daq/` 及前端资源返回 200，匿名会话与历史接口返回 401。代码推送、知识发布与生产切换分别核对，详见[2026-10-20 发布记录](docs/reviews/2026-10-20-daq-scenario-production-release.md)；前次知识发布见[2026-10-18 发布记录](docs/reviews/2026-10-18-daq-knowledge-production-release.md)。
 
 原件覆盖审计为产品 **9 已支撑内部可答发布 / 42 仅候选 / 225 仅归档**，SDK 侧 **30 / 0 / 113**。这是文件数，不能替代 27/23/17 条知识记录数。主候选图另有 715 条未发布记录；图像候选、软件兼容、官网链接、复杂组合及设备实测仍须按来源和条件单独审核。参见[完整覆盖审计](docs/reviews/2026-10-16-daq-full-material-coverage.md)。
 
