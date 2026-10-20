@@ -17,6 +17,8 @@
 
 2026-10-20 发布记录冻结 DAQ 代码 `ba50906…`、runtime `daq-ba50906bd98b`、主知识 `19d1a31…`、SDK `2bfd0538…`、镜像 digest；相机镜像当次未变。但本次只读访问只能看到两侧公开入口 HTTP 200，无法读内部 `/health`、现运行模型回显、提示哈希和知识指针（[A0](00-identity.md)）。因此 L10 对**历史发布记录**可审，对**当前生产实际身份**标 `version_unknown`。如果现在有一个线上短答案，必须先取得其 `client_request_id/trace_id`、后端 done 与运行身份，再与 UI 对照；仅靠页面可达或 200 响应不能归因。
 
+本机 `data/daq_traces.jsonl` 的元数据复算为 16,942 个 root trace，最后事件 2026-10-20 00:49:57 UTC；无 `daq-ba50906bd98b` 或 `19d1a31…` 身份记录。它在 01:15:16 UTC 发布备份时点之前停止，因此本地已有 authenticated trace 也无法闭合**本次切换后**的后端→UI 链。内部健康仅在生产主机 loopback；本机 loopback 不通，公开 `/daq/api/health` 404。此为 `EVD-006` 的精确访问阻断，不是“查到了生产正常”。
+
 `daq_fae/authenticated_chat.py:187-300` 把 schema transport 失败、Provider 400/401/403/404/422 配置拒绝、429 限流、5xx 不可用和附件/权限错误分开；`LoopRuntime` 输出 `provider_transport`、`provider_model_echo`、预算、tool_calls、coverage、outcome。应按错误码分桶，不能把系统故障改写成“知识没有”。发布质量门也应区分 `safe_abstained`（可能是正确的边界）和 `schema_error/provider_*`（系统失败）。
 
 ## 3. 最小后续核查

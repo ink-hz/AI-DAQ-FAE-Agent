@@ -38,3 +38,5 @@ flowchart LR
 **L01/L02 当前判定**：DAQ 没有明显“漏抄相机 SessionContext 类”问题，已有独立的认证、角色和 checkpoint 机制；`CASE-005` 反证了“整轮上文未带入”这一说法。仍有精细化风险：结构化 schema 条件未保留某些已知字段时，Loop/工具或可从历史重获，但终稿不保证兑现。修复方向应是字段来源/有效问/工具参数/终稿的逐轮对账，而非单纯增加 history 长度。当前生产身份和 Task 是否另有新发布仍 `version_unknown`。
 
 **入口到证据门的补充发现**：认证与 Task 虽共用 `prepare_workflow`，却都没有向 `DaqEvidencePolicy` 传入有效问句；本机 Dev 传入。无模型对照已证门控输出不同，详见 [A7 的 EVD-005](07-evidence-synthesis.md) 和 `FIND-007`。这属于入口装配合同不一致，当前生产部署身份仍需核实。
+
+**最终本机代码的切题/纠正反例复核**：`test_reviewed_entity_scope_survives_followup_and_clears_on_topic_switch`、`test_topic_switch_clears_prior_setup_and_keeps_new_observations`、`test_context_statement_survives_checkpoint_as_user_words_and_clears_on_topic_switch`、`test_followup_goals_share_one_explicit_variant_without_sharing_measurement_mode`、`test_new_variant_cannot_inherit_old_peer_selector` 合计 5/5 通过。这给出结构化 checkpoint 的追问保留、切题清除和变体改写的**代码合同正反例**；不是最终发布后的真实认证会话 trace，不能抹掉 `CASE-005` 的历史终稿失配或线上观测缺口。
