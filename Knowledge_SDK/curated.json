@@ -201,6 +201,9 @@
     "sdk_layer": "host_cpp",
     "doc_type": "example",
     "title": "导出 EGO 对齐与 IMU 标定 YAML",
+    "example_subjects": [
+      "EGO"
+    ],
     "question_patterns": [
       "EGO 怎么导出 align_calib.yaml",
       "IMU 标定 YAML 怎么从设备取",
@@ -248,6 +251,7 @@
     "package": "host_cpp_20260929",
     "sdk_layer": "host_cpp",
     "doc_type": "example",
+    "example_subjects": ["EGO Depth"],
     "title": "EGO Depth 网络预设与流 Profile 查询",
     "question_patterns": [
       "EGO Depth SDK 怎么切换预设",
@@ -791,6 +795,10 @@
       "SAVING",
       "RECORD_SAVED"
     ],
+    "callable_symbols": [
+      "setEgoStateCallback",
+      "setEgoRecordingResultCallback"
+    ],
     "topics": [
       "android",
       "recording",
@@ -886,6 +894,60 @@
     "usage_tasks": [
       "inspect_package",
       "ble_demo"
+    ]
+  },
+  {
+    "kb_id": "daq-sdk-ble-linux-link-024",
+    "package": "ble_linux_20260929",
+    "sdk_layer": "ble_cpp",
+    "doc_type": "build",
+    "last_verified": "2026-10-19",
+    "title": "EgoLowBle 1.1.8 Linux x64 示例链接与运行时库路径",
+    "question_patterns": [
+      "Linux x64 EgoLowBle 1.1.8 怎么链接与放置",
+      "EgoLowBle Linux libEgoLowBle.so 运行时路径"
+    ],
+    "answer": "EgoLowBle 1.1.8 Linux x64 包的示例构建脚本用 g++ C++17、包内 include 与 lib 目录以及 -lEgoLowBle 链接，示例产物在 examples/build，RPATH 设为 $ORIGIN/../../lib。包内 run_demo.sh 把发布包的 lib 目录加入 LD_LIBRARY_PATH；LINUX_GUIDE.md 对预编译 bin demo 也给出用发布包 lib 目录设置 LD_LIBRARY_PATH 的运行命令。共享库位于发布包的 lib/libEgoLowBle.so。",
+    "symbols": [
+      "libEgoLowBle.so",
+      "LD_LIBRARY_PATH",
+      "build_linux.sh",
+      "run_demo.sh"
+    ],
+    "topics": [
+      "ble",
+      "linux",
+      "install",
+      "link",
+      "runtime"
+    ],
+    "source_refs": [
+      {
+        "member_suffix": "EgoLowBle-linux-x64-1.1.8\\docs\\LINUX_GUIDE.md",
+        "start_line": 6,
+        "end_line": 16
+      },
+      {
+        "member_suffix": "EgoLowBle-linux-x64-1.1.8\\docs\\LINUX_GUIDE.md",
+        "start_line": 128,
+        "end_line": 142
+      },
+      {
+        "member_suffix": "EgoLowBle-linux-x64-1.1.8\\examples\\build_linux.sh",
+        "start_line": 4,
+        "end_line": 24
+      },
+      {
+        "member_suffix": "EgoLowBle-linux-x64-1.1.8\\examples\\run_demo.sh",
+        "start_line": 4,
+        "end_line": 6
+      }
+    ],
+    "usage_tasks": [
+      "link_and_deploy",
+      "link_library",
+      "runtime_library_path",
+      "build_demo"
     ]
   },
   {

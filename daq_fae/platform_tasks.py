@@ -162,6 +162,8 @@ class DaqTaskOrchestrator:
                 runtime = LoopRuntime(
                     adapter=self._adapter,
                     toolbox=DaqToolBox(context=plan.context.tool_context(),
+                                       current_question=(prepared.schema.original_question
+                                                         if prepared else question),
                                        knowledge=self._knowledge, role=knowledge_role,
                                        requirements=plan.requirements, access_guard=guard,
                                        allowed_tools=allowed_tools),

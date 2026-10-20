@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack, nullcontext
+from datetime import timedelta
 from io import BytesIO
 import hashlib
 import json
@@ -17,6 +19,7 @@ import subprocess
 import tempfile
 from threading import Barrier
 import time
+from unittest.mock import patch
 from uuid import uuid4
 
 from daq_fae.knowledge.code_identity import daq_code_sha
@@ -65,6 +68,27 @@ def _events(response) -> list[dict]:
     return events
 
 
+def _attachment_fixture(fixture: str | None, turn_index: int
+                        ) -> tuple[str, bytes, str] | None:
+    if fixture == 'current_turn_image':
+        from PIL import Image, ImageDraw
+        picture = Image.new('RGB', (320, 180), 'white')
+        drawing = ImageDraw.Draw(picture)
+        drawing.ellipse((40, 30, 140, 130), fill='blue')
+        drawing.text((165, 80), 'DAQ TEST', fill='black')
+        payload = BytesIO()
+        picture.save(payload, format='PNG')
+        return 'visual-fixture.png', payload.getvalue(), 'image/png'
+    if fixture == 'current_turn_log' and turn_index == 0:
+        log = ('2026-10-20T10:21:34+08:00 device=EGO Pro '
+               'firmware=v9.9.9 sdk=OrbbecSDK/2.9.0\n'
+               'WARN capture_start request_id=R-42 '
+               'usb_transfer_timeout code=E42\n'
+               'operator_note=after HUB hotplug; retry_not_performed\n')
+        return 'field-log.txt', log.encode('utf-8'), 'text/plain'
+    return None
+
+
 def _start_postgres(directory: Path) -> str:
     data, socket = directory / 'pgdata', directory / 'socket'
     socket.mkdir()
@@ -111,6 +135,8 @@ def main() -> int:
     parser.add_argument('--output-dir', type=Path)
     parser.add_argument('--concurrency-probe', action='store_true',
                         help='Run exactly two independent one-turn cases concurrently')
+    parser.add_argument('--dev-code-preview', action='store_true',
+                        help='Replay current DAQ code against immutable reviewed records in isolated Dev; output is ineligible for release staging')
     args = parser.parse_args()
     if bool(args.sdk_catalog_dir) != bool(args.sdk_archive):
         raise SystemExit('SDK catalog and archive must be supplied together')
@@ -138,10 +164,36 @@ def main() -> int:
         os.environ['DAQ_KNOWLEDGE_RELEASE_ROOT'] = str(isolated_release)
         from dotenv import dotenv_values
         from daq_fae.knowledge.releases import read_active_release
-        active = read_active_release(args.release_root)
+        from daq_fae.knowledge.reviewed_view import ReviewedKnowledge
+        preview = None
+        if args.dev_code_preview:
+            from daq_fae.knowledge import operator_release
+            pointer = json.loads((args.release_root / 'active.json').read_text())
+            release_id = pointer['release_id']
+            manifest_path = args.release_root / 'releases' / release_id / 'manifest.json'
+            raw_manifest = manifest_path.read_bytes()
+            if hashlib.sha256(raw_manifest).hexdigest() != release_id:
+                raise SystemExit('Dev preview release manifest digest mismatch')
+            evidence = json.loads(raw_manifest)['review']['operator_release']
+            with ExitStack() as identity_check:
+                for function, key in (
+                    ('_code_sha256', 'daq_code_sha256'),
+                    ('_prompt_sha256', 'prompt_sha256'),
+                    ('_candidate_prompt_sha256', 'candidate_prompt_sha256'),
+                    ('_schema_prompt_sha256', 'schema_prompt_sha256'),
+                ):
+                    identity_check.enter_context(patch.object(
+                        operator_release, function, return_value=evidence[key]))
+                active = read_active_release(args.release_root)
+                preview = ReviewedKnowledge.from_manifest(
+                    active['release_id'], active['manifest'])
+        else:
+            active = read_active_release(args.release_root)
         if active is None:
             raise SystemExit('active DAQ release missing')
-        runtime_release = active['manifest']['review']['operator_release']['runtime']['release']
+        origin_runtime_release = active['manifest']['review']['operator_release']['runtime']['release']
+        runtime_release = ('daq-dev-' + _daq_code_sha()[:12]
+                           if args.dev_code_preview else origin_runtime_release)
         os.environ['DAQ_RUNTIME_RELEASE'] = runtime_release
         settings = dotenv_values(ROOT.parent / 'AI-FAE-Agent/.env')
         for target, source in (
@@ -181,24 +233,34 @@ def main() -> int:
             image_cases = any(case.get('fixture') == 'current_turn_image' for case in cases)
             sdk_catalog = (SdkCatalog.load(args.sdk_catalog_dir, args.sdk_archive)
                            if args.sdk_catalog_dir else None)
-            app = create_app(
-                provider_mode='anthropic', adapter=_anthropic_dev_adapter(),
-                sdk_catalog=sdk_catalog,
-                vision_adapter=_daq_vision_adapter() if image_cases else None,
-                attachment_dir=workspace / 'attachments',
-                knowledge_release_root=args.release_root,
-                platform_client=FakePlatform(),
-                identity_repository=InMemoryAuthenticatedSessionRepository(),
-                conversation_repository=AuthenticatedConversationRepository(dsn, codec=codec),
-                feedback_store=PostgresDataFlywheelStore(dsn, _FailClosedFeedbackWriter()),
-                review_store=object(),
-                durable_state=DaqDurableState(dsn, codec=codec),
-            )
+            # Only this isolated replay process substitutes the code-binding
+            # loader. The immutable source manifest and normal role/evidence
+            # gates still apply; production startup remains fail closed.
+            loader = (patch.object(ReviewedKnowledge, 'load_active', return_value=preview)
+                      if preview is not None else nullcontext())
+            with loader:
+                app = create_app(
+                    provider_mode='anthropic', adapter=_anthropic_dev_adapter(),
+                    sdk_catalog=sdk_catalog,
+                    vision_adapter=_daq_vision_adapter() if image_cases else None,
+                    attachment_dir=workspace / 'attachments',
+                    knowledge_release_root=args.release_root,
+                    platform_client=FakePlatform(),
+                    identity_repository=InMemoryAuthenticatedSessionRepository(),
+                    conversation_repository=AuthenticatedConversationRepository(dsn, codec=codec),
+                    feedback_store=PostgresDataFlywheelStore(dsn, _FailClosedFeedbackWriter()),
+                    review_store=object(),
+                    durable_state=DaqDurableState(dsn, codec=codec),
+                )
             identity = {
                 'suite': args.suite, 'new_suite_sha256': _sha(NEW_SUITE),
                 'suite_file_sha256': _sha(args.suite_file) if args.suite_file else None,
                 'old_suite_sha256': [_sha(path) for path in OLD_SUITES],
                 'knowledge_release': active['release_id'],
+                'knowledge_binding': ('dev_code_preview_of_immutable_release'
+                                      if args.dev_code_preview else 'source_bound_release'),
+                'publication_eligible': not args.dev_code_preview,
+                'reviewed_origin_runtime_release': origin_runtime_release,
                 'sdk_catalog_sha256': sdk_catalog.manifest['records_sha256']
                 if sdk_catalog is not None else None,
                 'release_notes_sha256': sdk_catalog.release_notes.manifest['records_sha256']
@@ -286,6 +348,33 @@ def main() -> int:
                     print('output', output, 'sha256', _sha(result_path), flush=True)
                     return 0
                 for case in cases:
+                    if case.get('fixture') == 'expired_text_attachment':
+                        filename, payload, mime = _attachment_fixture(
+                            'current_turn_log', 0)
+                        uploaded = client.post('/attachments', files=[
+                            ('files', (filename, payload, mime))], headers=headers)
+                        if uploaded.status_code != 201:
+                            raise RuntimeError(
+                                f'expired fixture upload failed: {uploaded.status_code}')
+                        attachment_id = uploaded.json()['results'][0]['attachment']['attachment_id']
+                        expires_at = app.state.attachment_store.get(
+                            attachment_id).expires_at
+                        with patch.object(app.state.attachment_store, '_clock',
+                                          return_value=expires_at + timedelta(seconds=1)):
+                            rejected = client.post('/chat', json={
+                                'message': case['question'],
+                                'attachment_ids': [attachment_id],
+                                'client_request_id': f"{case['id']}-expired-{uuid4()}",
+                            }, headers=headers)
+                        row = {'case': case, 'identity': identity,
+                               'status': 'expired_attachment_rejected',
+                               'http_status': rejected.status_code,
+                               'error': rejected.json().get('detail')}
+                        stream.write(json.dumps(row, ensure_ascii=False) + '\n')
+                        stream.flush()
+                        print(case['id'], row['status'], rejected.status_code,
+                              flush=True)
+                        continue
                     if case.get('operation'):
                         from daq_fae.domain_tools import DaqToolBox
                         tool = DaqToolBox(knowledge=app.state.daq_knowledge,
@@ -299,7 +388,8 @@ def main() -> int:
                         stream.flush()
                         print(case['id'], tool.status, flush=True)
                         continue
-                    if case.get('fixture') and case['fixture'] != 'current_turn_image':
+                    if case.get('fixture') and case['fixture'] not in {
+                            'current_turn_image', 'current_turn_log'}:
                         row = {'case': case, 'status': 'deterministic_fixture_not_model_replay',
                                'identity': identity}
                         stream.write(json.dumps(row, ensure_ascii=False) + '\n')
@@ -317,19 +407,14 @@ def main() -> int:
                         body = {'message': question, 'client_request_id': f"{case['id']}-{index}-{uuid4()}"}
                         if args.response_language:
                             body['response_language'] = args.response_language
-                        if case.get('fixture') == 'current_turn_image':
-                            from PIL import Image, ImageDraw
-                            picture = Image.new('RGB', (320, 180), 'white')
-                            drawing = ImageDraw.Draw(picture)
-                            drawing.ellipse((40, 30, 140, 130), fill='blue')
-                            drawing.text((165, 80), 'DAQ TEST', fill='black')
-                            payload = BytesIO()
-                            picture.save(payload, format='PNG')
+                        attachment = _attachment_fixture(case.get('fixture'), index)
+                        if attachment is not None:
+                            filename, payload, mime = attachment
                             uploaded = client.post('/attachments', files=[
-                                ('files', ('visual-fixture.png', payload.getvalue(), 'image/png'))],
+                                ('files', (filename, payload, mime))],
                                 headers=headers)
                             if uploaded.status_code != 201:
-                                raise RuntimeError(f'image upload failed: {uploaded.status_code}')
+                                raise RuntimeError(f'fixture upload failed: {uploaded.status_code}')
                             body['attachment_ids'] = [
                                 uploaded.json()['results'][0]['attachment']['attachment_id']]
                         if session_id:

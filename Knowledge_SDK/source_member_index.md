@@ -20,6 +20,13 @@
 
 - EgoLowBle-linux-x64-1.1.8\docs\README.md:3-36 (member SHA-256 `b5341cf02eb6b662d78bce1dc24fa75c4192054222b38e5345103e2ecef50960`)
 
+## daq-sdk-ble-linux-link-024
+
+- EgoLowBle-linux-x64-1.1.8\docs\LINUX_GUIDE.md:6-16 (member SHA-256 `4cc6d9a4f525b0af0e860b7c16092a4f2156356314328c8980df70ae2e234b4d`)
+- EgoLowBle-linux-x64-1.1.8\docs\LINUX_GUIDE.md:128-142 (member SHA-256 `4cc6d9a4f525b0af0e860b7c16092a4f2156356314328c8980df70ae2e234b4d`)
+- EgoLowBle-linux-x64-1.1.8\examples\build_linux.sh:4-24 (member SHA-256 `8aebf99e1d6d30e98f1df0cf42d6a0b3eeb1826de29a11ea4d08a484fdd2aed6`)
+- EgoLowBle-linux-x64-1.1.8\examples\run_demo.sh:4-6 (member SHA-256 `0db26cf1967d77316dab7e4032614b0563f4a1b8f3e4f4b8c7ea44fa7b46d37c`)
+
 ## daq-sdk-ble-windows-install-020
 
 - EgoLowBle-windows-x64-1.1.8\docs\README.md:3-23 (member SHA-256 `fa7e438f43f1c0d2eacdcf3136a852ea5222491415074b88e70ba26627514d4a`)

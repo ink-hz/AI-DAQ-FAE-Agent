@@ -46,6 +46,19 @@ def test_preloop_only_exposes_tools_for_the_product_goals():
     assert allowed_tools_for(visual) == frozenset({'session_state'})
 
 
+def test_standalone_procedure_does_not_open_unasked_topology_goal():
+    schema = DaqRequestSchema.from_candidate(
+        'EGO Pro 单机 TF 卡录制，从开机到停止的按键和灯态是什么？', {
+            'confidence': 'high', 'goals': [
+                {'kind': 'product', 'capability': 'lookup_procedure',
+                 'entities': ['EGO Pro'],
+                 'conditions': {'standalone': True, 'recording_mode': 'local_tf_card'}},
+            ],
+        })
+    assert allowed_tools_for(schema) == frozenset({
+        'resolve_entity', 'catalog', 'session_state', 'lookup_procedure'})
+
+
 @pytest.mark.parametrize('capability', ['sdk_evidence', 'check_software_support'])
 def test_sdk_questions_can_read_release_notes_without_treating_them_as_support(capability):
     schema = DaqRequestSchema.from_candidate(
@@ -405,7 +418,9 @@ def test_followup_variant_change_rebinds_reviewed_entity_before_evidence_plan():
         role='internal_fae', runtime_release='runtime-dev', previous=previous,
         prior_user_context=first + '\n它的视场角和帧率是多少？',
     )
-    assert len(prepared.plan.requirements) == 4
+    assert len(prepared.plan.requirements) == 5
+    assert 'rgb_native_resolution' in {
+        item['field'] for item in prepared.plan.requirements}
     assert all(item['entities'] == ['entity:ego-1600'] and
                item['conditions']['resolution_variant'] == '1600x1200'
                for item in prepared.plan.requirements)

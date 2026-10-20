@@ -33,7 +33,7 @@ from daq_fae.durable_state import (
 )
 from daq_fae.task_context import prepare_turn
 from daq_fae.provider_errors import anthropic_failure, provider_exception_done, vision_failure_reason
-from daq_fae.request_schema import SchemaExtractionError
+from daq_fae.request_schema import SchemaExtractionError, refers_to_prior_attachment
 from daq_fae.workflow import (StageLedger, prepare_workflow, allowed_tools_for,
                               context_clarification_done)
 from daq_fae.response_language import localize_answer
@@ -89,6 +89,11 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
             raise HTTPException(503, "daq_conversation_storage_unavailable") from None
     else:
         session = persistence.create_session(subject, store=app.state.session_store)
+    effective_attachment_ids = (
+        list(body.attachment_ids) if body.attachment_ids
+        else list(session.active_attachment_ids)
+        if refers_to_prior_attachment(body.message) else [])
+    payload['effective_attachment_ids'] = effective_attachment_ids
     try:
         reservation = durable.reserve(
             subject, body.client_request_id, payload, session.session_id,
@@ -113,12 +118,12 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
         raise HTTPException(429, "chat_concurrency_limit")
     try:
         manifests = app.state.attachment_store.bind_many(
-            body.attachment_ids, session.session_id,
+            effective_attachment_ids, session.session_id,
             owner_subject_id=str(subject.subject_id),
         )
         session.bind_attachments(
             [AttachmentDescriptor.from_manifest(item) for item in manifests],
-            explicit_ids=body.attachment_ids,
+            explicit_ids=effective_attachment_ids,
         )
         checkpoint = durable.load_context(subject, session.session_id)
     except AttachmentError as exc:
@@ -226,10 +231,15 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
                     allowed_tools = (None if isinstance(adapter, OfflineAdapter)
                                      else allowed_tools_for(prepared.schema))
                     toolbox = DaqToolBox(context=plan.context.tool_context(), knowledge=knowledge,
+                                         current_question=prepared.schema.original_question,
                                          role=binding["role"] if binding else None,
                                          requirements=plan.requirements, access_guard=assert_current_access,
                                          allowed_tools=allowed_tools)
-                    if body.attachment_ids:
+                    refer_visible_attachment = (
+                        prepared.schema.attachment_dependency in {
+                            'relevant', 'required_for_answer'}
+                        and bool(texts or images))
+                    if effective_attachment_ids or refer_visible_attachment:
                         toolbox = extend_with_attachments(
                             toolbox, session=session, store=app.state.attachment_store,
                             vision=vision_adapter,
@@ -256,7 +266,8 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
                             entity_note=plan.context_note,
                             evidence_requirements=plan.evidence_requirements(),
                             required_attachment_source_ids=(
-                                list(toolbox.attachment_source_ids) if body.attachment_ids else None
+                                list(texts) if effective_attachment_ids or refer_visible_attachment
+                                else None
                             ),
                             required_image_source_ids=images,
                             attachment_dependency=prepared.schema.attachment_dependency,
@@ -300,6 +311,7 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
                 done["fallback_reason"] = (
                     done.get("answer_contract", {}).get("validation_error")
                     or done.get("evidence_policy", {}).get("failure_reason")
+                or done.get("fallback_reason")
                     or done["outcome"]
                 )
             else:

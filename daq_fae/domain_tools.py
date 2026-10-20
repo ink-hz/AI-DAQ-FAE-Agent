@@ -10,12 +10,19 @@ import unicodedata
 from src.agent.loop.tools import ToolResult
 
 from daq_fae.knowledge.reviewed_view import ReviewedKnowledge, reviewed_name_in_query as _reviewed_name_in_query
-from daq_fae.knowledge.sdk_catalog import sdk_usage_descriptor_matches as _sdk_usage_descriptor_matches
+from daq_fae.knowledge.sdk_catalog import (
+    audio_playback_subjects, calibration_export_known_scope,
+    calibration_export_row_matches_question,
+    device_sdk_scope_matches_question,
+    sdk_cpu_architectures,
+    sdk_usage_descriptor_matches as _sdk_usage_descriptor_matches,
+)
 from daq_fae.knowledge.release_notes import (
-    _firmware_identity, _firmware_requirement_identity, _firmware_scopes,
-    _mentioned_families,
+    _build_tokens, _firmware_identity, _firmware_requirement_identity,
+    _firmware_scopes, _mentioned_families, _selector_scopes, _versions,
 )
 from daq_fae.knowledge.source_paths import contains_source_path
+from daq_fae.request_schema import firmware_versions_compared_without_current
 from daq_fae.knowledge.software_evidence import missing_conditions, support_gap, software_version_conditions
 from daq_fae.knowledge.section_search import (
     EXCERPT_CHARS, MAX_BODY_CHARS, MAX_QUERY_CHARS, body_text, rank_sections,
@@ -61,6 +68,66 @@ def _release_build_matches(selector: object, build: str) -> bool:
             len(wanted) in {10, 12} and build == wanted)
 
 
+def _release_note_probe_grounded(probe: str, user_text: str) -> bool:
+    """A narrower tool probe may improve recall but cannot add selectors."""
+    probe_families = set(_mentioned_families(probe))
+    if not probe_families or not probe_families <= set(_mentioned_families(user_text)):
+        return False
+    probe_scopes = _selector_scopes(probe)
+    user_scopes = _selector_scopes(user_text)
+    if any(family not in user_scopes or any(
+            not selectors <= user_scopes[family][selector]
+            for selector, selectors in scope.items())
+            for family, scope in probe_scopes.items()):
+        return False
+    if not _versions(probe) <= _versions(user_text):
+        return False
+    if not _build_tokens(probe) <= _build_tokens(user_text):
+        return False
+    for platform in ('android', 'desktop', 'linux', 'windows', 'ios'):
+        if re.search(r'\b' + platform + r'\b', probe, re.I) and not re.search(
+                r'\b' + platform + r'\b|桌面' if platform == 'desktop' else
+                r'\b' + platform + r'\b', user_text, re.I):
+            return False
+    probe_fw = _firmware_scopes(probe)
+    user_fw = _firmware_scopes(user_text)
+    return all(identity in user_fw and
+               scope['versions'] <= user_fw[identity]['versions']
+               for identity, scope in probe_fw.items())
+
+
+def _user_scoped_log_probes(question: str) -> list[str]:
+    """Use the user's dated log clause without package conditions beside it."""
+    families = set(_mentioned_families(question))
+    if len(families) != 1 or 'firmware' in families:
+        return []
+    family = next(iter(families))
+    label = {'orbbecsdk': 'OrbbecSDK', 'egoviewer': 'EgoViewer'}[family]
+    probes = []
+    for clause in re.split(r'[;；。？！?\n]+', question):
+        if ('日志' not in clause and 'changelog' not in clause.casefold()
+                and 'release note' not in clause.casefold()):
+            continue
+        if not (_build_tokens(clause) or _versions(clause)):
+            continue
+        mentioned = set(_mentioned_families(clause))
+        if mentioned and mentioned != families:
+            continue
+        probes.append((label + ' ' if not mentioned else '') + clause)
+    return probes
+
+
+def _ambiguous_firmware_choice(question: str) -> bool:
+    token = r'(双目|四目|\bEGO\s*Pro\b|\bEGO\s*Dual\b|\bPro\b|\bDual\b)'
+    for match in re.finditer(token + r'[^。？！?]{0,12}(?:还是|或者|或|/)'
+                             r'[^。？！?]{0,12}' + token, question, re.I):
+        left = _firmware_identity(match.group(1)) or match.group(1).casefold()
+        right = _firmware_identity(match.group(2)) or match.group(2).casefold()
+        if left != right:
+            return True
+    return False
+
+
 def _procedure_task_paraphrase_matches(task: str, row: dict) -> bool:
     """Accept source-scoped recording paraphrases when the record names that mode."""
     data = row.get('data', {})
@@ -75,7 +142,7 @@ def _procedure_task_paraphrase_matches(task: str, row: dict) -> bool:
         return False
     recording = '录制' in compact or 'record' in compact
     local_storage = any(value in compact for value in
-                        ('tf卡', 'tfcard', '本机', '本地', '独立', 'local'))
+                        ('tf卡', 'tfcard', '本机', '本地', '单机', '独立', 'local'))
     reviewed_checks = all(value in conditions.get('indicators', [])
                           for value in ('voice_prompt', 'green_led'))
     check_sequence = (reviewed_checks and '步骤' in compact and
@@ -239,6 +306,21 @@ def _candidate_topology_entities_match(row: dict, query: str,
     return bool(members) and longest_hits == members and not (negated & members)
 
 
+def _formal_user_operating_scope_matches(row: dict, topology: dict,
+                                         question: str,
+                                         entity_records: dict[str, dict]) -> bool:
+    """Keep independent user clauses separate when judging operating scope."""
+    for clause in re.split(r'[?？。；;\n]+', question):
+        if not clause.strip():
+            continue
+        if (_candidate_query_scope_safe(row, clause)
+                and _candidate_query_scope_safe(topology, clause)
+                and _candidate_topology_entities_match(
+                    topology, clause, entity_records)):
+            return True
+    return False
+
+
 def _field_intent_matches(intent: str, field: str) -> bool:
     port_power_fields = {
         'downstream_port_power_output',
@@ -277,13 +359,15 @@ class DaqToolBox:
     attachment_vision_model = None
     device_support = None
 
-    def __init__(self, *, question: str = "", context: dict | None = None,
+    def __init__(self, *, question: str = "", current_question: str | None = None,
+                 context: dict | None = None,
                  knowledge: ReviewedKnowledge | None = None, role: str | None = None,
                  requirements: list[dict] | None = None, access_guard=None,
                  allowed_tools: frozenset[str] | None = None):
         if knowledge is not None and role is None:
             raise ValueError("knowledge role required")
         self.question = question
+        self.current_question = question if current_question is None else current_question
         self.context = dict(context or {})
         self.knowledge = knowledge
         self.role = role
@@ -292,7 +376,9 @@ class DaqToolBox:
         self.allowed_tools = allowed_tools
 
     def with_request_context(self, question: str) -> "DaqToolBox":
-        return DaqToolBox(question=question, context=self.context,
+        return DaqToolBox(question=question,
+                          current_question=self.current_question or question,
+                          context=self.context,
                           knowledge=self.knowledge, role=self.role,
                           requirements=self.requirements, access_guard=self.access_guard,
                           allowed_tools=self.allowed_tools)
@@ -324,6 +410,8 @@ class DaqToolBox:
             return ToolResult(status="tool_error", content={"error": "unknown_tool"})
         if self.allowed_tools is not None and name not in self.allowed_tools:
             return ToolResult(status="tool_error", content={"error": "tool_outside_request_goals"})
+        original_query_entity = (arguments.get('entity') if name == 'lookup_spec'
+                                 else None)
         if name == 'lookup_spec' and 'conditions' in arguments:
             raw_conditions = arguments['conditions']
             if isinstance(raw_conditions, str) and len(raw_conditions) <= 2048:
@@ -352,6 +440,19 @@ class DaqToolBox:
                 "reason": "empty_knowledge_release", "query": dict(arguments),
                 "claim_status": "unknown", "matches": [],
             })
+        if (name == 'check_software_support' and self.question
+                and firmware_versions_compared_without_current(self.question)
+                and not self.context.get('firmware_version')):
+            # Historical log versions are not evidence of the installed FW.
+            # Ignore a model-selected version rather than validating a
+            # fictional device/SDK combination.
+            return ToolResult(status='not_found', content={
+                'reason': 'current_firmware_version_unverified',
+                'claim_status': 'unknown', 'matches': [],
+                'missing_conditions': {'firmware_version': 'current_device'},
+                'matched_requirement_ids': self._attempted_requirement_ids(
+                    name, arguments),
+            })
         if name == "sdk_evidence" and getattr(self.knowledge, "sdk_catalog", None) is not None:
             query = arguments.get("query")
             if not isinstance(query, str) or not query.strip() or len(query) > MAX_QUERY_CHARS:
@@ -361,6 +462,7 @@ class DaqToolBox:
                                 if isinstance(item, dict)
                                 and item.get('capability') == 'sdk_evidence']
             matches = catalog.search(query, self.role)
+            partial_requirement_rows = {}
             if sdk_requirements:
                 matches = [row for row in matches
                            if self._sdk_usage_requirement_ids([row])]
@@ -388,7 +490,9 @@ class DaqToolBox:
                                       if isinstance(value, str) and value)
                     if not scoped:
                         continue
-                    for row in catalog.search(scoped, self.role):
+                    for row in catalog.search(
+                            scoped, self.role,
+                            include_all=bool(conditions.get('source_files'))):
                         row_ids = self._sdk_usage_requirement_ids([row])
                         if requirement.get('id') in row_ids and row not in matches:
                             matches.append(row)
@@ -398,11 +502,37 @@ class DaqToolBox:
                         # terms that rank a different sample first. Recover
                         # from the user's words only through the same typed
                         # requirement check, never through relevance alone.
-                        for row in catalog.search(self.question, self.role):
+                        for row in catalog.search(
+                                self.question, self.role,
+                                include_all=bool(conditions.get('source_files'))):
                             row_ids = self._sdk_usage_requirement_ids([row])
                             if requirement.get('id') in row_ids and row not in matches:
                                 matches.append(row)
                                 covered.update(row_ids)
+                # An unsupported action must remain unknown, but it must not
+                # hide the documented meaning of two APIs explicitly named by
+                # the user. Return that exact source row as partial context;
+                # only the strict matcher above may satisfy a requirement.
+                for requirement in sdk_requirements:
+                    requirement_id = requirement.get('id')
+                    unmapped = requirement.get('unmapped_condition_keys') or []
+                    if (requirement_id in covered or not isinstance(unmapped, list)
+                            or not unmapped or not set(unmapped) <= {'task', 'feature'}):
+                        continue
+                    for row in catalog.search(self.question, self.role, include_all=True):
+                        named_symbols = sum(bool(re.search(
+                            r'(?<![A-Za-z0-9_])' + re.escape(symbol)
+                            + r'(?![A-Za-z0-9_])', self.question, re.I))
+                            for symbol in row.get('callable_symbols', [])
+                            if isinstance(symbol, str) and len(symbol) >= 6)
+                        if (named_symbols < 2 or requirement_id not in
+                                self._sdk_usage_requirement_ids(
+                                    [row], ignore_descriptors=True)):
+                            continue
+                        if row not in matches:
+                            matches.append(row)
+                        partial_requirement_rows[requirement_id] = row
+                        break
                 # A build or API goal can be paired with a separate question
                 # about the package's image/firmware scope. Preserve the
                 # reviewed package-scope record as context, without letting it
@@ -417,6 +547,53 @@ class DaqToolBox:
                                 and row not in matches):
                             matches.append(row)
                 matches = matches[:6]
+            # Goal recovery may search the whole user question to repair a
+            # weak model query. It must not return a different version/build
+            # when this particular tool call explicitly narrowed its scope.
+            if re.search(r'(?<![A-Za-z0-9_])(?:orbbecsdk|egolowble)'
+                         r'[_\s-]*v?\d+\.\d+\.\d+|'
+                         r'(?<!\d)20\d{2}[-/]?\d{2}[-/]?\d{2}(?!\d)',
+                         query, re.I):
+                query_scope_ids = {row['kb_id'] for row in catalog.search(
+                    query, self.role, include_all=True)}
+                matches = [row for row in matches
+                           if row['kb_id'] in query_scope_ids]
+            asked_os = {name for name, pattern in (
+                ('linux', r'\b(?:linux|ubuntu)\b'),
+                ('windows', r'\b(?:windows|win\s*(?:10|11))\b'),
+                ('android', r'\bandroid\b'), ('ios', r'\bios\b'),
+                ('macos', r'\bmac(?:\s*os)?\b|\bdarwin\b'))
+                if re.search(pattern, query, re.I)}
+            asked_arch = set(sdk_cpu_architectures(query))
+            # In a comparison, an architecture next to Linux does not
+            # constrain the separate Android clause. Per-goal matching below
+            # still checks each requested platform and architecture.
+            named_sdk_families = {name for name in (
+                'orbbecsdk', 'libobkit', 'egolowble')
+                if re.search(r'(?<![A-Za-z0-9_])' + name
+                             + r'(?![A-Za-z0-9_])', query, re.I)}
+            scoped_arch = (asked_arch if len(asked_os) <= 1
+                           and len(named_sdk_families) <= 1 else set())
+            if asked_os or asked_arch:
+                matches = [row for row in matches if
+                           (not asked_os or any(
+                               name in str(row.get('platform', '')).casefold()
+                               for name in asked_os))
+                           and (not scoped_arch or bool(scoped_arch & set(
+                               sdk_cpu_architectures(str(row.get('platform', ''))))))]
+            named_audio_sdks = {name.casefold() for name in
+                                audio_playback_subjects(query)}
+            if named_audio_sdks:
+                layer_sdk = {
+                    'host_cpp': 'orbbecsdk', 'android_java': 'orbbecsdk',
+                    'ios_framework': 'orbbecsdk', 'device_c': 'libobkit',
+                    'ble_cpp': 'egolowble',
+                }
+                matches = [row for row in matches
+                           if layer_sdk.get(row.get('sdk_layer')) in named_audio_sdks]
+            partial_requirement_ids = sorted(
+                requirement_id for requirement_id, row in
+                partial_requirement_rows.items() if row in matches)
             if not matches:
                 return ToolResult(status="not_found", content={
                     "release_id": self.knowledge.release_id,
@@ -428,6 +605,10 @@ class DaqToolBox:
                 "release_id": self.knowledge.release_id,
                 "sdk_catalog_sha256": self.knowledge.sdk_catalog.manifest["records_sha256"],
                 "evidence_scope": "sdk_usage_only", "device_support": "unknown",
+                "package_inventory_scope": (
+                    "returned_source_checked_records_are_a_subset_not_the_full_package"
+                    if re.search(r'包内容|包里有什么|package\s+(?:contents?|files?)',
+                                 query, re.I) else None),
                 "example_build_status": (
                     "unknown" if any(row.get("doc_type") in {"example", "build"}
                                      for row in matches) else "not_applicable"),
@@ -436,6 +617,7 @@ class DaqToolBox:
                     "build", "platform", "symbols", "code_tokens", "confidence", "last_verified")}
                     for row in matches],
                 "matched_requirement_ids": self._sdk_usage_requirement_ids(matches),
+                "partial_requirement_ids": sorted(set(partial_requirement_ids)),
             }, sources=[{
                 "type": "daq_governed_sdk" if getattr(
                     self.knowledge.sdk_catalog, "published", False)
@@ -469,7 +651,17 @@ class DaqToolBox:
                 dated_builds and re.search(r'\.[ch]pp\b|\.c\b|\.h\b', text, re.I) and
                 re.search(r'能确定|仍可用|是否可用|已恢复|还能', text) and
                 re.search(r'\bSDK\b|OrbbecSDK', text, re.I))
-            note_intent = explicit_note or dated_comparison or scoped_log_probe
+            colloquial_log = bool('日志' in text and _mentioned_families(text)
+                                 and (_versions(text) or dated_builds))
+            typed_note_goal = any(
+                isinstance(requirement, dict)
+                and requirement.get('capability') == 'search_knowledge'
+                and isinstance(requirement.get('conditions'), dict)
+                and any(key in requirement['conditions'] for key in (
+                    'viewer_release_date', 'sdk_release_date', 'firmware_version'))
+                for requirement in self.requirements)
+            note_intent = (explicit_note or dated_comparison or scoped_log_probe
+                           or colloquial_log or typed_note_goal)
             if note_intent:
                 # A tool query cannot supply a product the user did not name.
                 # Report the identity gap, rather than implying that neither
@@ -487,10 +679,7 @@ class DaqToolBox:
                 disclaimed_identity = bool(re.search(
                     r'(?:没|未|不)(?:说明|明确|确定|清楚|知道)[^。？！]*'
                     r'(?:双目|四目|ego\s*(?:pro|dual))', text, re.I))
-                alternative_identity = bool(re.search(
-                    r'(?:双目|四目|ego\s*(?:pro|dual))[^。？！]{0,12}'
-                    r'(?:还是|或者|或|/)[^。？！]{0,12}'
-                    r'(?:双目|四目|pro|dual)', text, re.I))
+                alternative_identity = _ambiguous_firmware_choice(text)
                 identity_confirmed = ((typed_identity or
                                        bool(_firmware_scopes(text))) and
                                       not disclaimed_identity and
@@ -506,6 +695,18 @@ class DaqToolBox:
                     })
                 notes = self.knowledge.sdk_catalog.release_notes
                 matches = notes.search(text, self.role)
+                if not matches:
+                    for probe in _user_scoped_log_probes(text):
+                        for row in notes.search(probe, self.role):
+                            if row not in matches:
+                                matches.append(row)
+                if (not matches and query != text and
+                        _release_note_probe_grounded(query, text)):
+                    # A package platform in one clause can overconstrain a
+                    # separate dated log request. The model's narrower probe
+                    # is usable only after every family/version/build selector
+                    # is grounded in the user's own question.
+                    matches = notes.search(query, self.role)
                 if scoped_log_probe and len(dated_builds) == 1:
                     # When a dated source sample is used to infer a feature is
                     # *still* available, include the earlier statements for
@@ -848,10 +1049,8 @@ class DaqToolBox:
                         topologies.get(row['data']['topology_id']))
             question = self.question or str(arguments.get('query') or '') or (
                 str(arguments.get('task') or '') + ' ' + str(arguments.get('entity') or ''))
-            return bool(topology and _candidate_query_scope_safe(row, question) and
-                        _candidate_query_scope_safe(topology, question) and
-                        _candidate_topology_entities_match(topology, question,
-                                                           topology_identity_records))
+            return bool(topology and _formal_user_operating_scope_matches(
+                row, topology, question, topology_identity_records))
         matches = [row for row in rows if self._matches(
             name, arguments, row, entities, topologies, topology_identity_records,
             candidate_preview=(governed_operating if name in {
@@ -1042,6 +1241,8 @@ class DaqToolBox:
         })
         return ToolResult(status="ok", content={
             "release_id": self.knowledge.release_id,
+            **({'query_entity': str(original_query_entity or '')}
+               if name == 'lookup_spec' else {}),
             **({'catalog_summary': catalog_summary} if catalog_summary is not None else {}),
             **({'available_spec_fields': field_coverage,
                 'available_spec_fields_are_values': False}
@@ -1104,11 +1305,8 @@ class DaqToolBox:
                 return True
             topology = (row if row['kind'] == 'topology' else
                         topologies.get(row['data']['topology_id']))
-            return bool(topology and all(
-                _candidate_query_scope_safe(row, text) and
-                _candidate_query_scope_safe(topology, text) and
-                _candidate_topology_entities_match(topology, text, identity_records)
-                for text in (query, self.question or query)))
+            return bool(topology and _formal_user_operating_scope_matches(
+                row, topology, self.question or query, identity_records))
         candidates = [row for row in rows if row['id'] not in covered
                       and operating_search_safe(row)
                       and self._matches('search_knowledge', arguments, row,
@@ -1270,14 +1468,30 @@ class DaqToolBox:
                 ids.append(requirement["id"])
         return sorted(set(ids))
 
-    def _sdk_usage_requirement_ids(self, matches: list[dict]) -> list[str]:
+    def _sdk_usage_requirement_ids(self, matches: list[dict], *,
+                                   ignore_descriptors: bool = False) -> list[str]:
         """Certify only exact SDK usage scopes, never device support selectors."""
+        product_names = tuple(
+            record['data']['name'] for record in (
+                self.knowledge.records_for(self.role)
+                if self.knowledge is not None
+                and callable(getattr(self.knowledge, 'records_for', None))
+                else [])
+            if isinstance(record, dict) and record.get('kind') == 'entity'
+            and isinstance(record.get('data'), dict)
+            and isinstance(record['data'].get('name'), str))
         ids = []
         for requirement in self.requirements:
             if not isinstance(requirement, dict) or requirement.get("capability") != "sdk_evidence":
                 continue
             if requirement.get("conditions_authority") == "platform_context_unverified" or \
                     requirement.get("reason") == "intent_or_entity_not_grounded":
+                continue
+            if (not ignore_descriptors and (
+                    requirement.get('reason') == 'unmapped_condition_unverified'
+                    or requirement.get('unmapped_condition_keys'))):
+                # A row may be returned as partial context for named APIs,
+                # but cannot certify a goal with an unreviewed selector.
                 continue
             raw_conditions = requirement.get("conditions") or {}
             if not isinstance(raw_conditions, dict):
@@ -1305,6 +1519,12 @@ class DaqToolBox:
             if not isinstance(entities, list):
                 continue
             for row in matches:
+                if (self.question
+                        and 'calibration_export' in row.get('usage_tasks', [])
+                        and not calibration_export_row_matches_question(
+                            row, calibration_export_known_scope(self.question),
+                            known_product_names=product_names)):
+                    continue
                 layer = row["sdk_layer"]
                 labels_by_layer = {
                     "host_cpp": {"ego", "entity:ego-1600", "entity:ego-1920",
@@ -1319,7 +1539,12 @@ class DaqToolBox:
                                       "entity:ego-1920"},
                 }
                 labels = labels_by_layer.get(layer, set())
-                if any(_identity_text(str(entity)) not in labels for entity in entities):
+                example_subjects = {
+                    _identity_text(subject) for subject in row.get('example_subjects', [])
+                    if isinstance(subject, str)
+                }
+                if any(_identity_text(str(entity)) not in labels | example_subjects
+                       for entity in entities):
                     continue
                 if ("sdk_version" in conditions and
                         str(conditions["sdk_version"]) != row["version"] and
@@ -1331,7 +1556,8 @@ class DaqToolBox:
                 if (conditions.get('connection') and not (
                         conditions['connection'] == 'network'
                         and any('network' in str(item).casefold()
-                                for item in row.get('usage_tasks', [])))):
+                                for item in [*row.get('usage_tasks', []),
+                                             *row.get('topics', [])]))):
                     continue
                 if ("platform" in conditions and
                         _identity_text({"linux_x64": "Linux x86_64",
@@ -1367,7 +1593,7 @@ class DaqToolBox:
                 if (not isinstance(features, list) or any(
                         not isinstance(feature, str) or
                         not _sdk_usage_descriptor_matches(feature, row)
-                        for feature in features)):
+                        for feature in features)) and not ignore_descriptors:
                     continue
                 export_files = conditions.get("export_files", [])
                 if (not isinstance(export_files, list) or
@@ -1387,10 +1613,17 @@ class DaqToolBox:
                 requested_tasks = conditions.get("task", [])
                 requested_tasks = ([requested_tasks] if isinstance(requested_tasks, str)
                                    else requested_tasks)
+                if (self.current_question and isinstance(requested_tasks, list)
+                        and 'sdk_scope' in requested_tasks
+                        and layer == 'device_c'
+                        and 'image_binding' in row.get('topics', [])
+                        and not device_sdk_scope_matches_question(
+                            self.current_question)):
+                    continue
                 if (not isinstance(requested_tasks, list) or
                         any(not isinstance(task, str) or
                             not _sdk_usage_descriptor_matches(task, row)
-                            for task in requested_tasks)):
+                            for task in requested_tasks)) and not ignore_descriptors:
                     continue
                 language = _identity_text(str(conditions.get("language", "")))
                 if language in {"c++", "cxx", "cplusplus"}:
@@ -1467,7 +1700,12 @@ class DaqToolBox:
                 if (conditions.get('sdk') and
                         _identity_text(str(conditions['sdk'])) != family):
                     continue
-                if (conditions.get('platform') and
+                desktop_viewer = (
+                    str(conditions.get('platform', '')).casefold() == 'desktop'
+                    and family.startswith('egoviewerdesktop')
+                    and 'linux' in str(row.get('platform', '')).casefold()
+                    and 'windows' in str(row.get('platform', '')).casefold())
+                if (conditions.get('platform') and not desktop_viewer and
                         _identity_text(str(conditions['platform'])) not in
                         _identity_text(str(row.get('platform', '')))):
                     continue
@@ -1707,6 +1945,7 @@ class DaqToolBox:
                   row['status'] == 'verified' and
                   task in data.get('task_intents', []) and
                   _candidate_query_scope_safe(row, task) or
+                  task in data.get('evidence_conditions', {}).get('steps', []) or
                   _procedure_task_paraphrase_matches(task, row)))) and \
                 (entity in cls._entity_names(row, entities, topologies)
                  or candidate_preview and topology is not None and
@@ -1824,7 +2063,11 @@ class DaqToolBox:
             if candidate_preview and key == 'indicators':
                 available = known.get(key)
                 return (isinstance(value, list) and isinstance(available, list)
-                        and bool(value) and set(value) <= set(available))
+                        and bool(value) and all(
+                            item in available or
+                            (item == 'led_state' and any(
+                                indicator.endswith('_led') for indicator in available))
+                            for item in value))
             if candidate_preview and key == 'steps':
                 available = known.get(key)
                 if not isinstance(value, list) or not isinstance(available, list) or not value:

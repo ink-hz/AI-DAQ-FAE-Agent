@@ -154,7 +154,8 @@ def test_resolve_entity_does_not_promote_a_distinct_prefix_product_to_a_variant(
     assert box.dispatch('resolve_entity', {'text': 'EGO 三目'}).status == 'not_found'
     assert box.dispatch('resolve_entity', {'text': 'EGO 新款'}).status == 'not_found'
     for unknown in ('UMI Finger pro on Windows', 'EGO Pro max on Windows',
-                    'EGO max on a PC', 'EGO 接口版'):
+                    'EGO max on a PC', 'EGO 接口版', 'Quad-EGO',
+                    'RGB-D EGO', 'Quad EGO', 'RGB D EGO'):
         assert box.dispatch('resolve_entity', {'text': unknown}).status == 'not_found'
     assert ids('HUB') == {'entity:hub'}
     assert ids('HUB 接 PC') == {'entity:hub'}

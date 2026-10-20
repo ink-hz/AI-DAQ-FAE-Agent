@@ -3,6 +3,7 @@
 Generated from `SDK_Knowledge.jsonl`; source scope is recorded in each row.
 
 - **ALREADY_RUNNING**: daq-sdk-android-fwlog-017
+- **build_linux.sh**: daq-sdk-ble-linux-link-024
 - **cancelSdcardFileOperation**: daq-sdk-host-sdcard-005, daq-sdk-host-sdcard-20260921, daq-sdk-host-sdcard-20260923
 - **clearDirectionKeyCallback**: daq-sdk-host-key-008
 - **CMakeLists.txt**: daq-sdk-host-build-010
@@ -28,7 +29,8 @@ Generated from `SDK_Knowledge.jsonl`; source scope is recorded in each row.
 - **getStreamProfileList**: daq-sdk-host-depth-009
 - **getSupportedMultiDeviceSyncModeBitmap**: daq-sdk-host-sync-001
 - **getUid**: daq-sdk-host-net-uid-hotplug-016
-- **libEgoLowBle.so**: daq-sdk-ble-linux-install-021
+- **LD_LIBRARY_PATH**: daq-sdk-ble-linux-link-024
+- **libEgoLowBle.so**: daq-sdk-ble-linux-install-021, daq-sdk-ble-linux-link-024
 - **libobkit.so**: daq-sdk-device-scope-011
 - **LINUX_GUIDE.md**: daq-sdk-ble-linux-install-021
 - **loadPreset**: daq-sdk-host-depth-009
@@ -61,6 +63,7 @@ Generated from `SDK_Knowledge.jsonl`; source scope is recorded in each row.
 - **registerDeviceChangedCallback**: daq-sdk-host-net-uid-hotplug-016
 - **RK3576**: daq-sdk-device-scope-011
 - **RPATH**: daq-sdk-device-build-012
+- **run_demo.sh**: daq-sdk-ble-linux-link-024
 - **SAVING**: daq-sdk-android-record-state-019
 - **SdcardDownloadDestination.LOCAL**: daq-sdk-android-sdcard-018
 - **setDirectionKeyCallback**: daq-sdk-host-key-008

@@ -122,6 +122,7 @@ def test_typed_spec_still_works_in_section_release(tmp_path):
     box = DaqToolBox(knowledge=make_view(tmp_path), role='internal_fae')
     result = box.dispatch('lookup_spec', {'entity': 'EGO 1600', 'field': 'resolution'})
     assert result.status == 'ok'
+    assert result.content['query_entity'] == 'EGO 1600'
     assert result.content['matches'][0]['data']['value'] == '1600x1200'
 
 

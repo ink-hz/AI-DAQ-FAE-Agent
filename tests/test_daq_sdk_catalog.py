@@ -23,6 +23,853 @@ def test_sdk_usage_statements_separate_source_facts_from_review_limits():
     assert "不能据此确认 EGO 设备" not in by_id["daq-sdk-ios-framework-022"]
 
 
+def test_mixed_sdk_audio_search_keeps_reviewed_host_example_and_unknown_device_sdk():
+    catalog = _candidate_catalog()
+    question = 'OrbbecSDK 2.9.0 和 libobkit 的音频播放分别怎么做？'
+    assert 'daq-sdk-host-audio-007' in {
+        row['kb_id'] for row in catalog.search(question, 'internal_fae', include_all=True)}
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [
+            {'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+             'conditions': {'sdk': sdk}}
+            for sdk in ('OrbbecSDK', 'libobkit')],
+    }, sdk_catalog=catalog)
+    scoped = {goal.condition_map().get('sdk'): goal for goal in schema.goals}
+    assert 'feature' not in scoped['OrbbecSDK'].unmapped_condition_keys
+    assert 'feature' in scoped['libobkit'].unmapped_condition_keys
+
+
+def test_mixed_sdk_build_applies_to_its_named_library_only():
+    catalog = _candidate_catalog()
+    question = 'OrbbecSDK 2.9.0 和 libobkit 20260909 的音频播放分别怎么做？'
+    assert 'daq-sdk-host-audio-007' in {
+        row['kb_id'] for row in catalog.search(question, 'internal_fae', include_all=True)}
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [
+            {'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+             'conditions': {'sdk': sdk}}
+            for sdk in ('OrbbecSDK', 'libobkit')],
+    }, sdk_catalog=catalog)
+    scoped = {goal.condition_map().get('sdk'): goal for goal in schema.goals}
+    assert 'feature' not in scoped['OrbbecSDK'].unmapped_condition_keys
+    assert 'feature' in scoped['libobkit'].unmapped_condition_keys
+
+
+def test_mixed_sdk_build_owner_accepts_adjacent_chinese():
+    catalog = _candidate_catalog()
+    question = 'OrbbecSDK音频播放和libobkit 20260909相比呢？'
+    assert 'daq-sdk-host-audio-007' in {
+        row['kb_id'] for row in catalog.search(question, 'internal_fae', include_all=True)}
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [{
+            'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+            'conditions': {'sdk': 'OrbbecSDK', 'feature': 'audio_playback'},
+        }],
+    }, sdk_catalog=catalog)
+    assert 'feature' not in schema.goals[0].unmapped_condition_keys
+
+
+def test_sdk_tool_query_for_unreviewed_version_does_not_return_other_goal():
+    catalog = _candidate_catalog()
+    question = 'OrbbecSDK 2.9.0 和 2.8.0 的音频播放用法是否相同？'
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [
+            {'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+             'conditions': {'sdk': 'OrbbecSDK', 'sdk_version': version,
+                            'feature': 'audio_playback'}}
+            for version in ('2.9.0', '2.8.0')],
+    }, sdk_catalog=catalog)
+
+    class Knowledge:
+        release_id = 'dev-sdk'
+        sdk_catalog = catalog
+
+        def records_for(self, role):
+            return []
+
+        def sections_for(self, role):
+            return []
+
+    box = DaqToolBox(question=question, knowledge=Knowledge(), role='internal_fae',
+                     requirements=[{
+                         'id': goal.id, 'capability': goal.capability,
+                         'entities': list(goal.entities),
+                         'conditions': goal.condition_map(),
+                         'unmapped_condition_keys': list(goal.unmapped_condition_keys),
+                     } for goal in schema.goals])
+    old = box.dispatch('sdk_evidence', {
+        'query': 'OrbbecSDK 2.8.0 audio playback usage', 'version': '2.8.0'})
+    assert old.status == 'not_found'
+    assert old.content['matched_requirement_ids'] == []
+    new = box.dispatch('sdk_evidence', {
+        'query': 'OrbbecSDK 2.9.0 audio playback usage'})
+    assert new.status == 'ok'
+    assert {row['kb_id'] for row in new.content['matches']} == {
+        'daq-sdk-host-audio-007'}
+
+
+@pytest.mark.parametrize('other', ('SDL2', 'OpenAL'))
+def test_sdk_tool_query_for_other_audio_library_cannot_recover_orbbec(other):
+    catalog = _candidate_catalog()
+    question = f'OrbbecSDK 2.9.0 和 {other} 音频播放分别怎么做？'
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [
+            {'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+             'conditions': {'sdk': name, 'feature': 'audio_playback'}}
+            for name in ('OrbbecSDK', other)],
+    }, sdk_catalog=catalog)
+
+    class Knowledge:
+        release_id = 'dev-sdk'
+        sdk_catalog = catalog
+
+        def records_for(self, role):
+            return []
+
+        def sections_for(self, role):
+            return []
+
+    box = DaqToolBox(question=question, knowledge=Knowledge(), role='internal_fae',
+                     requirements=[{
+                         'id': goal.id, 'capability': goal.capability,
+                         'entities': list(goal.entities),
+                         'conditions': goal.condition_map(),
+                         'unmapped_condition_keys': list(goal.unmapped_condition_keys),
+                     } for goal in schema.goals])
+    unrelated = box.dispatch('sdk_evidence', {
+        'query': f'{other} audio playback'})
+    assert unrelated.status == 'not_found'
+    assert unrelated.content['matched_requirement_ids'] == []
+    orbbec = box.dispatch('sdk_evidence', {
+        'query': 'OrbbecSDK 2.9.0 audio playback'})
+    assert orbbec.status == 'ok'
+    assert {row['kb_id'] for row in orbbec.content['matches']} == {
+        'daq-sdk-host-audio-007'}
+
+
+def test_package_contents_returns_reviewed_subset_without_claiming_full_inventory():
+    catalog = _candidate_catalog()
+    question = 'OrbbecSDK 2.9.0 的包内容与 OpenAL 的音频播放分别怎么做？'
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'medium', 'goals': [
+            {'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+             'conditions': {'sdk': 'OrbbecSDK', 'sdk_version': '2.9.0',
+                            'task': 'inspect_package'}},
+            {'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+             'conditions': {'sdk': 'OpenAL', 'task': 'audio_playback'}},
+            {'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+             'conditions': {'sdk': 'OrbbecSDK', 'sdk_version': '2.9.0',
+                            'feature': 'openal', 'task': 'audio_playback'}},
+        ],
+    }, sdk_catalog=catalog)
+    known = [goal for goal in schema.goals
+             if goal.capability == 'sdk_evidence'
+             and goal.condition_map() == {
+                 'sdk': 'OrbbecSDK', 'sdk_version': '2.9.0'}]
+    assert len(known) == 1
+    assert any(goal.condition_map().get('task') == 'inspect_package'
+               and 'task' in goal.unmapped_condition_keys
+               for goal in schema.goals)
+    assert not any(goal.condition_map().get('sdk') == 'OrbbecSDK'
+                   and goal.condition_map().get('feature') == 'openal'
+                   for goal in schema.goals)
+
+    class Knowledge:
+        release_id = 'dev-sdk'
+        sdk_catalog = catalog
+
+        def records_for(self, role):
+            return []
+
+        def sections_for(self, role):
+            return []
+
+    box = DaqToolBox(question=question, knowledge=Knowledge(), role='internal_fae',
+                     requirements=[{
+                         'id': goal.id, 'capability': goal.capability,
+                         'entities': list(goal.entities),
+                         'conditions': goal.condition_map(),
+                         'unmapped_condition_keys': list(goal.unmapped_condition_keys),
+                         'reason': ('unmapped_condition_unverified'
+                                    if goal.unmapped_condition_keys else ''),
+                     } for goal in schema.goals])
+    result = box.dispatch('sdk_evidence', {
+        'query': 'OrbbecSDK 2.9.0 package contents'})
+    assert result.status == 'ok'
+    assert known[0].id in result.content['matched_requirement_ids']
+    assert all(row['version'] == '2.9.0'
+               for row in result.content['matches'])
+    assert all(row['sdk_layer'] == 'host_cpp'
+               for row in result.content['matches'])
+    assert result.content['package_inventory_scope'] == (
+        'returned_source_checked_records_are_a_subset_not_the_full_package')
+
+
+@pytest.mark.parametrize('question', (
+    'OrbbecSDK 的 2.8.0 版本包里有什么？',
+    'OrbbecSDK 版本 2.8.0 包里有什么？',
+    'OrbbecSDK 的版本是 2.8.0，包里有什么？',
+))
+def test_possessive_sdk_version_cannot_be_erased_by_generic_package_goal(question):
+    catalog = _candidate_catalog()
+    assert not any(row['version'] == '2.9.0' for row in
+                   catalog.search(question, 'internal_fae', include_all=True))
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'medium', 'goals': [{
+            'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+            'conditions': {'sdk': 'OrbbecSDK'},
+        }],
+    }, sdk_catalog=catalog)
+    sdk_goals = [goal for goal in schema.goals
+                 if goal.capability == 'sdk_evidence'
+                 and goal.condition_map().get('sdk') == 'OrbbecSDK']
+    assert sdk_goals
+    assert all(goal.condition_map().get('sdk_version') == '2.8.0'
+               for goal in sdk_goals)
+
+    class Knowledge:
+        release_id = 'dev-sdk'
+        sdk_catalog = catalog
+
+        def records_for(self, role):
+            return []
+
+        def sections_for(self, role):
+            return []
+
+    box = DaqToolBox(question=question, knowledge=Knowledge(), role='internal_fae',
+                     requirements=[{
+                         'id': goal.id, 'capability': goal.capability,
+                         'entities': list(goal.entities),
+                         'conditions': goal.condition_map(),
+                         'unmapped_condition_keys': list(goal.unmapped_condition_keys),
+                     } for goal in sdk_goals])
+    other_version = box.dispatch('sdk_evidence', {'query': 'OrbbecSDK 包内容'})
+    assert other_version.content['matched_requirement_ids'] == []
+
+
+def test_respectively_package_and_openal_drops_invented_cross_sdk_api_goal():
+    catalog = _candidate_catalog()
+    question = 'OrbbecSDK 2.9.0 的包内容与 OpenAL 的音频播放分别怎么做？'
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'medium', 'goals': [
+            {'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+             'conditions': {'sdk': 'OrbbecSDK', 'sdk_version': '2.9.0',
+                            'task': 'inspect_package'}},
+            {'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+             'conditions': {'sdk': 'OpenAL', 'task': 'audio_playback'}},
+            {'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+             'conditions': {'sdk': 'OrbbecSDK', 'sdk_version': '2.9.0',
+                            'api': 'OpenAL', 'task': 'audio_playback'}},
+        ],
+    }, sdk_catalog=catalog)
+    assert not any(goal.condition_map().get('sdk') == 'OrbbecSDK'
+                   and goal.condition_map().get('api') == 'OpenAL'
+                   for goal in schema.goals)
+    assert any(goal.condition_map().get('sdk') == 'OpenAL'
+               for goal in schema.goals)
+
+
+@pytest.mark.parametrize('question', (
+    'OrbbecSDK 的包内容与 OpenAL 的音频播放分别怎么做？',
+    'OrbbecSDK 2.8.0 的包内容与 OpenAL 的音频播放分别怎么做？',
+    'OrbbecSDK 2.9.0 不是我要的，请给我 OrbbecSDK 2.8.0 的包内容。',
+    'OrbbecSDK 2.9.0 包内容不用了，请改查 OrbbecSDK 2.8.0 的包内容。',
+    'OrbbecSDK 2.9.0 的包内容不要，请给我 OrbbecSDK 的包内容总览。',
+))
+def test_package_subset_cannot_promote_model_invented_sdk_version(question):
+    catalog = _candidate_catalog()
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'medium', 'goals': [{
+            'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+            'conditions': {'sdk': 'OrbbecSDK', 'sdk_version': '2.9.0',
+                           'task': 'inspect_package'},
+        }],
+    }, sdk_catalog=catalog)
+    assert not any(goal.condition_map() == {
+        'sdk': 'OrbbecSDK', 'sdk_version': '2.9.0'}
+        and not goal.unmapped_condition_keys for goal in schema.goals)
+
+
+def test_retracted_sdk_package_version_keeps_current_request_unknown():
+    catalog = _candidate_catalog()
+    question = ('OrbbecSDK 2.9.0 不是我要的，请给我 OrbbecSDK 2.8.0 '
+                '的包内容。')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'medium', 'goals': [{
+            'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+            'conditions': {'sdk': 'OrbbecSDK', 'sdk_version': '2.9.0',
+                           'task': 'inspect_package'},
+        }, {
+            'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+            'conditions': {'sdk': 'OrbbecSDK', 'sdk_version': '2.9.0'},
+        }],
+    }, sdk_catalog=catalog)
+    assert any(goal.condition_map().get('sdk_version') == '2.8.0'
+               and goal.condition_map().get('task') == 'inspect_package'
+               and 'task' in goal.unmapped_condition_keys
+               for goal in schema.goals)
+    assert not any(goal.condition_map().get('sdk_version') == '2.9.0'
+                   for goal in schema.goals)
+
+
+def test_magnetometer_example_goal_survives_viewer_changelog_clause():
+    catalog = _candidate_catalog()
+    question = ('EgoViewer desktop 2026-09-23 的变更日志是什么？'
+                'OrbbecSDK 2026-09-29 包里有磁力计示例吗？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [{
+            'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+            'conditions': {'sdk': 'OrbbecSDK', 'sdk_release_date': '2026-09-29',
+                           'feature': 'magnetometer'},
+        }],
+    }, sdk_catalog=catalog)
+    assert 'feature' not in schema.goals[0].unmapped_condition_keys
+
+
+@pytest.mark.parametrize('question', (
+    'OrbbecSDK 2026-09-23 包里有磁力计示例吗？',
+    'EgoViewer desktop 2026-09-23 包里有磁力计示例吗？',
+    'OrbbecSDK 2026-09-29 的 Android 包里有磁力计示例吗？',
+))
+def test_magnetometer_example_alias_requires_matching_sdk_build_and_platform(question):
+    catalog = _candidate_catalog()
+    assert not catalog.grounds_selector(question, 'feature', 'magnetometer')
+
+
+def test_sdk_cross_platform_comparison_keeps_known_linux_and_unknown_android():
+    catalog = _candidate_catalog()
+    question = ('OrbbecSDK 2026-09-29 的 Linux x86_64 与 Android 包里'
+                '分别有磁力计示例吗？')
+    hits = catalog.search(question, 'internal_fae', include_all=True)
+    assert 'daq-sdk-host-magnetometer-sample-023' in {
+        row['kb_id'] for row in hits}
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [
+            {'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+             'conditions': {'sdk': 'OrbbecSDK', 'sdk_release_date': '2026-09-29',
+                            'platform': platform, 'feature': 'magnetometer',
+                            'task': 'inspect_package'}}
+            for platform in ('linux_x86_64', 'android')],
+    }, sdk_catalog=catalog)
+    by_platform = {goal.condition_map().get('platform'): goal
+                   for goal in schema.goals}
+    assert 'feature' not in by_platform['linux_x86_64'].unmapped_condition_keys
+    assert 'task' not in by_platform['linux_x86_64'].condition_map()
+    assert 'feature' in by_platform['android'].unmapped_condition_keys
+    assert 'task' in by_platform['android'].unmapped_condition_keys
+
+    class Knowledge:
+        release_id = 'dev-sdk'
+        sdk_catalog = catalog
+
+        def records_for(self, role):
+            return []
+
+        def sections_for(self, role):
+            return []
+
+    result = DaqToolBox(
+        question=question, knowledge=Knowledge(), role='internal_fae',
+        requirements=[{
+            'id': goal.id, 'capability': goal.capability,
+            'entities': list(goal.entities),
+            'conditions': goal.condition_map(),
+            'unmapped_condition_keys': list(goal.unmapped_condition_keys),
+        } for goal in schema.goals],
+    ).dispatch('sdk_evidence', {'query': question})
+    assert result.status == 'ok'
+    assert {row['kb_id'] for row in result.content['matches']} == {
+        'daq-sdk-host-magnetometer-sample-023'}
+    assert result.content['matched_requirement_ids'] == [
+        by_platform['linux_x86_64'].id]
+    android_only = DaqToolBox(
+        question=question, knowledge=Knowledge(), role='internal_fae',
+        requirements=[{
+            'id': goal.id, 'capability': goal.capability,
+            'entities': list(goal.entities),
+            'conditions': goal.condition_map(),
+            'unmapped_condition_keys': list(goal.unmapped_condition_keys),
+        } for goal in schema.goals],
+    ).dispatch('sdk_evidence', {
+        'query': 'OrbbecSDK 2026-09-29 Android magnetometer example'})
+    assert android_only.status == 'not_found'
+
+
+def test_sdk_cross_build_comparison_keeps_reviewed_build_when_other_is_unknown():
+    catalog = _candidate_catalog()
+    question = 'OrbbecSDK 20260929 与 20260930 的磁力计示例各有哪些？'
+    assert 'daq-sdk-host-magnetometer-sample-023' in {
+        row['kb_id'] for row in catalog.search(question, 'internal_fae',
+                                               include_all=True)}
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [
+            {'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+             'conditions': {'sdk': 'OrbbecSDK', 'sdk_release_date': build,
+                            'feature': 'magnetometer'}}
+            for build in ('20260929', '20260930')],
+    }, sdk_catalog=catalog)
+    by_build = {goal.condition_map().get('sdk_release_date'): goal
+                for goal in schema.goals}
+
+    class Knowledge:
+        release_id = 'dev-sdk'
+        sdk_catalog = catalog
+
+        def records_for(self, role):
+            return []
+
+        def sections_for(self, role):
+            return []
+
+    result = DaqToolBox(
+        question=question, knowledge=Knowledge(), role='internal_fae',
+        requirements=[{
+            'id': goal.id, 'capability': goal.capability,
+            'entities': list(goal.entities), 'conditions': goal.condition_map(),
+            'unmapped_condition_keys': list(goal.unmapped_condition_keys),
+        } for goal in schema.goals],
+    ).dispatch('sdk_evidence', {'query': question})
+    assert result.status == 'ok'
+    assert {row['kb_id'] for row in result.content['matches']} == {
+        'daq-sdk-host-magnetometer-sample-023'}
+    assert result.content['matched_requirement_ids'] == [by_build['20260929'].id]
+    assert by_build['20260930'].id not in result.content['matched_requirement_ids']
+
+
+@pytest.mark.parametrize('question', (
+    'OrbbecSDK 2.9.0 与 2.9.1 的音频播放示例各有哪些？',
+    'OrbbecSDK 2.9.1 与 2.9.0 的音频播放示例各有哪些？',
+))
+def test_sdk_cross_version_search_keeps_reviewed_version(question):
+    catalog = _candidate_catalog()
+    assert 'daq-sdk-host-audio-007' in {
+        row['kb_id'] for row in catalog.search(question, 'internal_fae',
+                                               include_all=True)}
+    assert catalog.search('OrbbecSDK 2.9.1 音频播放示例',
+                          'internal_fae', include_all=True) == []
+    assert catalog.search('OrbbecSDK 的 2.8.0 版本音频播放怎么做？',
+                          'internal_fae', include_all=True) == []
+
+
+def test_sdk_tool_cross_platform_query_keeps_android_row_when_linux_has_arch():
+    catalog = _candidate_catalog()
+    question = ('OrbbecSDK 2026-09-29 Linux x86_64 和 Android 包里 '
+                'SD 卡文件下载分别怎么做？')
+    assert {'daq-sdk-host-sdcard-005', 'daq-sdk-android-sdcard-018'} <= {
+        row['kb_id'] for row in catalog.search(
+            question, 'internal_fae', include_all=True)}
+
+    class Knowledge:
+        release_id = 'dev-sdk'
+        sdk_catalog = catalog
+
+        def records_for(self, role):
+            return []
+
+        def sections_for(self, role):
+            return []
+
+    result = DaqToolBox(
+        question=question, knowledge=Knowledge(), role='internal_fae',
+        requirements=[
+            {'id': 'linux', 'capability': 'sdk_evidence', 'entities': [],
+             'conditions': {'sdk': 'OrbbecSDK',
+                            'sdk_release_date': '2026-09-29',
+                            'platform': 'Linux x86_64', 'task': 'download'}},
+            {'id': 'android', 'capability': 'sdk_evidence', 'entities': [],
+             'conditions': {'sdk': 'OrbbecSDK',
+                            'sdk_release_date': '2026-09-29',
+                            'platform': 'Android', 'task': 'file_download'}},
+        ],
+    ).dispatch('sdk_evidence', {'query': question})
+    assert result.status == 'ok'
+    assert {'daq-sdk-host-sdcard-005', 'daq-sdk-android-sdcard-018'} <= {
+        row['kb_id'] for row in result.content['matches']}
+    assert result.content['matched_requirement_ids'] == ['android', 'linux']
+
+
+def test_sdk_tool_mixed_libraries_does_not_apply_host_cpu_to_device_sdk():
+    catalog = _candidate_catalog()
+    question = ('OrbbecSDK 2.9.0 Linux x86_64 的磁力计示例和 RK3576 '
+                'libobkit 的 CMake 编译安装分别怎么做？')
+    assert {'daq-sdk-host-magnetometer-sample-023',
+            'daq-sdk-device-build-012'} <= {
+        row['kb_id'] for row in catalog.search(
+            question, 'internal_fae', include_all=True)}
+
+    class Knowledge:
+        release_id = 'dev-sdk'
+        sdk_catalog = catalog
+
+        def records_for(self, role):
+            return []
+
+        def sections_for(self, role):
+            return []
+
+    result = DaqToolBox(
+        question=question, knowledge=Knowledge(), role='internal_fae',
+        requirements=[
+            {'id': 'host', 'capability': 'sdk_evidence', 'entities': [],
+             'conditions': {'sdk': 'OrbbecSDK', 'sdk_version': '2.9.0',
+                            'platform': 'Linux x86_64',
+                            'feature': 'magnetometer'}},
+            {'id': 'device', 'capability': 'sdk_evidence', 'entities': [],
+             'conditions': {'sdk': 'libobkit', 'platform': 'device_side',
+                            'task': 'build'}},
+        ],
+    ).dispatch('sdk_evidence', {'query': question})
+    assert result.status == 'ok'
+    assert {'daq-sdk-host-magnetometer-sample-023',
+            'daq-sdk-device-build-012'} <= {
+        row['kb_id'] for row in result.content['matches']}
+    assert result.content['matched_requirement_ids'] == ['device', 'host']
+
+
+@pytest.mark.parametrize('selector_slot', ('feature', 'task'))
+def test_sdcard_download_paraphrase_binds_each_reviewed_platform_task(
+        selector_slot):
+    catalog = _candidate_catalog()
+    question = ('OrbbecSDK 2026-09-29 Linux x86_64 和 Android 包里 '
+                'SD 卡文件下载分别怎么做？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [
+            {'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+             'conditions': {'sdk': 'OrbbecSDK',
+                            'sdk_release_date': '2026-09-29',
+                            'platform': platform,
+                            selector_slot: 'sd_card_file_download'}}
+            for platform in ('linux_x86_64', 'android')],
+    }, sdk_catalog=catalog)
+    by_platform = {goal.condition_map()['platform']: goal
+                   for goal in schema.goals}
+    assert by_platform['linux_x86_64'].condition_map()['task'] == 'download'
+    assert by_platform['android'].condition_map()['task'] == 'file_download'
+    assert all('feature' not in goal.condition_map()
+               and not goal.unmapped_condition_keys
+               for goal in by_platform.values())
+
+    class Knowledge:
+        release_id = 'dev-sdk'
+        sdk_catalog = catalog
+
+        def records_for(self, role):
+            return []
+
+        def sections_for(self, role):
+            return []
+
+    box = DaqToolBox(question=question, knowledge=Knowledge(), role='internal_fae',
+                     requirements=[{
+                         'id': goal.id, 'capability': goal.capability,
+                         'entities': list(goal.entities),
+                         'conditions': goal.condition_map(),
+                         'unmapped_condition_keys': list(goal.unmapped_condition_keys),
+                     } for goal in schema.goals])
+    for platform, source_id in (
+            ('Linux x86_64', 'daq-sdk-host-sdcard-005'),
+            ('Android', 'daq-sdk-android-sdcard-018')):
+        result = box.dispatch('sdk_evidence', {
+            'query': f'OrbbecSDK 2026-09-29 {platform} SD card file download'})
+        assert result.status == 'ok'
+        assert source_id in {row['kb_id'] for row in result.content['matches']}
+        assert by_platform[('linux_x86_64' if platform.startswith('Linux')
+                            else 'android')].id in result.content['matched_requirement_ids']
+
+
+def test_sdcard_comparison_restores_android_when_model_only_returns_generic_goal():
+    catalog = _candidate_catalog()
+    question = ('OrbbecSDK 2026-09-29 Linux x86_64 和 Android 包里 '
+                'SD 卡文件下载分别怎么做？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'medium', 'goals': [{
+            'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+            'conditions': {'sdk': 'OrbbecSDK',
+                           'sdk_release_date': '2026-09-29'},
+        }],
+    }, sdk_catalog=catalog)
+    by_platform = {goal.condition_map().get('platform'): goal
+                   for goal in schema.goals}
+    assert set(by_platform) == {'linux_x86_64', 'android'}
+    assert by_platform['linux_x86_64'].condition_map()['task'] == 'download'
+    assert by_platform['android'].condition_map()['task'] == 'file_download'
+    assert all(not goal.unmapped_condition_keys for goal in schema.goals)
+
+
+@pytest.mark.parametrize(('question', 'candidate_scope', 'axis', 'expected'), (
+    ('OrbbecSDK 2026-09-29 的 Linux x86_64 与 Android 包里分别有磁力计示例吗？',
+     {'sdk_release_date': '2026-09-29'}, 'platform',
+     {'linux_x86_64', 'android'}),
+    ('OrbbecSDK 2.8.0 和 2.9.0 的 Linux x86_64 包里分别有磁力计示例吗？',
+     {'sdk_version': '2.9.0', 'platform': 'linux_x86_64'}, 'sdk_version',
+     {'2.8.0', '2.9.0'}),
+    ('OrbbecSDK 2026-09-23 和 2026-09-29 的 Linux x86_64 包里分别有磁力计示例吗？',
+     {'sdk_release_date': '2026-09-29', 'platform': 'linux_x86_64'},
+     'sdk_release_date', {'2026-09-23', '2026-09-29'}),
+))
+def test_magnetometer_comparison_restores_each_explicit_scope(
+        question, candidate_scope, axis, expected):
+    catalog = _candidate_catalog()
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [{
+            'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+            'conditions': {'sdk': 'OrbbecSDK', 'feature': 'magnetometer',
+                           'task': 'inspect_package', **candidate_scope},
+        }],
+    }, sdk_catalog=catalog)
+    values = {goal.condition_map().get(axis) for goal in schema.goals}
+    assert values == expected
+    assert len(schema.goals) == 2
+    known = next(goal for goal in schema.goals if
+                 (goal.condition_map().get(axis) == 'linux_x86_64'
+                  if axis == 'platform' else
+                  goal.condition_map().get(axis) in {
+                      '2.9.0', '2026-09-29'}))
+    assert 'feature' not in known.unmapped_condition_keys
+    assert 'task' not in known.condition_map()
+    unknown = next(goal for goal in schema.goals if goal.id != known.id)
+    assert 'feature' in unknown.unmapped_condition_keys
+
+
+def test_magnetometer_comparison_adds_feature_when_model_only_named_sdk():
+    catalog = _candidate_catalog()
+    question = ('OrbbecSDK 2026-09-29 的 Linux x86_64 与 Android 包里'
+                '分别有磁力计示例吗？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'medium', 'goals': [{
+            'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+            'conditions': {'sdk': 'OrbbecSDK',
+                           'sdk_release_date': '2026-09-29'},
+        }],
+    }, sdk_catalog=catalog)
+    by_platform = {goal.condition_map().get('platform'): goal
+                   for goal in schema.goals}
+    assert set(by_platform) == {'linux_x86_64', 'android'}
+    assert all(goal.condition_map().get('feature') == 'magnetometer'
+               for goal in schema.goals)
+    assert not by_platform['linux_x86_64'].unmapped_condition_keys
+    assert 'feature' in by_platform['android'].unmapped_condition_keys
+
+
+def test_magnetometer_explicit_version_platform_matrix_does_not_drop_cells():
+    catalog = _candidate_catalog()
+    question = ('OrbbecSDK 2.8.0 和 2.9.0 每个版本在 Linux x86_64 和 '
+                'Android 两个平台的包里各有磁力计示例吗？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'medium', 'goals': [{
+            'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+            'conditions': {'sdk': 'OrbbecSDK', 'sdk_version': '2.9.0',
+                           'platform': 'linux_x86_64',
+                           'feature': 'magnetometer',
+                           'task': 'inspect_package'},
+        }],
+    }, sdk_catalog=catalog)
+    cells = {(goal.condition_map().get('sdk_version'),
+              goal.condition_map().get('platform')): goal
+             for goal in schema.goals}
+    assert set(cells) == {
+        ('2.8.0', 'linux_x86_64'), ('2.8.0', 'android'),
+        ('2.9.0', 'linux_x86_64'), ('2.9.0', 'android')}
+    assert not cells['2.9.0', 'linux_x86_64'].unmapped_condition_keys
+    assert all(cells[key].unmapped_condition_keys
+               for key in cells if key != ('2.9.0', 'linux_x86_64'))
+
+
+@pytest.mark.parametrize('version,known', (('2.8.0', False), ('2.9.0', True)))
+@pytest.mark.parametrize('phrase', ('OrbbecSDK {version}',
+                                     'OrbbecSDK 的 {version} 版本'))
+def test_single_sdk_version_is_preserved_across_platform_comparison(
+        version, known, phrase):
+    catalog = _candidate_catalog()
+    question = (f'{phrase.format(version=version)} 的 Linux x86_64 与 Android 包里'
+                '分别有磁力计示例吗？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'medium', 'goals': [{
+            'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+            'conditions': {'sdk': 'OrbbecSDK'},
+        }],
+    }, sdk_catalog=catalog)
+    by_platform = {goal.condition_map().get('platform'): goal
+                   for goal in schema.goals}
+    assert set(by_platform) == {'linux_x86_64', 'android'}
+    assert all(goal.condition_map().get('sdk_version') == version
+               for goal in schema.goals)
+
+    class Knowledge:
+        release_id = 'dev-sdk'
+        sdk_catalog = catalog
+
+        def records_for(self, role):
+            return []
+
+        def sections_for(self, role):
+            return []
+
+    result = DaqToolBox(
+        question=question, knowledge=Knowledge(), role='internal_fae',
+        requirements=[{
+            'id': goal.id, 'capability': goal.capability,
+            'entities': list(goal.entities), 'conditions': goal.condition_map(),
+            'unmapped_condition_keys': list(goal.unmapped_condition_keys),
+        } for goal in schema.goals],
+    ).dispatch('sdk_evidence', {'query': 'magnetometer example'})
+    if known:
+        assert result.status == 'ok'
+        assert result.content['matched_requirement_ids'] == [
+            by_platform['linux_x86_64'].id]
+    else:
+        assert result.status == 'not_found'
+        assert not result.content.get('matched_requirement_ids')
+
+
+def test_sdk_compared_builds_pair_with_their_own_platforms():
+    catalog = _candidate_catalog()
+    question = ('OrbbecSDK 2026-09-21 Linux x86_64 和 2026-09-29 '
+                'Android 包里 SD 卡文件下载分别怎么做？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [
+            {'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+             'conditions': {'sdk': 'OrbbecSDK', 'sdk_release_date': build,
+                            'platform': platform,
+                            'feature': 'sd_card_file_download'}}
+            for build, platform in (
+                ('2026-09-21', 'linux_x86_64'),
+                ('2026-09-29', 'android'))],
+    }, sdk_catalog=catalog)
+    assert {(goal.condition_map().get('sdk_release_date'),
+             goal.condition_map().get('platform')) for goal in schema.goals} == {
+                 ('2026-09-21', 'linux_x86_64'),
+                 ('2026-09-29', 'android')}
+
+
+def test_sdk_comparison_does_not_borrow_subject_from_next_sentence():
+    catalog = _candidate_catalog()
+    question = ('OrbbecSDK 2026-09-29 的 Linux x86_64 与 Android 包里'
+                '分别有什么示例？另问 EGO 的 SD 卡文件怎么下载？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'medium', 'goals': [{
+            'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+            'conditions': {'sdk': 'OrbbecSDK',
+                           'sdk_release_date': '2026-09-29',
+                           'platform': 'linux_x86_64'},
+        }],
+    }, sdk_catalog=catalog)
+    assert not any(goal.condition_map().get('task') in {
+        'download', 'file_download'} for goal in schema.goals)
+    assert any(goal.condition_map().get('task') is None
+               for goal in schema.goals)
+
+
+def test_sdk_comparison_keeps_separate_package_inventory_clause_and_version():
+    catalog = _candidate_catalog()
+    question = ('OrbbecSDK 2026-09-29 Linux x86_64 与 Android 包里 SD 卡文件下载分别怎么做？'
+                'OrbbecSDK 2.9.0 的包内容总览是什么？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'medium', 'goals': [
+            {'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+             'conditions': {'sdk': 'OrbbecSDK',
+                            'sdk_release_date': '2026-09-29',
+                            'platform': 'linux_x86_64',
+                            'feature': 'sd_card_file_download'}},
+            {'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+             'conditions': {'sdk': 'OrbbecSDK', 'sdk_version': '2.9.0',
+                            'task': 'inspect_package'}},
+        ],
+    }, sdk_catalog=catalog)
+    download = [goal for goal in schema.goals
+                if goal.condition_map().get('task') in {'download', 'file_download'}]
+    assert {goal.condition_map().get('platform') for goal in download} == {
+        'linux_x86_64', 'android'}
+    assert all('sdk_version' not in goal.condition_map() for goal in download)
+    assert any(goal.condition_map().get('task') == 'inspect_package'
+               and goal.condition_map().get('sdk_version') == '2.9.0'
+               for goal in schema.goals)
+
+
+def test_sdk_platform_matrix_preserves_each_platforms_named_api():
+    catalog = _candidate_catalog()
+    question = ('OrbbecSDK 2026-09-29 Linux x86_64 的 getSdcardFileList 和 '
+                'Android 的 getSdcardFileInfo 下载 SD 卡文件分别怎么做？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [
+            {'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+             'conditions': {'sdk': 'OrbbecSDK',
+                            'sdk_release_date': '2026-09-29',
+                            'platform': platform, 'api': api,
+                            'task': task}}
+            for platform, api, task in (
+                ('linux_x86_64', 'getSdcardFileList', 'download'),
+                ('android', 'getSdcardFileInfo', 'file_download'))],
+    }, sdk_catalog=catalog)
+    by_platform = {goal.condition_map().get('platform'): goal
+                   for goal in schema.goals}
+    assert by_platform['linux_x86_64'].condition_map()['api'] == 'getSdcardFileList'
+    assert by_platform['android'].condition_map()['api'] == 'getSdcardFileInfo'
+
+
+@pytest.mark.parametrize(('question', 'platform', 'build'), (
+    ('OrbbecSDK 2026-09-29 的 Linux x86_64 包里有磁力计示例吗，怎么编译运行？',
+     'linux_x86_64', '2026-09-29'),
+    ('OrbbecSDK 2026-09-23 的 Linux x86_64 包里有磁力计示例吗？',
+     'linux_x86_64', '2026-09-23'),
+    ('OrbbecSDK 2026-09-29 的 Android 包里有磁力计示例吗？',
+     'android', '2026-09-29'),
+))
+def test_magnetometer_presence_normalization_preserves_unreviewed_scope(
+        question, platform, build):
+    catalog = _candidate_catalog()
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [{
+            'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+            'conditions': {'sdk': 'OrbbecSDK', 'sdk_release_date': build,
+                           'platform': platform, 'feature': 'magnetometer',
+                           'task': 'inspect_package'},
+        }],
+    }, sdk_catalog=catalog)
+    assert schema.goals[0].condition_map().get('task') == 'inspect_package'
+    assert 'task' in schema.goals[0].unmapped_condition_keys
+
+
+def test_magnetometer_presence_is_not_blocked_by_other_platform_followup():
+    catalog = _candidate_catalog()
+    question = ('OrbbecSDK 2026-09-29 的 Linux x86_64 包里有磁力计示例吗？'
+                'Android 包怎么编译？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [
+            {'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+             'conditions': {'sdk': 'OrbbecSDK', 'sdk_release_date': '2026-09-29',
+                            'platform': 'linux_x86_64', 'feature': 'magnetometer',
+                            'task': 'inspect_package'}},
+            {'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+             'conditions': {'sdk': 'OrbbecSDK', 'sdk_release_date': '2026-09-29',
+                            'platform': 'android', 'task': 'compile'}},
+        ],
+    }, sdk_catalog=catalog)
+    linux = next(goal for goal in schema.goals
+                 if goal.condition_map().get('platform') == 'linux_x86_64')
+    android = next(goal for goal in schema.goals
+                   if goal.condition_map().get('platform') == 'android')
+    assert 'task' not in linux.condition_map()
+    assert 'task' in android.unmapped_condition_keys
+
+
+def test_callable_symbol_must_be_a_source_checked_call(tmp_path):
+    archive = Path('data/knowledge/local_archive/sdk-originals-1015-local-20261015')
+    if not archive.is_dir():
+        pytest.skip('local ignored SDK originals unavailable')
+    rows = json.loads(Path('Knowledge_SDK/curated.json').read_text())
+    callback = next(row for row in rows
+                    if row['kb_id'] == 'daq-sdk-android-record-state-019')
+    assert callback['callable_symbols'] == [
+        'setEgoStateCallback', 'setEgoRecordingResultCallback']
+    callback['callable_symbols'] = ['SAVING']
+    curated = tmp_path / 'curated.json'
+    curated.write_text(json.dumps(rows, ensure_ascii=False))
+    with pytest.raises(ValueError, match='callable symbol lacks source call span'):
+        build_catalog(curated, archive)
+
+
 def test_sdk_tool_keeps_package_scope_and_build_status_typed():
     catalog = _candidate_catalog()
 
@@ -99,6 +946,65 @@ def _candidate_catalog() -> SdkCatalog:
     records = [json.loads(line) for line in (directory / "SDK_Knowledge.jsonl").read_text().splitlines()]
     manifest = json.loads((directory / "SDK_Knowledge_manifest.json").read_text())
     return SdkCatalog(records, manifest)
+
+
+def test_sdk_search_ranks_audio_topic_above_shared_sdk_identity():
+    catalog = _candidate_catalog()
+    question = 'OrbbecSDK 2.9.0 的音频播放怎么做？'
+    hits = catalog.search(question, 'internal_fae')
+    assert hits and hits[0]['kb_id'] == 'daq-sdk-host-audio-007'
+    assert catalog.search('OrbbecSDK 2.8.0 的音频播放怎么做？',
+                          'internal_fae') == []
+
+    class Knowledge:
+        release_id = 'dev-sdk'
+        sdk_catalog = catalog
+        def records_for(self, role): return []
+        def sections_for(self, role): return []
+
+    result = DaqToolBox(
+        question=question, knowledge=Knowledge(), role='internal_fae',
+        requirements=[{'id': 'audio', 'capability': 'sdk_evidence',
+                       'entities': [], 'conditions': {
+                           'sdk': 'OrbbecSDK', 'sdk_version': '2.9.0',
+                           'task': 'audio_playback'}}],
+    ).dispatch('sdk_evidence', {'query': question})
+    assert result.status == 'ok'
+    assert result.content['matched_requirement_ids'] == ['audio']
+    assert 'daq-sdk-host-audio-007' in {
+        row['kb_id'] for row in result.content['matches']}
+
+
+def test_audio_tool_does_not_certify_wrong_sdk_version_or_platform():
+    catalog = _candidate_catalog()
+
+    class Knowledge:
+        release_id = 'dev-sdk'
+        sdk_catalog = catalog
+        def records_for(self, role): return []
+        def sections_for(self, role): return []
+
+    for question in ('OrbbecSDK 2.8.0 的音频播放怎么做？',
+                     'OrbbecSDK 2.9.0 的 Win11 音频播放怎么做？',
+                     'OrbbecSDK 2.9.0 在 Linux ARM64 怎么播放音频？',
+                     'OrbbecSDK 2.9.0 在 Ubuntu ARM64 怎么播放音频？',
+                     'OrbbecSDK 2.9.0 在 Linux ARMv8 怎么播放音频？',
+                     'OrbbecSDK 2.9.0 在 Linux riscv64 怎么播放音频？',
+                     'OrbbecSDK 2.9.0 在 ARM64 怎么播放音频？'):
+        schema = DaqRequestSchema.from_candidate(question, {
+            'confidence': 'high', 'goals': [{
+                'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+                'conditions': {'sdk': 'OrbbecSDK', 'feature': 'audio_playback'},
+            }],
+        }, sdk_catalog=catalog)
+        goal = schema.goals[0]
+        result = DaqToolBox(
+            question=question, knowledge=Knowledge(), role='internal_fae',
+            requirements=[{'id': goal.id, 'capability': 'sdk_evidence',
+                           'entities': [], 'conditions': goal.condition_map(),
+                           'unmapped_condition_keys': goal.unmapped_condition_keys}],
+        ).dispatch('sdk_evidence', {'query': question})
+        assert goal.id not in result.content.get('matched_requirement_ids', [])
 
 
 def test_scoped_sdk_search_survives_unrelated_viewer_build_in_user_question():
@@ -200,6 +1106,78 @@ def test_archived_magnetometer_sample_is_package_fact_not_umi_support():
     assert sample["doc_type"] == "example"
     assert sample["sdk_layer"] == "host_cpp"
     assert "UMI Finger" not in sample["answer"]
+
+
+def test_sdk_search_hint_does_not_certify_umi_device_applicability():
+    catalog = _candidate_catalog()
+    sample = next(row for row in catalog.records if row['kb_id'] ==
+                  'daq-sdk-host-magnetometer-sample-023')
+    class Knowledge:
+        release_id = 'dev-sdk'
+        sdk_catalog = catalog
+        def records_for(self, role): return []
+        def sections_for(self, role): return []
+
+    box = DaqToolBox(knowledge=Knowledge(), role='internal_fae', requirements=[
+        {'id': 'umi', 'capability': 'sdk_evidence',
+         'entities': ['UMI Finger'],
+         'conditions': {'task': 'magnetometer_sample'}},
+        {'id': 'package', 'capability': 'sdk_evidence', 'entities': [],
+         'conditions': {'task': 'magnetometer_sample'}},
+    ])
+    assert box._sdk_usage_requirement_ids([sample]) == ['package']
+
+
+def test_example_subject_must_be_named_by_verified_source_member(tmp_path):
+    archive = Path('data/knowledge/local_archive/sdk-originals-1015-local-20261015')
+    if not archive.is_dir():
+        pytest.skip('local ignored SDK originals unavailable')
+    curated = json.loads(Path('Knowledge_SDK/curated.json').read_text())
+    depth = next(row for row in curated if row['kb_id'] ==
+                 'daq-sdk-host-depth-009')
+    assert depth['example_subjects'] == ['EGO Depth']
+    depth['example_subjects'] = ['UMI Finger']
+    tampered = tmp_path / 'curated.json'
+    tampered.write_text(json.dumps(curated, ensure_ascii=False))
+    with pytest.raises(ValueError, match='example subject lacks source member'):
+        build_catalog(tampered, archive)
+
+
+def test_linux_ble_link_and_runtime_path_are_source_checked():
+    catalog = _candidate_catalog()
+    question = ('EgoLowBle 1.1.8 Linux x64 包怎么链接 libEgoLowBle.so，'
+                '运行时把库放在哪里？')
+    goal = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [{
+            'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+            'conditions': {'sdk': 'EgoLowBle', 'sdk_version': '1.1.8',
+                           'platform': 'linux_x64', 'task': 'link_and_deploy'},
+        }],
+    }, sdk_catalog=catalog).goals[0]
+    assert goal.unmapped_condition_keys == ()
+
+    class Knowledge:
+        release_id = 'dev-sdk'
+        sdk_catalog = catalog
+        def records_for(self, role): return []
+        def sections_for(self, role): return []
+
+    result = DaqToolBox(question=question, knowledge=Knowledge(),
+                        role='internal_fae', requirements=[{
+                            'id': goal.id, 'capability': goal.capability,
+                            'entities': list(goal.entities),
+                            'conditions': goal.condition_map(),
+                        }]).dispatch('sdk_evidence', {'query': question})
+    assert result.status == 'ok'
+    assert goal.id in result.content['matched_requirement_ids']
+    assert 'daq-sdk-ble-linux-link-024' in {
+        row['kb_id'] for row in result.content['matches']}
+    record = next(row for row in catalog.records
+                  if row['kb_id'] == 'daq-sdk-ble-linux-link-024')
+    assert {'LINUX_GUIDE.md', 'build_linux.sh', 'run_demo.sh'} <= {
+        ref['member'].split('\\')[-1] for ref in record['source_refs']}
+    assert 'LD_LIBRARY_PATH' in record['answer']
+    assert 'RPATH' in record['answer']
 
 
 def test_zip_member_api_fact_is_hash_and_line_bound(tmp_path, monkeypatch):
@@ -333,9 +1311,9 @@ def test_sdk_usage_matcher_respects_java_ble_and_ios_scope():
     assert toolbox._sdk_usage_requirement_ids([android_row, ios_row]) == ["android"]
 
 
-def test_all_23_catalog_rows_certify_their_exact_sdk_usage_scope():
+def test_all_24_catalog_rows_certify_their_exact_sdk_usage_scope():
     records = [json.loads(line) for line in Path("Knowledge_SDK/SDK_Knowledge.jsonl").read_text().splitlines()]
-    assert len(records) == 23
+    assert len(records) == 24
 
     class Knowledge:
         release_id = "dev-sdk"
@@ -805,6 +1783,51 @@ def test_calibration_output_names_are_checked_against_source_record():
     assert toolbox._sdk_usage_requirement_ids([row]) == ["yaml"]
 
 
+def test_calibration_yaml_evidence_survives_separate_unknown_json_goal():
+    catalog = _candidate_catalog()
+    question = 'EGO C++ 示例导出对齐和 IMU 标定 YAML 时，还能导出外参标定 JSON 吗？'
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'medium', 'goals': [{
+            'kind': 'product', 'capability': 'sdk_evidence', 'entities': ['EGO'],
+            'conditions': {'language': 'cpp', 'export_files': [
+                'alignment_yaml', 'imu_calibration_yaml',
+                'extrinsic_calibration_json']},
+        }],
+    }, sdk_catalog=catalog)
+
+    class Knowledge:
+        release_id = 'dev-sdk'
+        sdk_catalog = catalog
+
+        def records_for(self, role):
+            return []
+
+        def sections_for(self, role):
+            return []
+
+    requirements = [
+        {'id': goal.id, 'capability': goal.capability,
+         'entities': list(goal.entities), 'conditions': goal.condition_map(),
+         'unmapped_condition_keys': list(goal.unmapped_condition_keys),
+         'reason': ('unmapped_condition_unverified'
+                    if goal.unmapped_condition_keys else '')}
+        for goal in schema.goals
+    ]
+    result = DaqToolBox(
+        question=question, knowledge=Knowledge(), role='internal_fae',
+        requirements=requirements,
+    ).dispatch('sdk_evidence', {'query': 'EGO C++ calibration export'})
+    known = next(goal.id for goal in schema.goals
+                 if goal.condition_map().get('task') == 'calibration_export')
+    unknown = next(goal.id for goal in schema.goals
+                   if 'extrinsic_calibration_json' in str(goal.condition_map()))
+    assert result.status == 'ok'
+    assert {row['kb_id'] for row in result.content['matches']} == {
+        'daq-sdk-host-calib-002'}
+    assert result.content['matched_requirement_ids'] == [known]
+    assert unknown not in result.content['matched_requirement_ids']
+
+
 def test_sdk_source_filename_matches_only_hashed_member_not_generated_output():
     class Knowledge:
         release_id = "dev-sdk"
@@ -838,6 +1861,8 @@ def test_sdk_release_is_immutable_and_reversible(tmp_path, monkeypatch):
     replay.write_text(json.dumps({"case": {"id": "usage"},
         "identity": {"sdk_catalog_sha256": catalog.manifest["records_sha256"],
                      "suite_file_sha256": "c" * 64,
+                     "publication_eligible": True,
+                     "knowledge_binding": "source_bound_release",
                      "runtime_release": "daq-tested",
                      "upstream_revision": "b" * 40},
         "turns": [{"done": {"answer": answer, "outcome": "resolved",
@@ -858,6 +1883,27 @@ def test_sdk_release_is_immutable_and_reversible(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="runtime identity"):
         stage_sdk_release(root, directory, archive, report, replay_results=replay,
                           runtime_release="daq-tested", upstream_sha="a" * 40)
+    original_replay = json.loads(replay.read_text())
+    for identity_change in (
+        {"publication_eligible": None},
+        {"publication_eligible": False},
+        {"knowledge_binding": None},
+        {"knowledge_binding": "unknown_release_binding"},
+        {"knowledge_binding": "dev_code_preview_of_immutable_release"},
+    ):
+        mutated = json.loads(json.dumps(original_replay))
+        for key, value in identity_change.items():
+            if value is None:
+                mutated["identity"].pop(key)
+            else:
+                mutated["identity"][key] = value
+        replay.write_text(json.dumps(mutated) + "\n")
+        report["results_sha256"] = hashlib.sha256(replay.read_bytes()).hexdigest()
+        with pytest.raises(ValueError, match="identity mismatch"):
+            stage_sdk_release(root, directory, archive, report, replay_results=replay,
+                              runtime_release="daq-tested", upstream_sha="b" * 40)
+    replay.write_text(json.dumps(original_replay) + "\n")
+    report["results_sha256"] = hashlib.sha256(replay.read_bytes()).hexdigest()
     release_id = stage_sdk_release(root, directory, archive, report, replay_results=replay,
                                    runtime_release="daq-tested", upstream_sha="b" * 40)
     assert load_active_sdk_release(root, runtime_release="daq-tested",
@@ -1262,6 +2308,70 @@ def test_libobkit_compile_and_deploy_model_task_is_user_grounded():
                             'platform': 'device_side'}}]}, sdk_catalog=catalog)
     assert schema.goals[0].entities == ('四目 EGO',)
     assert schema.goals[0].unmapped_condition_keys == ()
+
+
+def test_libobkit_build_and_run_sample_maps_to_reviewed_build_record():
+    catalog = _candidate_catalog()
+    question = ('EGO Pro 设备端 libobkit 示例在什么环境编译，'
+                'TOOLCHAIN_DIR 和运行时 lib 路径怎么处理？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'medium', 'goals': [
+            {'kind': 'product', 'capability': 'sdk_evidence',
+             'entities': ['EGO Pro'],
+             'conditions': {'sdk': 'libobkit', 'platform': 'device_side',
+                            'task': 'build_and_run_sample'}},
+        ],
+    }, sdk_catalog=catalog)
+    goal = schema.goals[0]
+    assert goal.unmapped_condition_keys == ()
+    class Knowledge:
+        release_id = 'dev-sdk'
+        sdk_catalog = catalog
+        def records_for(self, role): return []
+        def sections_for(self, role): return []
+    result = DaqToolBox(question=question, knowledge=Knowledge(),
+                        role='internal_fae', requirements=[
+                            {'id': 'usage', 'capability': 'sdk_evidence',
+                             'entities': list(goal.entities),
+                             'conditions': goal.condition_map()},
+                        ]).dispatch('sdk_evidence', {'query': question})
+    assert result.status == 'ok'
+    assert result.content['matched_requirement_ids'] == ['usage']
+    assert 'daq-sdk-device-build-012' in {
+        source['source_id'] for source in result.sources
+    }
+
+
+def test_libobkit_single_compile_label_uses_exact_reviewed_symbol_anchor():
+    catalog = _candidate_catalog()
+    question = ('EGO Pro 设备端 libobkit 示例在什么环境编译，'
+                'TOOLCHAIN_DIR 和运行时 lib 路径怎么处理？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [{
+            'kind': 'product', 'capability': 'sdk_evidence',
+            'entities': ['EGO Pro'],
+            'conditions': {'sdk': 'libobkit', 'platform': 'device_side',
+                           'task': 'compile'},
+        }],
+    }, sdk_catalog=catalog)
+    goal = schema.goals[0]
+    assert goal.condition_map()['task'] == 'build'
+    assert goal.unmapped_condition_keys == ()
+    class Knowledge:
+        release_id = 'dev-sdk'
+        sdk_catalog = catalog
+        def records_for(self, role): return []
+        def sections_for(self, role): return []
+    result = DaqToolBox(question=question, knowledge=Knowledge(),
+                        role='internal_fae', requirements=[
+                            {'id': 'usage', 'capability': 'sdk_evidence',
+                             'entities': list(goal.entities),
+                             'conditions': goal.condition_map()},
+                        ]).dispatch('sdk_evidence', {'query': question})
+    assert result.status == 'ok'
+    assert 'daq-sdk-device-build-012' in {
+        source['source_id'] for source in result.sources
+    }
 
 
 def test_unspoken_api_in_comma_list_stays_unmapped():

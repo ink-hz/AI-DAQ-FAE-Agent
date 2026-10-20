@@ -466,6 +466,21 @@ def test_source_checked_procedure_covers_recording_intent_in_candidate_preview()
     assert natural.status == 'ok'
     assert natural.content['matched_requirement_ids'] == [
         item['id'] for item in detailed_plan.requirements]
+    red_question = 'EGO Pro 单机 TF 卡录制时，红色 LED 灯态表示什么？'
+    red_schema = DaqRequestSchema.from_candidate(red_question, {
+        'confidence': 'high', 'goals': [{
+            'kind': 'product', 'capability': 'lookup_procedure',
+            'entities': ['EGO Pro'], 'conditions': {'indicators': ['led']},
+        }],
+    })
+    assert red_schema.goals[0].condition_map()['indicators'] == ['red_led']
+    red_plan = prepare_turn(red_question, request_schema=red_schema,
+                            grounded_targets=knowledge.ground_question(red_question))
+    red_result = DaqToolBox(question=red_question, knowledge=knowledge,
+                            role='internal_fae', requirements=red_plan.requirements
+                            ).dispatch('lookup_procedure', {
+                                'task': '录制单机 EGO Pro 数据', 'entity': 'EGO Pro'})
+    assert red_result.content['matched_requirement_ids'] == []
     procedure_session = DaqEvidencePolicy(allow_dev_source_check=True).begin(
         detailed_plan.evidence_requirements())
     procedure_session.observe('lookup_procedure', natural)
@@ -615,8 +630,10 @@ def test_source_checked_recording_mode_condition_requires_explicit_tf_card():
     schema = DaqRequestSchema.from_candidate(question, candidate)
     assert schema.goals[0].unmapped_condition_keys == ()
     ungrounded = DaqRequestSchema.from_candidate('EGO Pro 怎么操作？', candidate)
-    assert set(ungrounded.goals[0].unmapped_condition_keys) == {
-        'recording_mode', 'task'}
+    # The model-inferred local TF mode is removed before retrieval; the
+    # unsupported recording task remains visible as an ungrounded condition.
+    assert 'recording_mode' not in ungrounded.goals[0].condition_map()
+    assert set(ungrounded.goals[0].unmapped_condition_keys) == {'task'}
 
 
 def test_model_topology_condition_aliases_preserve_explicit_scope():

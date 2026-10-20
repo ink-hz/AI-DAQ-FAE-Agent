@@ -126,6 +126,458 @@ def test_question_requirement_is_explicit_and_not_satisfied_by_absence():
     assert session.evaluate(AnswerSubmission(outcome="resolved", conclusion="可以配对")).action == "reject"
 
 
+def test_partial_answer_cannot_repeat_prior_product_fact_without_current_source():
+    session = DaqEvidencePolicy().begin({'requirements': [
+        {'id': 'mode', 'capability': 'lookup_spec'},
+    ]})
+    session.observe('lookup_spec', ToolResult(
+        status='not_found', content={'matched_requirement_ids': ['mode']},
+    ))
+    decision = session.evaluate(AnswerSubmission(
+        outcome='safe_abstained',
+        basis='上一轮查到该产品在另一个分辨率下是 30 fps。',
+        missing='本轮目标模式的帧率缺少已核实资料。',
+    ))
+    assert decision.action == 'request_evidence'
+    assert decision.reason_code == 'daq_partial_basis_without_current_source'
+    assert session.evaluate(AnswerSubmission(
+        outcome='safe_abstained', missing='本轮目标模式的帧率缺少已核实资料。',
+    )).action == 'allow'
+
+
+def test_unrelated_entity_source_does_not_support_partial_sdk_basis():
+    session = DaqEvidencePolicy().begin({'requirements': [
+        {'id': 'support', 'capability': 'check_software_support'},
+    ]})
+    session.observe('resolve_entity', ToolResult(
+        status='ok', content={'matches': [{'id': 'entity:ego-pro'}]},
+        sources=[{'type': 'daq_governed_claim', 'verification_status': 'verified',
+                  'release_id': 'kb-v1', 'source_id': 'entity:ego-pro'}],
+    ))
+    session.observe('check_software_support', ToolResult(
+        status='not_found', content={'matched_requirement_ids': ['support']},
+    ))
+    decision = session.evaluate(AnswerSubmission(
+        outcome='safe_abstained',
+        basis='上一轮的 SDK 示例检查读写权限和支持模式位图。',
+        missing='当前设备组合的同步支持没有证据。',
+    ))
+    assert decision.action == 'request_evidence'
+    assert decision.reason_code == 'daq_partial_basis_without_current_source'
+
+
+def test_source_scope_wording_is_reviewed_offline_not_rewritten_by_policy():
+    session = DaqEvidencePolicy().begin({'requirements': [
+        {'id': 'identity', 'capability': 'resolve_entity'},
+    ]})
+    session.observe('resolve_entity', ToolResult(
+        status='ok', content={'matched_requirement_ids': ['identity']},
+        sources=[{'type': 'daq_governed_claim', 'verification_status': 'verified',
+                  'release_id': 'knowledge-v1', 'source_id': 'entity:ego-pro'}],
+    ))
+    decision = session.evaluate(AnswerSubmission(
+        outcome='safe_abstained',
+        basis='当前发布资料里找不到这个型号。',
+        missing='新型号关系尚未核实。'))
+    assert decision.action == 'allow'
+    assert session.evaluate(AnswerSubmission(
+        outcome='safe_abstained',
+        basis='本轮返回的实体记录没有列出该型号作为别名。',
+        missing='新型号关系尚未核实。',
+    )).action == 'allow'
+
+
+def test_partial_spec_values_are_semantic_review_obligations_not_runtime_words():
+    session = DaqEvidencePolicy().begin({'requirements': [
+        {'id': 'fov', 'capability': 'lookup_spec', 'field': 'horizontal_fov'},
+    ]})
+    for variant, value in [('1600x1200', 165), ('1920x1200', 149)]:
+        session.observe('lookup_spec', ToolResult(
+            status='ok', content={'matches': [{
+                'kind': 'claim', 'status': 'verified',
+                'scope': {'resolution_variant': variant},
+                'data': {'field': 'horizontal_fov', 'value': value,
+                         'unit': 'deg', 'conditions': {}},
+            }], 'matched_requirement_ids': []},
+            sources=[{'type': 'daq_governed_claim',
+                      'verification_status': 'verified',
+                      'release_id': 'knowledge-v1',
+                      'source_id': f'claim:fov-{variant}'}],
+        ))
+    decision = session.evaluate(AnswerSubmission(
+        outcome='safe_abstained', basis='两个变体各有视场角记录。',
+        missing='未指定适用产品变体。'))
+    assert decision.action == 'allow'
+    assert session.evaluate(AnswerSubmission(
+        outcome='safe_abstained',
+        basis='1600×1200 版为 165°，1920×1200 版为 149°。',
+        missing='请确认适用产品变体。',
+    )).action == 'allow'
+
+
+def test_partial_spec_answer_reports_known_conditioned_value():
+    session = DaqEvidencePolicy().begin({'requirements': [
+        {'id': 'target_mode', 'capability': 'lookup_spec',
+         'field': 'rgb_max_frame_rate'},
+    ]})
+    session.observe('lookup_spec', ToolResult(
+        status='not_found', content={'matched_requirement_ids': ['target_mode']},
+    ))
+    session.observe('lookup_spec', ToolResult(
+        status='ok', content={'matches': [{
+            'kind': 'claim', 'status': 'verified',
+            'scope': {'resolution_variant': '1920x1200'},
+            'data': {'field': 'rgb_max_fps', 'value': 30, 'unit': 'fps',
+                     'conditions': {'resolution': '1920x1200'}},
+        }], 'matched_requirement_ids': []},
+        sources=[{'type': 'daq_governed_claim', 'verification_status': 'verified',
+                  'release_id': 'knowledge-v1', 'source_id': 'claim:fps-1920'}],
+    ))
+    decision = session.evaluate(AnswerSubmission(
+        outcome='safe_abstained', missing='1920×1080 下的帧率未核实。',
+    ))
+    assert decision.action == 'allow'
+    assert session.evaluate(AnswerSubmission(
+        outcome='safe_abstained',
+        basis='1920×1200 变体在 1920×1200 分辨率下的标称最大帧率为 30 fps。',
+        missing='1920×1080 下的帧率未核实。',
+    )).action == 'allow'
+
+
+def test_alternative_resolution_numeric_source_cannot_certify_target_mode_value():
+    session = DaqEvidencePolicy(question=(
+        'EGO 1920 版在 RGB 1920×1080 模式能达到 30 fps 吗？')).begin({
+        'requirements': [{
+            'id': 'target_mode', 'capability': 'lookup_spec',
+            'field': 'rgb_max_frame_rate', 'entities': ['entity:ego-1920'],
+            'conditions': {'resolution_variant': '1920x1200',
+                           'resolution': '1920x1080'},
+        }],
+    })
+    session.observe('lookup_spec', ToolResult(
+        status='not_found', content={'matched_requirement_ids': ['target_mode']}))
+    session.observe('lookup_spec', ToolResult(
+        status='ok', content={'matches': [{
+            'kind': 'claim', 'status': 'verified',
+            'scope': {'resolution_variant': '1920x1200'},
+            'data': {'entity_id': 'entity:ego-1920',
+                     'field': 'rgb_max_fps', 'value': 30, 'unit': 'fps',
+                     'conditions': {'resolution': '1920x1200'}},
+        }], 'matched_requirement_ids': []},
+        sources=[{'type': 'daq_governed_claim', 'verification_status': 'verified',
+                  'release_id': 'knowledge-v1',
+                  'source_id': 'claim:ego-1920-max-fps'}],
+    ))
+    wrong = session.evaluate(AnswerSubmission(
+        outcome='safe_abstained',
+        basis='1920×1080 模式最大帧率是 30 fps。',
+        missing='1920×1080 的实际取流能力还未验证。'))
+    assert wrong.action == 'request_evidence'
+    assert wrong.reason_code == 'daq_partial_numeric_measurement_scope_mismatch'
+    vague = session.evaluate(AnswerSubmission(
+        outcome='safe_abstained', basis='本轮核实最大帧率为 30 fps。',
+        missing='1920×1080 条件下尚未核实。'))
+    assert vague.reason_code == 'daq_partial_numeric_measurement_scope_mismatch'
+    for basis in (
+        '1920×1080 模式最大 30fps下仍可取流。',
+        '1920×1080 模式最大 30 fps下仍可取流。',
+        '1920×1080 模式最大 30 帧/秒。',
+    ):
+        decision = session.evaluate(AnswerSubmission(
+            outcome='safe_abstained', basis=basis,
+            missing='1920×1080 条件下尚未核实。'))
+        assert decision.reason_code == 'daq_partial_numeric_measurement_scope_mismatch'
+    correct = session.evaluate(AnswerSubmission(
+        outcome='safe_abstained',
+        basis='1920×1200 模式的标称最大帧率是 30 fps。',
+        missing='1920×1080 条件下尚未核实。'))
+    assert correct.action == 'allow'
+    scoped_unknown = session.evaluate(AnswerSubmission(
+        outcome='safe_abstained',
+        basis='1920×1200 模式的标称最大帧率是 30 fps；'
+              '1920×1080 模式能否达到 30 fps 仍未知。',
+        missing='1920×1080 条件下尚未核实。'))
+    assert scoped_unknown.action == 'allow'
+    for basis in (
+        '1920×1080 没有对应帧率记录（1920×1200 标称最大帧率为 30 fps）。',
+        '1920×1080 无帧率数据（1920×1200 模式最大帧率为 30 fps）。',
+    ):
+        assert session.evaluate(AnswerSubmission(
+            outcome='safe_abstained', basis=basis,
+            missing='1920×1080 条件下尚未核实。')).action == 'allow'
+    for basis in (
+        '1920×1080 模式最大帧率为 30 fps（待核实）。',
+        '1920×1080 模式最大帧率是 30 fps，尚未核实。',
+        '1920×1080 模式最大帧率是 60 fps。',
+        '1920×1080 模式最大帧率是 29 fps。',
+        '1920×1080 最高可达 30 fps（待核实）。',
+        '1920×1080 下可达到 30 fps（待核实）。',
+        '1920×1080 支持 30 fps（待核实）。',
+        '1920×1080：30 fps（待核实）。',
+        '1920×1080 = 30 fps（待核实）。',
+        '1920×1080 暂填 30 fps（待核实）。',
+        '1920×1080 不能确认，但最大帧率为 30 fps（待核实）。',
+        '1920×1080 不能确认但最大帧率为 30 fps（待核实）。',
+        '1920×1080 最大帧率是 30 fps，测量分辨率是 1920×1200。',
+        '1920×1080 未核实，但表中填 30 fps。',
+        '1920×1080 尚未核实；该栏填 30 fps。',
+        '1920×1080 未核实；可以填 30 fps。',
+    ):
+        decision = session.evaluate(AnswerSubmission(
+            outcome='safe_abstained', basis=basis,
+            missing='目标模式未知。'))
+        assert decision.reason_code == 'daq_partial_numeric_measurement_scope_mismatch'
+
+
+def test_alternative_resolution_verified_alias_lookup_can_support_partial_basis():
+    session = DaqEvidencePolicy(question=(
+        'EGO 双目 1920×1200 版本在 1920×1080 模式能填 30 fps 吗？')).begin({
+        'requirements': [{
+            'id': 'target_mode', 'capability': 'lookup_spec',
+            'field': 'rgb_max_frame_rate', 'entities': ['EGO 双目'],
+            'conditions': {'resolution_variant': '1920x1200',
+                           'resolution': '1920x1080'},
+        }],
+    })
+    session.observe('lookup_spec', ToolResult(
+        status='not_found', content={'matched_requirement_ids': ['target_mode']}))
+    checked = ToolResult(status='ok', content={
+        'query_entity': 'EGO 双目',
+        'matches': [{
+            'kind': 'claim', 'status': 'verified',
+            'scope': {'resolution_variant': '1920x1200'},
+            'data': {'entity_id': 'entity:ego-1920', 'field': 'rgb_max_fps',
+                     'value': 30, 'unit': 'fps',
+                     'conditions': {'resolution': '1920x1200'}},
+        }], 'matched_requirement_ids': [],
+    }, sources=[{'type': 'daq_governed_claim',
+                 'verification_status': 'verified', 'release_id': 'knowledge-v1',
+                 'source_id': 'claim:ego-1920-max-fps'}])
+    session.observe('lookup_spec', checked)
+    assert session.evaluate(AnswerSubmission(
+        outcome='safe_abstained',
+        basis='EGO 双目 1920×1200 版在 1920×1200 模式的最大帧率为 30 fps。',
+        missing='1920×1080 模式帧率尚未核实。')).action == 'allow'
+    assert session.evaluate(AnswerSubmission(
+        outcome='safe_abstained', basis='1920×1080 最大帧率是 30 fps。',
+        missing='目标模式未知。')).reason_code == 'daq_partial_numeric_measurement_scope_mismatch'
+    for field in ('cautions', 'next_steps', 'pending_confirmation',
+                  'unresolved_constraints'):
+        decision = session.evaluate(AnswerSubmission(
+            outcome='safe_abstained', missing='目标模式未知。',
+            **{field: '把 1920×1080 模式最大帧率填为 30 fps。'}))
+        assert decision.reason_code == 'daq_partial_numeric_measurement_scope_mismatch'
+
+
+def test_partial_variant_comparison_can_state_verified_target_resolution_fps():
+    session = DaqEvidencePolicy(question=(
+        'RGB 1920×1200 和 60 fps 必须同时满足，EGO 双目两版有吗？')).begin({
+        'requirements': [{
+            'id': 'target_mode', 'capability': 'lookup_spec',
+            'field': 'rgb_max_frame_rate', 'entities': ['EGO 双目'],
+            'conditions': {'resolution': '1920x1200'},
+        }],
+    })
+    session.observe('lookup_spec', ToolResult(
+        status='not_found', content={'matched_requirement_ids': ['target_mode']}))
+    for variant, value in (('1920x1200', 30), ('1600x1200', 60)):
+        session.observe('lookup_spec', ToolResult(
+            status='ok', content={'query_entity': 'EGO 双目', 'matches': [{
+                'kind': 'claim', 'status': 'verified',
+                'scope': {'resolution_variant': variant},
+                'data': {'entity_id': f'entity:ego-{variant[:4]}',
+                         'field': 'rgb_max_fps', 'value': value, 'unit': 'fps',
+                         'conditions': {'resolution': variant}},
+            }], 'matched_requirement_ids': []},
+            sources=[{'type': 'daq_governed_claim',
+                      'verification_status': 'verified',
+                      'release_id': 'knowledge-v1',
+                      'source_id': f'claim:ego-{variant[:4]}-max-fps'}],
+        ))
+    assert session.evaluate(AnswerSubmission(
+        outcome='safe_abstained',
+        basis='EGO 1920×1200 版在 1920×1200 模式的最大帧率为 30 fps。',
+        missing='目标帧率硬条件未获证。')).action == 'allow'
+    assert session.evaluate(AnswerSubmission(
+        outcome='safe_abstained', missing='60 fps 硬条件未获证。')).action == 'allow'
+    assert session.evaluate(AnswerSubmission(
+        outcome='safe_abstained',
+        basis='1920×1200 版在 1920×1200 下达不到 60 fps。',
+        unresolved_constraints='RGB 1920×1200 和 60 fps 必须同时满足。',
+    )).action == 'allow'
+    assert session.evaluate(AnswerSubmission(
+        outcome='safe_abstained',
+        basis=('EGO 1920×1200 版在 1920×1200 下最大帧率为 30 fps，'
+               '低于 60 fps 的要求；两版数据分别为 30 fps@1920×1200、'
+               '60 fps@1600×1200，不是同一分辨率下从 30 变成 60。'),
+        next_steps=('建议找在 RGB 1920×1200 下有 60 fps 已核实规格的'
+                    '其他候选产品，或拿到 1920×1200@60 fps 的正式规格。'),
+        missing='没有查到 RGB 1920×1200 下可达 60 fps 的规格记录。',
+    )).action == 'allow'
+    assert session.evaluate(AnswerSubmission(
+        outcome='safe_abstained',
+        basis=('EGO 1920×1200 版在 1920×1200 下的最大帧率为 30 fps。'
+               '两个数值分别是 30 fps 对应 1920×1200，'
+               '60 fps 对应 1600×1200。'),
+        next_steps=('只在已核实 RGB 1920×1200 下最大帧率 ≥ 60 fps 的'
+                    '其他候选里继续找。'),
+        missing='两版都没有 RGB 1920×1200 且 60 fps 的核实记录。',
+    )).action == 'allow'
+    assert session.evaluate(AnswerSubmission(
+        outcome='safe_abstained',
+        basis=('1920×1200 版 RGB 最大帧率为 30 fps，测量分辨率是 '
+               '1920×1200；1600×1200 版 RGB 最大帧率为 60 fps，'
+               '测量分辨率是 1600×1200。'),
+        missing='1920×1200 版最大帧率 30 fps（测量分辨率 1920×1200）。',
+    )).action == 'allow'
+    assert session.evaluate(AnswerSubmission(
+        outcome='safe_abstained',
+        basis='RGB 最大帧率为 30 fps，测量分辨率是 1920×1200。',
+        missing='最大帧率 30 fps（测量分辨率 1920×1200）。',
+    )).action == 'allow'
+    assert session.evaluate(AnswerSubmission(
+        outcome='safe_abstained',
+        basis='EGO 1920×1200 版在 1920×1200 模式的最大帧率为 60 fps。',
+        missing='硬条件未知。')).reason_code == (
+            'daq_partial_numeric_measurement_scope_mismatch')
+    for basis in (
+        'EGO 1600×1200 版在 1920×1200 模式最大帧率为 30 fps。',
+        'EGO 1920×1200 版在 1600×1200 模式最大帧率为 60 fps。',
+    ):
+        assert session.evaluate(AnswerSubmission(
+            outcome='safe_abstained', basis=basis,
+            missing='硬条件未知。')).reason_code == (
+                'daq_partial_numeric_measurement_scope_mismatch')
+
+
+def test_wrong_variant_numeric_source_cannot_certify_partial_spec_basis():
+    session = DaqEvidencePolicy(question=(
+        'EGO 双目 1920×1200 版本在 1920×1080 模式能填 30 fps 吗？')).begin({
+        'requirements': [{
+            'id': 'target_mode', 'capability': 'lookup_spec',
+            'field': 'rgb_max_frame_rate', 'entities': ['entity:ego-1920'],
+            'conditions': {'resolution_variant': '1920x1200',
+                           'resolution': '1920x1080'},
+        }],
+    })
+    session.observe('lookup_spec', ToolResult(
+        status='ok', content={'matches': [{
+            'kind': 'claim', 'status': 'verified',
+            'scope': {'resolution_variant': '1600x1200'},
+            'data': {'entity_id': 'entity:ego-1600', 'field': 'rgb_max_fps',
+                     'value': 60, 'unit': 'fps',
+                     'conditions': {'resolution': '1600x1200'}},
+        }], 'matched_requirement_ids': []},
+        sources=[{'type': 'daq_governed_claim', 'verification_status': 'verified',
+                  'release_id': 'knowledge-v1',
+                  'source_id': 'claim:ego-1600-max-fps'}],
+    ))
+    decision = session.evaluate(AnswerSubmission(
+        outcome='safe_abstained', basis='本轮核实 60 fps。',
+        missing='目标模式的帧率未核实。'))
+    assert decision.action == 'request_evidence'
+    assert decision.reason_code == 'daq_partial_basis_without_current_source'
+
+
+def test_ambiguous_reviewed_alias_can_report_each_checked_variant_value():
+    session = DaqEvidencePolicy(question='EGO 双目视场角是多少？').begin({
+        'requirements': [{'id': 'fov', 'capability': 'lookup_spec',
+                          'field': 'horizontal_fov', 'entities': ['EGO 双目']}],
+    })
+    session.observe('resolve_entity', ToolResult(
+        status='ok', content={'matches': [
+            {'id': 'entity:ego-1600', 'kind': 'entity', 'data': {
+                'name': 'EGO 1600', 'aliases': ['EGO 双目']}},
+            {'id': 'entity:ego-1920', 'kind': 'entity', 'data': {
+                'name': 'EGO 1920', 'aliases': ['EGO 双目']}},
+        ], 'matched_requirement_ids': []},
+        sources=[{'type': 'daq_governed_claim', 'verification_status': 'verified',
+                  'release_id': 'knowledge-v1', 'source_id': 'entity:ego-1600'}],
+    ))
+    session.observe('lookup_spec', ToolResult(
+        status='ok', content={'matches': [
+            {'kind': 'claim', 'status': 'verified',
+             'scope': {'resolution_variant': '1600x1200'},
+             'data': {'entity_id': 'entity:ego-1600', 'field': 'horizontal_fov',
+                      'value': 165, 'unit': 'deg', 'conditions': {}}},
+        ], 'matched_requirement_ids': []},
+        sources=[{'type': 'daq_governed_claim', 'verification_status': 'verified',
+                  'release_id': 'knowledge-v1', 'source_id': 'claim:fov-1600'}],
+    ))
+    assert session.evaluate(AnswerSubmission(
+        outcome='safe_abstained', basis='1600×1200 版水平视场角为 165°。',
+        missing='请确认设备变体。')).action == 'allow'
+
+
+def test_combo_abstention_reports_checked_hub_capacity_premise():
+    session = DaqEvidencePolicy(question=(
+        '一台 EGO Pro 加两台 WristCam 接数采 HUB，4 个下游口看着够，'
+        '能保证接线、供电和同步录制吗？')).begin({'requirements': [
+            {'id': 'topology', 'capability': 'inspect_topology'},
+        ]})
+    session.observe('inspect_topology', ToolResult(
+        status='not_found', content={'matched_requirement_ids': ['topology']}))
+    session.observe('lookup_spec', ToolResult(
+        status='ok', content={'matches': [{
+            'kind': 'claim', 'status': 'verified', 'scope': {'product': 'hub'},
+            'data': {'field': 'downstream_port_count', 'value': 4,
+                     'unit': 'port', 'conditions': {}},
+        }], 'matched_requirement_ids': []},
+        sources=[{'type': 'daq_governed_claim', 'verification_status': 'verified',
+                  'release_id': 'knowledge-v1', 'source_id': 'claim:hub-ports'}],
+    ))
+    decision = session.evaluate(AnswerSubmission(
+        outcome='safe_abstained',
+        cautions='“4 个下游口看着够”只是用户的初步判断。',
+        missing='实际占口、供电和同步组合证据未知。',
+    ))
+    assert decision.action == 'allow'
+    assert session.evaluate(AnswerSubmission(
+        outcome='safe_abstained',
+        basis='本轮核实数采 HUB 有 4 个下游口。',
+        missing='实际占口、供电和同步组合证据未知。',
+    )).action == 'allow'
+
+
+def test_unrelated_hub_capacity_cannot_certify_daq_hub_partial_basis():
+    session = DaqEvidencePolicy(question=(
+        '一台 EGO Pro 加两台 WristCam 接数采 HUB，4 个下游口够吗？')).begin({
+        'requirements': [{'id': 'topology', 'capability': 'inspect_topology'}],
+    })
+    session.observe('lookup_spec', ToolResult(
+        status='ok', content={'matches': [{
+            'kind': 'claim', 'status': 'verified',
+            'scope': {'product': 'unrelated-hub'},
+            'data': {'entity_id': 'entity:unrelated-hub',
+                     'field': 'downstream_port_count', 'value': 4,
+                     'unit': 'port', 'conditions': {}},
+        }], 'matched_requirement_ids': []},
+        sources=[{'type': 'daq_governed_claim', 'verification_status': 'verified',
+                  'release_id': 'knowledge-v1',
+                  'source_id': 'claim:unrelated-hub-ports'}],
+    ))
+    decision = session.evaluate(AnswerSubmission(
+        outcome='safe_abstained', basis='数采 HUB 已核实有 4 个下游口。',
+        missing='组合连接还未核实。'))
+    assert decision.action == 'request_evidence'
+    assert decision.reason_code == 'daq_partial_basis_without_current_source'
+
+
+def test_user_named_sdk_build_variable_is_not_internal_provenance():
+    session = DaqEvidencePolicy(question='TOOLCHAIN_DIR 和运行时 lib 路径怎么处理？').begin({
+        'requirements': [{'id': 'sdk', 'capability': 'sdk_evidence'}],
+    })
+    assert session.evaluate(AnswerSubmission(
+        outcome='safe_abstained',
+        missing='本轮还没有查到 TOOLCHAIN_DIR 的包内设置说明。',
+    )).action == 'allow'
+    decision = session.evaluate(AnswerSubmission(
+        outcome='safe_abstained',
+        missing='本轮还没有查到 invented_internal_flag 的包内设置说明。',
+    ))
+    assert decision.reason_code == 'daq_internal_provenance_in_answer'
+
+
 def test_evidence_requires_real_source_and_all_planned_requirements():
     requirements = {"requirements": [
         {"id": "spec", "capability": "lookup_spec", "critical": True},
@@ -287,6 +739,145 @@ def test_attachment_source_is_tracked_separately_from_governed_claims():
     assert session.evaluate(AnswerSubmission(outcome="resolved", conclusion="设备支持")).action == "reject"
 
 
+def test_warn_only_attachment_cannot_become_capture_request_failure():
+    requirements = {"requirements": [{
+        "id": "user_log", "capability": "search_attachments",
+        "evidence_class": "user_evidence_required", "source_ids": ["user-src"],
+    }]}
+    warning = ("device=EGO Pro firmware=v9.9.9 sdk=2.9.0\n"
+               "WARN capture_start request_id=R-42 usb_transfer_timeout code=E42\n"
+               "operator_note=after HUB hotplug; retry_not_performed")
+
+    def observed(text):
+        session = DaqEvidencePolicy(question="请读这份现场日志，实际写了什么？").begin(requirements)
+        session.observe("search_attachments", ToolResult(
+            status="ok", content={"hits": [{"source_id": "user-src", "text": text}]},
+            sources=[{"type": "user_attachment", "source_id": "user-src"}],
+        ))
+        return session
+
+    session = observed(warning)
+    bad = session.evaluate(AnswerSubmission(
+        outcome="safe_abstained", basis="这次采集启动请求失败了。",
+        missing="仍不能确认兼容性。",
+    ))
+    assert bad.action == "request_evidence"
+    assert bad.reason_code == "daq_attachment_terminal_outcome_unverified"
+    assert session.evaluate(AnswerSubmission(
+        outcome="safe_abstained",
+        basis="不能证明组合不兼容，但这次采集启动请求失败了。",
+        missing="正式组合结论仍未知。",
+    )).reason_code == "daq_attachment_terminal_outcome_unverified"
+    assert session.evaluate(AnswerSubmission(
+        outcome="safe_abstained",
+        basis="不能证明组合不兼容但这次采集启动请求失败了。",
+        missing="正式组合结论仍未知。",
+    )).reason_code == "daq_attachment_terminal_outcome_unverified"
+    assert session.evaluate(AnswerSubmission(
+        outcome="safe_abstained",
+        basis="采集启动请求出现 USB 传输超时告警。",
+        missing="不能确认请求是否失败，也不能确认兼容性。",
+    )).action == "allow"
+    assert session.evaluate(AnswerSubmission(
+        outcome="safe_abstained",
+        basis="日志并不能证明采集启动请求失败。",
+        missing="请求最终状态未知。",
+    )).action == "allow"
+
+    unrelated_failure = observed(warning + "\nWARN capture_start failed to read callback metadata")
+    assert unrelated_failure.evaluate(AnswerSubmission(
+        outcome="safe_abstained", basis="这次采集启动请求失败了。",
+        missing="仍不能确认兼容性。",
+    )).reason_code == "daq_attachment_terminal_outcome_unverified"
+    another_request = observed(warning + "\nresult capture_start request_id=R-43 status=failed")
+    assert another_request.evaluate(AnswerSubmission(
+        outcome="safe_abstained", basis="这次采集启动请求失败了。",
+        missing="仍不能确认兼容性。",
+    )).reason_code == "daq_attachment_terminal_outcome_unverified"
+    assert another_request.evaluate(AnswerSubmission(
+        outcome="safe_abstained", basis="R-43 的采集启动请求失败了。",
+        missing="兼容性未知。",
+    )).action == "allow"
+    assert another_request.evaluate(AnswerSubmission(
+        outcome="safe_abstained", basis="R-42 的采集启动请求失败了。",
+        missing="兼容性未知。",
+    )).reason_code == "daq_attachment_terminal_outcome_unverified"
+    assert session.evaluate(AnswerSubmission(
+        outcome="safe_abstained", basis="这次采集启动失败了。",
+        missing="兼容性未知。",
+    )).reason_code == "daq_attachment_terminal_outcome_unverified"
+    assert session.evaluate(AnswerSubmission(
+        outcome="safe_abstained", basis="不能确认兼容性并且这次采集启动请求失败了。",
+        missing="兼容性未知。",
+    )).reason_code == "daq_attachment_terminal_outcome_unverified"
+    assert session.evaluate(AnswerSubmission(
+        outcome="safe_abstained", basis="这次采集启动请求并未失败。",
+        missing="兼容性未知。",
+    )).action == "allow"
+    assert session.evaluate(AnswerSubmission(
+        outcome="safe_abstained", basis="这次采集启动请求尚未失败。",
+        missing="兼容性未知。",
+    )).action == "allow"
+    assert session.evaluate(AnswerSubmission(
+        outcome="safe_abstained", basis="这次采集启动请求失败了吗？",
+        missing="兼容性未知。",
+    )).action == "allow"
+
+    callback_failure = observed(warning + "\nWARN capture_start request_id=R-42 callback event status=failed")
+    assert callback_failure.evaluate(AnswerSubmission(
+        outcome="safe_abstained", basis="这次采集启动请求失败了。",
+        missing="兼容性未知。",
+    )).reason_code == "daq_attachment_terminal_outcome_unverified"
+    mislabeled_result = observed(warning + "\nWARN result capture_start request_id=R-42 status=failed")
+    assert mislabeled_result.evaluate(AnswerSubmission(
+        outcome="safe_abstained", basis="这次采集启动请求失败了。",
+        missing="兼容性未知。",
+    )).reason_code == "daq_attachment_terminal_outcome_unverified"
+    chinese_warning = observed("警告：采集启动请求发生 USB 传输超时；最终结果未记录。")
+    assert chinese_warning.evaluate(AnswerSubmission(
+        outcome="safe_abstained", basis="这次采集启动请求失败了。",
+        missing="兼容性未知。",
+    )).reason_code == "daq_attachment_terminal_outcome_unverified"
+
+    source_bound = DaqEvidencePolicy(question="请读附件 A 的日志").begin(requirements)
+    source_bound.observe("search_attachments", ToolResult(
+        status="ok", content={"hits": [{"source_id": "user-src", "text": warning}]},
+        sources=[{"type": "user_attachment", "source_id": "user-src"}],
+    ))
+    source_bound.observe("read_attachment", ToolResult(
+        status="ok", content={"source_id": "other-src",
+                              "text": "result capture_start request_id=R-42 status=failed"},
+        sources=[{"type": "user_attachment", "source_id": "other-src"}],
+    ))
+    assert source_bound.evaluate(AnswerSubmission(
+        outcome="safe_abstained", basis="这次采集启动请求失败了。",
+        missing="兼容性未知。",
+    )).reason_code == "daq_attachment_terminal_outcome_unverified"
+
+    terminal = observed(warning + "\nresult capture_start request_id=R-42 status=failed")
+    assert terminal.evaluate(AnswerSubmission(
+        outcome="safe_abstained", basis="这次采集启动请求失败了。",
+        missing="仍不能确认兼容性。",
+    )).action == "allow"
+    timestamped = observed(warning + "\n2026-10-20T10:21:34+08:00 INFO result capture_start request_id=R-42 status=failed")
+    assert timestamped.evaluate(AnswerSubmission(
+        outcome="safe_abstained", basis="R-42 的采集启动请求失败了。",
+        missing="兼容性未知。",
+    )).action == "allow"
+
+    question_bound = DaqEvidencePolicy(question="R-42 的启动请求最终结果？").begin(requirements)
+    question_bound.observe("search_attachments", ToolResult(
+        status="ok", content={"hits": [{"source_id": "user-src", "text": (
+            "capture_start request_id=R-42 status=pending\n"
+            "result capture_start request_id=R-43 status=failed")}]},
+        sources=[{"type": "user_attachment", "source_id": "user-src"}],
+    ))
+    assert question_bound.evaluate(AnswerSubmission(
+        outcome="safe_abstained", basis="这次采集启动请求失败了。",
+        missing="兼容性未知。",
+    )).reason_code == "daq_attachment_terminal_outcome_unverified"
+
+
 def test_answer_must_keep_internal_provenance_out_of_prose():
     session = DaqEvidencePolicy().begin({"requirements": [
         {"id": "spec", "capability": "lookup_spec"},
@@ -325,6 +916,13 @@ def test_source_page_or_line_locator_is_not_delivered_in_answer_prose():
             outcome='safe_abstained', basis=prose, missing='组合支持未知。'))
         assert decision.action == 'request_evidence'
         assert decision.reason_code == 'daq_internal_provenance_in_answer'
+    session.observe('search_knowledge', ToolResult(
+        status='ok', content={'evidence_scope': 'release_note_statement_only',
+                              'matched_requirement_ids': ['question_evidence']},
+        sources=[{'type': 'daq_governed_release_note',
+                  'verification_status': 'verified',
+                  'release_id': 'knowledge-v1', 'source_id': 'note-v1'}],
+    ))
     assert session.evaluate(AnswerSubmission(
         outcome='safe_abstained', basis='变更日志记载了该变更。',
         missing='组合支持未知。')).action == 'allow'

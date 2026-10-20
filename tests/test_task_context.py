@@ -32,6 +32,126 @@ def test_firmware_log_goals_do_not_inherit_sdk_version_from_support_question():
     assert {item['conditions']['firmware_version'] for item in logs} == {
         'v1.1.9', 'v1.1.10'}
     assert all('sdk_version' not in item['conditions'] for item in logs)
+    assert plan.context.get('firmware_version') is None
+
+
+def test_mixed_sdk_goals_do_not_inherit_another_sdks_version():
+    from daq_fae.request_schema import DaqRequestSchema
+    question = ('OrbbecSDK 2.9.0 Linux x86_64 的磁力计示例和 '
+                'RK3576 libobkit 的 CMake 编译安装分别怎么做？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [
+            {'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+             'conditions': {'sdk': 'OrbbecSDK', 'sdk_version': '2.9.0',
+                            'platform': 'linux_x86_64'}},
+            {'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+             'conditions': {'sdk': 'libobkit', 'platform': 'rk3576',
+                            'task': 'build'}},
+        ],
+    })
+    plan = prepare_turn(question, request_schema=schema)
+    by_sdk = {req['conditions']['sdk']: req for req in plan.requirements}
+    assert by_sdk['OrbbecSDK']['conditions']['sdk_version'] == '2.9.0'
+    assert 'sdk_version' not in by_sdk['libobkit']['conditions']
+
+
+def test_compared_firmware_versions_are_not_the_users_current_version():
+    question = ('双目 EGO 固件 v1.1.9 和 v1.1.10 各改了什么？'
+                '仅凭日志能确认我手上的固件与 OrbbecSDK 2.9.0 配对吗？')
+    plan = prepare_turn(question)
+    assert plan.context.get('firmware_version') is None
+    explicit = prepare_turn('我手上的固件是 v1.1.9，能与 OrbbecSDK 2.9.0 配对吗？')
+    assert explicit.context.get('firmware_version') == '1.1.9'
+    stated = prepare_turn('我的固件是 v1.1.9。再比较固件 v1.1.9 和 v1.1.10 的日志。')
+    assert stated.context.get('firmware_version') == '1.1.9'
+    distinct = prepare_turn('我手上的固件是 v1.1.8。比较固件 v1.1.9 和 v1.1.10 的日志。')
+    assert distinct.context.get('firmware_version') == '1.1.8'
+
+
+def test_english_owned_firmware_survives_support_goal_and_followup():
+    from daq_fae.request_schema import DaqRequestSchema
+
+    question = 'My EGO Pro firmware is v1.0.7. Can it capture?'
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [{
+            'kind': 'product', 'capability': 'check_software_support',
+            'entities': ['EGO Pro'], 'conditions': {'firmware_version': 'v1.0.7'},
+        }],
+    })
+    first = prepare_turn(question, request_schema=schema)
+    assert first.context.get('firmware_version') == '1.0.7'
+    second = prepare_turn('What about its recording status?', previous=first.context)
+    assert second.context.get('firmware_version') == '1.0.7'
+
+
+@pytest.mark.parametrize('question', [
+    'Our EGO Pro is running firmware v1.0.7. Can it capture?',
+    "I'm using firmware v1.0.7 on my EGO Pro. Can it capture?",
+    'We run firmware v1.0.7 on our EGO Pro. Can it capture?',
+])
+def test_english_current_firmware_paraphrases_survive_support_goal(question):
+    from daq_fae.request_schema import DaqRequestSchema, stated_current_firmware_version
+
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [{
+            'kind': 'product', 'capability': 'check_software_support',
+            'entities': ['EGO Pro'], 'conditions': {'firmware_version': 'v1.0.7'},
+        }],
+    })
+    assert stated_current_firmware_version(question) == '1.0.7'
+    assert prepare_turn(question, request_schema=schema).context.get(
+        'firmware_version') == '1.0.7'
+
+
+def test_firmware_release_note_version_does_not_become_current_setup():
+    from daq_fae.request_schema import DaqRequestSchema
+
+    question = ('EGO Pro 固件 v1.0.7 日志记了什么？'
+                '能把它当成 EGO 双目升级或双目 v1.1.10 的依据吗？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'medium', 'goals': [
+            {'kind': 'product', 'capability': 'search_knowledge',
+             'entities': ['EGO Pro'], 'conditions': {'firmware_version': 'v1.0.7'}},
+            {'kind': 'product', 'capability': 'check_software_support',
+             'entities': ['EGO 双目'], 'conditions': {'firmware_version': 'v1.1.10'}},
+        ],
+    })
+    plan = prepare_turn(question, request_schema=schema)
+    assert plan.context.get('firmware_version') is None
+    assert {req['conditions']['firmware_version'] for req in plan.requirements} == {
+        'v1.0.7', 'v1.1.10',
+    }
+
+    current_question = '我手上的 EGO Pro 固件是 v1.0.7，查一下这个版本日志。'
+    current_schema = DaqRequestSchema.from_candidate(current_question, {
+        'confidence': 'high', 'goals': [
+            {'kind': 'product', 'capability': 'search_knowledge',
+             'entities': ['EGO Pro'], 'conditions': {'firmware_version': 'v1.0.7'}},
+        ],
+    })
+    current = prepare_turn(current_question, request_schema=current_schema)
+    assert current.context.get('firmware_version') == '1.0.7'
+
+
+def test_support_tool_cannot_bind_a_historical_version_to_current_device():
+    from daq_fae.domain_tools import DaqToolBox
+    class Knowledge:
+        release_id = 'dev-test'
+        def records_for(self, role): return []
+        def sections_for(self, role): return []
+    question = ('双目 EGO 固件 v1.1.9 和 v1.1.10 各改了什么？'
+                '仅凭日志能确认我手上的固件与 OrbbecSDK 2.9.0 配对吗？')
+    result = DaqToolBox(question=question, knowledge=Knowledge(),
+                        role='internal_fae').dispatch('check_software_support', {
+                            'entity': 'EGO', 'software': 'OrbbecSDK',
+                            'version': '2.9.0', 'platform': 'unknown',
+                            'hardware_revision': 'unknown',
+                            'connection_mode': 'unknown',
+                            'capability': 'device_support',
+                            'software_versions': {'firmware': '1.1.9'},
+                        })
+    assert result.status == 'not_found'
+    assert result.content['reason'] == 'current_firmware_version_unverified'
 
 
 def test_service_and_product_request_keeps_two_independent_goals():

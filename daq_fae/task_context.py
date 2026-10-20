@@ -12,7 +12,10 @@ import json
 import re
 from dataclasses import asdict, dataclass, field, replace
 
-from daq_fae.request_schema import DaqRequestSchema
+from daq_fae.request_schema import (
+    DaqRequestSchema, firmware_versions_compared_without_current,
+    stated_current_firmware_version,
+)
 
 _FIELDS = frozenset({
     'equipment', 'variant', 'resolution_variant', 'topology', 'platform',
@@ -190,7 +193,13 @@ def _extract(message):
             )
     for key, label in (('viewer_version', 'viewer'), ('sdk_version', 'sdk'), ('firmware_version', r'固件|firmware')):
         matches = list(re.finditer(rf'(?:{label})\s*(?:版本)?\s*(?:为|是|[:：=]|is)?\s*v?([0-9]+(?:\.[0-9A-Za-z_-]+)+)', message, re.I))
-        if matches:
+        if key == 'firmware_version':
+            current = stated_current_firmware_version(message)
+            if current:
+                updates[key] = current
+            elif matches and not firmware_versions_compared_without_current(message):
+                updates[key] = matches[-1].group(1)
+        elif matches:
             updates[key] = matches[-1].group(1)
     steps = re.findall(r'(?:已经|已尝试|试过|\btried\b)\s*([^；;，,。\n]+)', message, re.I)
     if steps:
@@ -253,7 +262,19 @@ def prepare_turn(message: str, *, previous=None, updates=None, topic_switch=None
     turn = old.turn + 1
     values = {} if switched else copy.deepcopy(old.values)
     steps = [] if switched else list(old.attempted_steps)
-    incoming = {**_extract(message), **dict(updates or {})}
+    explicit_updates = dict(updates or {})
+    incoming = {**_extract(message), **explicit_updates}
+    if (request_schema is not None and 'firmware_version' in incoming
+            and 'firmware_version' not in explicit_updates
+            and stated_current_firmware_version(message) is None):
+        # A version selected for a structured evidence query describes the
+        # document or candidate combination. It is not the user's installed
+        # firmware unless the user explicitly says so.
+        selected = str(incoming['firmware_version']).casefold().removeprefix('v')
+        if any(str(goal.condition_map().get('firmware_version', '')).casefold()
+               .removeprefix('v') == selected
+               for goal in request_schema.goals if goal.kind == 'product'):
+            incoming.pop('firmware_version')
     for key, raw in incoming.items():
         if key == 'attempted_steps':
             if not isinstance(raw, (list, tuple)) or not all(isinstance(item, str) for item in raw):
@@ -362,6 +383,13 @@ def prepare_turn(message: str, *, previous=None, updates=None, topic_switch=None
         # Likewise, an extracted action word is not a condition on every
         # structured goal. The schema attaches a task to the relevant goal.
         scope['conditions'].pop('task', None)
+    sdk_families = ({str(goal.condition_map().get('sdk')).casefold()
+                     for goal in request_schema.goals
+                     if goal.kind == 'product'
+                     and goal.capability in {'sdk_evidence',
+                                             'check_software_support'}
+                     and goal.condition_map().get('sdk')}
+                    if request_schema is not None else set())
     measurement_resolution = re.search(
         r'(?:在|以)\s*([0-9]{3,4})\s*[x×X]\s*([0-9]{3,4})\s*分辨率(?:下|时)',
         message, re.IGNORECASE)
@@ -462,6 +490,14 @@ def prepare_turn(message: str, *, previous=None, updates=None, topic_switch=None
             elif goal.kind == 'product':
                 goal_scope = copy.deepcopy(scope)
                 goal_conditions = goal.condition_map()
+                if (len(sdk_families) > 1 and goal.capability in {
+                        'sdk_evidence', 'check_software_support'}):
+                    # A turn-wide version or platform may belong to another
+                    # named SDK in the same sentence. Each family must carry
+                    # its own typed selectors to be used as evidence scope.
+                    for key in ('sdk_version', 'sdk_release_date', 'platform'):
+                        if key not in goal_conditions:
+                            goal_scope['conditions'].pop(key, None)
                 if goal.capability in {'lookup_spec', 'resolve_entity'}:
                     # In a structured request, claim selectors belong to the
                     # individual goal. Setup task, software and measurement

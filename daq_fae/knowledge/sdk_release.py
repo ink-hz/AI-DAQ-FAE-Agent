@@ -141,6 +141,8 @@ def stage_sdk_release(root: Path, directory: Path, archive: Path, review_report:
                != set(replay_by_id)):
         raise ValueError("SDK Dev answer review missing or failed")
     if release_notes is not None:
+        if review_report['daq_code_sha256'] != daq_code_sha():
+            raise ValueError('SDK Dev replay code identity mismatch')
         reviewed = review_report.get("record_reviews")
         expected = {row["kb_id"]: _digest(_json_bytes(row))
                     for row in (*catalog.records, *release_notes.records)}
@@ -160,6 +162,8 @@ def stage_sdk_release(root: Path, directory: Path, archive: Path, review_report:
         turns = row.get("turns")
         if (not isinstance(turns, list) or len(turns) != 1
                 or not isinstance(row.get("identity"), dict)
+                or row["identity"].get("publication_eligible") is not True
+                or row["identity"].get("knowledge_binding") != "source_bound_release"
                 or row["identity"].get("sdk_catalog_sha256") != catalog.manifest["records_sha256"]
                 or (release_notes is not None
                     and row["identity"].get("release_notes_sha256") != release_notes_sha)

@@ -112,7 +112,7 @@ def _build_tokens(text: str) -> set[str]:
 
 def _selector_scopes(query: str) -> dict[str, dict[str, set[str]]]:
     """Bind versions, builds and platforms to their named query family."""
-    clauses = re.split(r"(?:与|和|以及|及|、|[;,；，]|\band\b)", query,
+    clauses = re.split(r"(?:与|和|以及|及|、|[;,；，。？！?!]|\band\b)", query,
                        flags=re.IGNORECASE)
     mentioned = [_mentioned_families(clause) for clause in clauses]
     scopes: dict[str, dict[str, set[str]]] = {}

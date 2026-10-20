@@ -75,7 +75,7 @@ def allowed_tools_for(schema: DaqRequestSchema) -> frozenset[str] | None:
         'resolve_entity': {'resolve_entity'},
         'lookup_spec': {'lookup_spec'},
         'inspect_topology': {'inspect_topology', 'lookup_procedure'},
-        'lookup_procedure': {'inspect_topology', 'lookup_procedure'},
+        'lookup_procedure': {'lookup_procedure'},
         'check_software_support': {'check_software_support', 'sdk_evidence',
                                    'search_knowledge', 'read_doc'},
         'sdk_evidence': {'sdk_evidence', 'check_software_support',
@@ -96,6 +96,8 @@ def allowed_tools_for(schema: DaqRequestSchema) -> frozenset[str] | None:
             if selected is None:
                 return None
             allowed.update(selected)
+    if schema.attachment_dependency in {'relevant', 'required_for_answer'}:
+        allowed.update({'search_attachments', 'read_attachment'})
     return frozenset(allowed)
 
 

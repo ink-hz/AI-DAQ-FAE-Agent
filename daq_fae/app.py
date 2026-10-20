@@ -27,6 +27,7 @@ from src.attachments.vision import build_vision_adapter
 from src.config import ResolvedVisionConfig
 from daq_fae.domain_evidence import DaqEvidencePolicy
 from daq_fae.domain_tools import DaqToolBox
+from daq_fae.provider_adapter import DaqAnthropicAdapter
 from daq_fae.empty_knowledge_synthesis import (EMPTY_KNOWLEDGE_RELEASE,
                                                  refine_empty_release_answer)
 from daq_fae.attachment_evidence import extend_with_attachments
@@ -79,7 +80,7 @@ def _anthropic_dev_adapter() -> AnthropicAdapter:
     auth_token = os.getenv("DAQ_ANTHROPIC_AUTH_TOKEN", "")
     if not (api_key or auth_token):
         raise ValueError("anthropic mode requires DAQ_ANTHROPIC_API_KEY or DAQ_ANTHROPIC_AUTH_TOKEN")
-    return AnthropicAdapter(
+    return DaqAnthropicAdapter(
         api_key=api_key,
         auth_token=auth_token,
         base_url=os.getenv("DAQ_ANTHROPIC_BASE_URL", ""),
@@ -549,6 +550,8 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                                 'confidence': prepared.schema.confidence}
                                if prepared else {}))
                         base_toolbox = DaqToolBox(
+                            current_question=(prepared.schema.original_question
+                                              if prepared else request.message),
                             context=plan.context.tool_context(), knowledge=knowledge,
                             role="internal_fae" if candidate_mode else None,
                             requirements=plan.requirements,
@@ -671,6 +674,7 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                 done["fallback_reason"] = (
                     done.get("answer_contract", {}).get("validation_error")
                     or done.get("evidence_policy", {}).get("failure_reason")
+                    or done.get("fallback_reason")
                     or done["outcome"]
                 )
             else:

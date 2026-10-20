@@ -330,3 +330,27 @@ def test_buffered_anthropic_transport_failures_keep_their_failure_layer(reason, 
     assert done['fallback_used'] is True
     assert done['provider_status_code'] == status
     assert done['transport_reason'] == reason
+
+
+def test_buffered_gateway_reason_survives_chat_terminal_projection():
+    from src.agent.anthropic_transport import AnthropicTransportError, AnthropicTransportTelemetry
+
+    telemetry = AnthropicTransportTelemetry(
+        mode='anthropic_sse_buffered', attempts=1, retry_count=0,
+        retry_reasons=('http_400',), first_event_ms=None, complete_message_ms=None,
+        message_stop_received=False, discarded_incomplete_attempts=1,
+        http_status=400, gateway_error_code='forced_tool_choice_unsupported',
+        gateway_request_id='provider-request-123',
+    )
+
+    class FailingAdapter:
+        def chat(self, *args, **kwargs):
+            raise AnthropicTransportError('http_400', retryable=False, telemetry=telemetry)
+            yield
+
+    done = terminal(TestClient(create_app(adapter=FailingAdapter())).post(
+        '/chat', json={'message': 'EGO 规格'}))
+    assert done['outcome'] == 'provider_configuration_error'
+    assert done['fallback_reason'] == 'provider_tool_choice_unsupported'
+    assert done['gateway_error_code'] == 'forced_tool_choice_unsupported'
+    assert done['gateway_request_id'] == 'provider-request-123'

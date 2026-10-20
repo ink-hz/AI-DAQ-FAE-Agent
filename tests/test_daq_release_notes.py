@@ -12,11 +12,29 @@ from daq_fae.knowledge.sdk_catalog import SdkCatalog
 from daq_fae.knowledge.sdk_release import (activate_sdk_release,
                                            load_active_sdk_release, stage_sdk_release)
 from daq_fae.domain_tools import DaqToolBox
+from daq_fae.domain_tools import _release_note_probe_grounded
 from daq_fae.domain_evidence import DaqEvidencePolicy
+from daq_fae.request_schema import DaqRequestSchema
 
 
 ARCHIVE = Path("data/knowledge/local_archive/sdk-originals-1015-local-20261015")
 DIRECTORY = Path("Knowledge_SDK")
+
+
+def test_release_note_probe_cannot_borrow_another_familys_build():
+    user = ('EgoViewer desktop 2026-09-23 的变更日志和 '
+            'OrbbecSDK 2026-09-29 包有什么？')
+    assert not _release_note_probe_grounded(
+        'EgoViewer desktop 2026-09-29 变更日志', user)
+    assert _release_note_probe_grounded(
+        'EgoViewer desktop 2026-09-23 变更日志', user)
+    for separator in ('。', '？', '?', '!'):
+        punctuated = ('EgoViewer desktop 2026-09-23 的变更日志' + separator +
+                      'OrbbecSDK 2026-09-29 包有什么？')
+        assert not _release_note_probe_grounded(
+            'EgoViewer desktop 2026-09-29 变更日志', punctuated)
+        assert _release_note_probe_grounded(
+            'EgoViewer desktop 2026-09-23 变更日志', punctuated)
 
 
 def test_all_22_change_logs_deduplicate_to_17_source_bound_notes():
@@ -207,7 +225,7 @@ def test_dev_sdk_catalog_keeps_release_notes_separate_from_api_usage():
     if not ARCHIVE.is_dir():
         pytest.skip("local ignored SDK originals unavailable")
     catalog = SdkCatalog.load(DIRECTORY, ARCHIVE)
-    assert len(catalog.records) == 23
+    assert len(catalog.records) == 24
     assert catalog.release_notes.manifest["note_count"] == 17
     assert catalog.search("EgoViewer Android 2026-09-23 网络设备枚举", "internal_fae") == []
     assert {row["kb_id"] for row in catalog.release_notes.search(
@@ -228,6 +246,8 @@ def test_sdk_stage_binds_release_note_sha_and_dev_review_identity(tmp_path):
                      "release_notes_sha256": notes_sha,
                      "daq_code_sha256": current_code_sha, "knowledge_release": "f" * 64,
                      "suite_file_sha256": "c" * 64,
+                     "publication_eligible": True,
+                     "knowledge_binding": "source_bound_release",
                      "runtime_release": "daq-tested", "upstream_revision": "b" * 40},
         "turns": [{"done": {"answer": answer, "outcome": "safe_abstained",
                             "trace_id": "d" * 32, "fallback_used": False,
@@ -267,6 +287,38 @@ def test_sdk_stage_binds_release_note_sha_and_dev_review_identity(tmp_path):
         stage_sdk_release(tmp_path / "published", DIRECTORY, ARCHIVE, wrong_code_identity,
                           replay_results=replay, runtime_release="daq-tested",
                           upstream_sha="b" * 40)
+    stale_replay = tmp_path / 'stale-results.jsonl'
+    stale_row = json.loads(replay.read_text())
+    stale_row['identity']['daq_code_sha256'] = '0' * 64
+    stale_replay.write_text(json.dumps(stale_row, ensure_ascii=False) + '\n')
+    stale_report = {**report, 'daq_code_sha256': '0' * 64,
+                    'results_sha256': hashlib.sha256(stale_replay.read_bytes()).hexdigest()}
+    with pytest.raises(ValueError, match='identity'):
+        stage_sdk_release(tmp_path / 'published', DIRECTORY, ARCHIVE, stale_report,
+                          replay_results=stale_replay, runtime_release='daq-tested',
+                          upstream_sha='b' * 40)
+    preview = tmp_path / 'preview-results.jsonl'
+    preview_row = json.loads(replay.read_text())
+    preview_row['identity']['knowledge_binding'] = 'dev_code_preview_of_immutable_release'
+    preview_row['identity']['publication_eligible'] = False
+    preview.write_text(json.dumps(preview_row, ensure_ascii=False) + '\n')
+    preview_report = {**report,
+                      'results_sha256': hashlib.sha256(preview.read_bytes()).hexdigest()}
+    with pytest.raises(ValueError, match='identity'):
+        stage_sdk_release(tmp_path / 'published', DIRECTORY, ARCHIVE, preview_report,
+                          replay_results=preview, runtime_release='daq-tested',
+                          upstream_sha='b' * 40)
+    unmarked = tmp_path / 'unmarked-results.jsonl'
+    unmarked_row = json.loads(replay.read_text())
+    unmarked_row['identity'].pop('knowledge_binding')
+    unmarked_row['identity'].pop('publication_eligible')
+    unmarked.write_text(json.dumps(unmarked_row, ensure_ascii=False) + '\n')
+    unmarked_report = {**report,
+                       'results_sha256': hashlib.sha256(unmarked.read_bytes()).hexdigest()}
+    with pytest.raises(ValueError, match='identity'):
+        stage_sdk_release(tmp_path / 'published', DIRECTORY, ARCHIVE, unmarked_report,
+                          replay_results=unmarked, runtime_release='daq-tested',
+                          upstream_sha='b' * 40)
     release_id = stage_sdk_release(tmp_path / "published", DIRECTORY, ARCHIVE, report,
                                    replay_results=replay, runtime_release="daq-tested",
                                    upstream_sha="b" * 40)
@@ -389,6 +441,82 @@ def test_viewer_connection_question_does_not_borrow_release_note_evidence():
         for source in result.sources)
 
 
+@pytest.mark.parametrize('question, query, expected', [
+    ('桌面 EgoViewer v2.0.12 的日志提到 EGO 加两腕带首尾和分片对齐；'
+     '能证明 EGO Pro + 两台 WristCam + HUB 在 Windows 11 同步落盘吗？',
+     None,
+     {'daq-note-viewer-desktop-20260917'}),
+    ('Android EgoViewer v1.0.11 的 2026092302 构建临时屏蔽网络设备枚举；'
+     '2026092901 日志没写恢复，能断言已恢复吗？',
+     None,
+     {'daq-note-viewer-android-2026092302',
+      'daq-note-viewer-android-2026092901'}),
+    ('EGO Pro 固件 v1.0.7 日志记了什么？'
+     '能把它当成 EGO 双目升级或双目 v1.1.10 的依据吗？',
+     None,
+     {'daq-note-firmware-pro-107', 'daq-note-firmware-dual-1110'}),
+    ('20260929 Linux x86_64 SDK 包里有 magnetometer.cpp；'
+     '但 20260923 日志说移除 UMI Finger 磁力计，当前能用吗？',
+     '20260923 changelog UMI Finger magnetometer removed',
+     {'daq-note-sdk-20260923'}),
+])
+def test_colloquial_log_questions_retrieve_scoped_source_statements(question, query, expected):
+    if not ARCHIVE.is_dir():
+        pytest.skip('local ignored SDK originals unavailable')
+    catalog = SdkCatalog.load(DIRECTORY, ARCHIVE)
+    class Knowledge:
+        release_id = 'dev-main'
+        sdk_catalog = catalog
+        def records_for(self, role): return []
+        def sections_for(self, role): return []
+    result = DaqToolBox(question=question, knowledge=Knowledge(),
+                        role='internal_fae').dispatch('search_knowledge',
+                                                      {'query': query or question})
+    assert result.status == 'ok'
+    assert expected <= {source['source_id'] for source in result.sources}
+
+
+def test_desktop_log_statement_is_attributed_without_combo_support():
+    if not ARCHIVE.is_dir():
+        pytest.skip('local ignored SDK originals unavailable')
+    question = ('桌面 EgoViewer v2.0.12 的日志提到 EGO 加两腕带的首尾和分片对齐；'
+                '这能当 EGO Pro + 两台 WristCam + HUB 在 Windows 11 上三路同步落盘的验收依据吗？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'medium', 'goals': [
+            {'kind': 'product', 'capability': 'search_knowledge',
+             'entities': ['EGO', 'WristCam'],
+             'conditions': {'viewer_version': '2.0.12', 'platform': 'desktop',
+                            'feature': 'start_end_and_segment_alignment'}},
+            {'kind': 'product', 'capability': 'check_software_support',
+             'entities': ['EGO Pro', 'WristCam', 'HUB'],
+             'conditions': {'viewer_version': '2.0.12', 'platform': 'windows_11',
+                            'task': 'three_stream_synchronized_recording'}},
+        ],
+    })
+    note, support = schema.goals
+    catalog = SdkCatalog.load(DIRECTORY, ARCHIVE)
+    class Knowledge:
+        release_id = 'dev-main'
+        sdk_catalog = catalog
+        def records_for(self, role): return []
+        def sections_for(self, role): return []
+    requirements = [
+        {'id': 'note', 'capability': note.capability,
+         'entities': list(note.entities), 'conditions': note.condition_map()},
+        {'id': 'support', 'capability': support.capability,
+         'entities': list(support.entities),
+         'conditions': support.condition_map()},
+    ]
+    result = DaqToolBox(question=question, knowledge=Knowledge(),
+                        role='internal_fae', requirements=requirements).dispatch(
+                            'search_knowledge', {'query': question})
+    assert result.status == 'ok'
+    assert result.content['matched_requirement_ids'] == ['note']
+    assert {source['source_id'] for source in result.sources} == {
+        'daq-note-viewer-desktop-20260917'}
+    assert result.content['device_support'] == 'unknown'
+
+
 def test_exact_viewer_build_certifies_only_its_own_note():
     if not ARCHIVE.is_dir():
         pytest.skip('local ignored SDK originals unavailable')
@@ -408,6 +536,30 @@ def test_exact_viewer_build_certifies_only_its_own_note():
                  'search_knowledge', {'query': 'EgoViewer Android 2026092302 变更日志'})
     assert result.status == 'ok'
     assert result.content['matched_requirement_ids'] == ['exact']
+
+
+def test_typed_viewer_build_goal_retrieves_note_without_log_keyword():
+    if not ARCHIVE.is_dir():
+        pytest.skip('local ignored SDK originals unavailable')
+    catalog = SdkCatalog.load(DIRECTORY, ARCHIVE)
+    class Knowledge:
+        release_id = 'dev-main'
+        sdk_catalog = catalog
+        def records_for(self, role): return []
+        def sections_for(self, role): return []
+    question = 'Android EgoViewer v1.0.11 build 2026092302 对网络设备枚举做了什么？'
+    result = DaqToolBox(
+        question=question, knowledge=Knowledge(), role='internal_fae',
+        requirements=[{'id': 'viewer', 'capability': 'search_knowledge',
+                       'entities': [], 'conditions': {
+                           'viewer_release_date': '2026092302',
+                           'viewer_version': '1.0.11', 'platform': 'android',
+                           'feature': 'network_device_enumeration'}}],
+    ).dispatch('search_knowledge', {'query': question})
+    assert result.status == 'ok'
+    assert [source['source_id'] for source in result.sources] == [
+        'daq-note-viewer-android-2026092302']
+    assert result.content['matched_requirement_ids'] == ['viewer']
 
 
 def test_dated_sdk_usage_question_does_not_borrow_firmware_notes():
@@ -647,6 +799,24 @@ def test_typed_release_note_goals_require_matching_family_and_sdk_version():
                      requirements=requirements)
     assert box._release_note_requirement_ids([viewer]) == ['viewer_build']
     assert box._release_note_requirement_ids([sdk]) == ['sdk_version']
+
+
+def test_desktop_viewer_goal_matches_reviewed_linux_windows_note():
+    row = next(json.loads(line) for line in (DIRECTORY / 'Release_Notes.jsonl').read_text().splitlines()
+               if json.loads(line)['kb_id'] == 'daq-note-viewer-desktop-20260923')
+    question = ('EgoViewer desktop 2026-09-23 的变更日志是什么？'
+                'OrbbecSDK 2026-09-29 包里有磁力计示例吗？')
+    requirements = [
+        {'id': 'desktop', 'capability': 'search_knowledge', 'entities': [],
+         'conditions': {'platform': 'desktop',
+                        'viewer_release_date': '2026-09-23'}},
+        {'id': 'android', 'capability': 'search_knowledge', 'entities': [],
+         'conditions': {'platform': 'Android',
+                        'viewer_release_date': '2026-09-23'}},
+    ]
+    box = DaqToolBox(question=question, role='internal_fae',
+                     requirements=requirements)
+    assert box._release_note_requirement_ids([row]) == ['desktop']
 
 
 def test_dated_magnetometer_log_goals_are_satisfied_only_by_their_own_builds():

@@ -8,6 +8,7 @@ from src.agent.anthropic_transport import AnthropicTransportError
 def anthropic_failure(exc: AnthropicTransportError) -> dict:
     status = exc.telemetry.http_status
     reason = exc.reason
+    gateway_code = exc.telemetry.gateway_error_code
     if status in {400, 401, 403, 404, 422}:
         outcome = "provider_configuration_error"
     elif status == 429:
@@ -18,6 +19,12 @@ def anthropic_failure(exc: AnthropicTransportError) -> dict:
         outcome = "provider_unavailable"
     else:
         outcome = "provider_protocol_error"
+    fallback_reason = {
+        "model_not_found": "provider_model_not_found",
+        "forced_tool_choice_unsupported": "provider_tool_choice_unsupported",
+    }.get(gateway_code)
+    if fallback_reason is None:
+        fallback_reason = "provider_bad_request" if status == 400 else f"anthropic_transport_{reason}"
     return {
         "type": "done",
         "answer": "数采模型或网关本轮未返回完整可用的结果，请稍后重试或检查配置。",
@@ -28,8 +35,10 @@ def anthropic_failure(exc: AnthropicTransportError) -> dict:
         "transport_reason": reason,
         "transport_retry_count": exc.telemetry.retry_count,
         "provider_protocol_status": exc.telemetry.provider_protocol_status,
+        "gateway_error_code": gateway_code,
+        "gateway_request_id": exc.telemetry.gateway_request_id,
         "fallback_used": True,
-        "fallback_reason": f"anthropic_transport_{reason}",
+        "fallback_reason": fallback_reason,
     }
 
 

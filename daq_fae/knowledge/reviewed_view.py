@@ -31,10 +31,16 @@ def reviewed_name_in_query(name: str, query: str,
     normalized_name = unicodedata.normalize('NFKC', name)
     normalized_query = unicodedata.normalize('NFKC', query)
     pattern = re.escape(normalized_name).replace(r'\ ', r'\s*')
-    boundary = re.compile(r'(?<![A-Za-z0-9])' + pattern + r'(?![A-Za-z0-9])', re.I)
+    boundary = re.compile(r'(?<![A-Za-z0-9-])' + pattern + r'(?![A-Za-z0-9-])', re.I)
     selectors = {re.sub(r'\s+', '', unicodedata.normalize('NFKC', str(value))).casefold()
                  for value in selector_values}
     for match in boundary.finditer(normalized_query):
+        if re.search(r'(?:[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+|'
+                     r'\b(?:Quad|RGB[-\s]+D))\s+$',
+                     normalized_query[:match.start()], re.I):
+            # A qualified name such as RGB-D EGO is a distinct unresolved
+            # identity; its EGO suffix does not name the reviewed EGO SKU.
+            continue
         tail = normalized_query[match.end():]
         stripped = tail.lstrip()
         if not stripped or stripped[0] in ',.;:!?，。；：！？、）)]}':

@@ -10,9 +10,10 @@
 
 ## ble_linux_20260929
 
-1 records; build 20260929; Linux x86_64.
+2 records; build 20260929; Linux x86_64.
 
 - daq-sdk-ble-linux-install-021: EgoLowBle 1.1.8 Linux x64 包和 demo 范围
+- daq-sdk-ble-linux-link-024: EgoLowBle 1.1.8 Linux x64 示例链接与运行时库路径
 
 ## ble_windows_20260929
 
