@@ -33,7 +33,7 @@ _TOOLS: dict[str, tuple[str, dict[str, dict], tuple[str, ...]]] = {
     "catalog": ("List governed DAQ products, kits, and release scope.", {"query": {"type": "string"}}, ("query",)),
     "selection": ("Evaluate a DAQ configuration against all stated acquisition constraints.", {"query": {"type": "string"}}, ("query",)),
     "resolve_entity": ("Resolve a DAQ product, variant, kit, or component. Returns reviewed spec field coverage without values; use lookup_spec before answering a field.", {"text": {"type": "string"}}, ("text",)),
-    "lookup_spec": ("Look up a governed DAQ claim. Use a canonical field such as rgb_resolution or rgb_camera_count; conditions must be a JSON object, for example {\"resolution_variant\":\"1600x1200\"}. A generic product name cannot select a variant. Visible entity variant scopes establish identity only, not support for this field or measurement condition.", {"entity": {"type": "string"}, "field": {"type": "string"}, "conditions": {"type": "object"}}, ("entity", "field")),
+    "lookup_spec": ("Look up a governed DAQ claim. For a detailed product specification overview, use field all_reviewed_specs to return every verified field for one exact product or variant with its individual conditions and sources. Otherwise use a canonical field such as rgb_resolution; conditions must be a JSON object. A generic product name cannot select a variant.", {"entity": {"type": "string"}, "field": {"type": "string"}, "conditions": {"type": "object"}}, ("entity", "field")),
     "inspect_topology": ("Inspect a verified acquisition system topology.", {"query": {"type": "string"}}, ("query",)),
     "lookup_procedure": ("Find an applicable, reviewed acquisition procedure.", {"task": {"type": "string"}, "entity": {"type": "string"}}, ("task",)),
     "check_software_support": ("Check exact product, revision, connection, platform, software version and capability; include variant selectors in conditions.", {"entity": {"type": "string"}, "software": {"type": "string"}, "platform": {"type": "string"}, "version": {"type": "string"}, "hardware_revision": {"type": "string"}, "connection_mode": {"type": "string"}, "capability": {"type": "string"}, "conditions": {"type": "object"}}, ("entity", "software", "platform", "version", "hardware_revision", "connection_mode", "capability")),
@@ -1062,6 +1062,86 @@ class DaqToolBox:
                     if row["kind"] == "entity"}
         entity_records = {row["id"]: row for row in rows if row["kind"] == "entity"}
         topologies = {row["id"]: row for row in rows if row["kind"] == "topology"}
+        if name == 'lookup_spec' and arguments.get('field') == 'all_reviewed_specs':
+            # An overview is a collection of separate source-bound claims.
+            # Select one visible SKU by exact reviewed identity; never join
+            # sibling variants merely because they share a family name.
+            wanted = _identity_text(str(arguments.get('entity') or ''))
+            def overview_identity(row):
+                if wanted in _entity_identity_labels(row):
+                    return True
+                selectors = row['scope'].get('required_selectors', [])
+                if not selectors:
+                    return False
+                labels = [row['data']['name'], *row['data'].get('aliases', [])]
+                return any(wanted in {
+                    _identity_text(label + str(row['scope'][selector])),
+                    _identity_text(label + str(row['scope'][selector]).split('x')[0]),
+                } for label in labels for selector in selectors
+                    if selector == 'resolution_variant')
+            selected = [row for row in entity_records.values() if wanted and
+                        overview_identity(row)]
+            supplied = arguments.get('conditions') or {}
+            requested_conditions = supplied
+            selected = [row for row in selected if isinstance(supplied, dict)
+                        and all(row['scope'].get(key) == value for key, value in
+                                supplied.items() if key in row['scope'])]
+            if len(selected) != 1:
+                return ToolResult(status='not_found', content={
+                    'reason': 'entity_variant_required', 'claim_status': 'unknown',
+                    'matches': [], 'matched_requirement_ids': [],
+                })
+            target = selected[0]['id']
+            selectors = selected[0]['scope'].get('required_selectors', [])
+            if selectors and any(key not in supplied for key in selectors):
+                generic = {_identity_text(label) for label in
+                           [selected[0]['data']['name'],
+                            *selected[0]['data'].get('aliases', [])]}
+                if wanted in generic:
+                    return ToolResult(status='not_found', content={
+                        'reason': 'variant_selector_required',
+                        'claim_status': 'unknown', 'matches': [],
+                        'matched_requirement_ids': [],
+                    })
+                supplied = {**supplied, **{key: selected[0]['scope'][key]
+                                          for key in selectors if key not in supplied}}
+            overview = sorted((row for row in rows if row['kind'] == 'claim'
+                               and row['status'] == 'verified'
+                               and row['data'].get('entity_id') == target
+                               and row['data'].get('field') not in {
+                                   'source_text', 'risk', 'experience'}
+                               and self._scope_selectors_match(row['scope'], supplied)),
+                              key=lambda row: row['id'])
+            if not overview:
+                return ToolResult(status='not_found', content={
+                    'reason': 'reviewed_field_unavailable', 'claim_status': 'unknown',
+                    'matches': [], 'matched_requirement_ids': [],
+                })
+            matched = [item['id'] for item in self.requirements
+                       if isinstance(item, dict)
+                       and item.get('capability') == 'lookup_spec'
+                       and item.get('field') == 'all_reviewed_specs'
+                       and item.get('conditions', {}) == requested_conditions
+                       and isinstance(item.get('entities'), list)
+                       and len(item['entities']) == 1
+                       and _identity_text(item['entities'][0]) in {
+                           wanted, _identity_text(str(original_query_entity or ''))}]
+            return ToolResult(status='ok', content={
+                'release_id': self.knowledge.release_id,
+                'query_entity': str(original_query_entity or ''),
+                'evidence_level': 'reviewed',
+                'overview_scope': selected[0]['scope'],
+                'matched_requirement_ids': sorted(matched),
+                'requirement_source_ids': {rid: [row['id'] for row in overview]
+                                           for rid in matched},
+                'matches': [{key: row[key] for key in
+                             ('id', 'kind', 'status', 'scope', 'data')}
+                            for row in overview],
+            }, sources=[{
+                'type': 'daq_governed_claim', 'verification_status': 'verified',
+                'release_id': self.knowledge.release_id, 'source_id': row['id'],
+                'source_refs': row['source_refs'],
+            } for row in overview])
         if name == 'lookup_spec' and isinstance(arguments.get('conditions'), dict):
             supplied = arguments['conditions']
             field = str(arguments.get('field') or '')

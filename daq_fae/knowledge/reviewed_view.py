@@ -113,7 +113,8 @@ class ReviewedKnowledge:
         self._records = tuple(deepcopy(manifest["records"]))
         self._sections = tuple(deepcopy(manifest.get("sections", [])))
         self.is_operator_pro_v2 = (manifest.get('review', {}).get('operator_release', {}).get('mode')
-                                   == 'owner_directed_source_checked_v2')
+                                   in {'owner_directed_source_checked_v2',
+                                       'owner_directed_source_checked_specs_v4'})
 
     def operating_veto_entity_records(self) -> list[dict]:
         """Reviewed v2 exclusion labels are identity vetoes, never answer sources."""
@@ -448,7 +449,8 @@ class ReviewedKnowledge:
             from .section_release import validate_section_manifest
             validate_section_manifest(manifest)
         if manifest.get('review', {}).get('operator_release', {}).get('mode') in {\
-                'owner_directed_source_checked_v2', 'owner_directed_runtime_rebind_v3'}:
+                'owner_directed_source_checked_v2', 'owner_directed_runtime_rebind_v3',
+                'owner_directed_source_checked_specs_v4'}:
             from .operator_release import verify_operator_manifest
             runtime = manifest['review']['operator_release']['runtime']
             verify_operator_manifest(manifest, runtime_release=runtime['release'],

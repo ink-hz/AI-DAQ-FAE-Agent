@@ -3480,6 +3480,19 @@ _SCHEMA_TOOL = {
 }
 
 
+def _requests_spec_overview(question: str) -> bool:
+    """Recognize an explicit request for a product-wide parameter inventory."""
+    broad = bool(re.search(
+        r'(?:规格|参数).{0,18}(?:详细|全面|完整|全部|所有|尽可能多)|'
+        r'(?:详细|全面|完整|全部|所有).{0,18}(?:规格|参数)|'
+        r'\b(?:detailed|complete|full|all)\b.{0,24}\b(?:specs?|specifications?|parameters?)\b',
+        question, re.I))
+    scoped = bool(re.search(
+        r'\bRGB\b|深度|\bDepth\b|\bIMU\b|\bUSB\b|帧率|分辨率|'
+        r'视场角|同步|供电|蓝牙|麦克风|无线|\bSDK\b', question, re.I))
+    return broad and not scoped
+
+
 def extract_request_schema(question: str, *, adapter, prior_user_context: str = '',
                            attachment_present: bool = False,
                            image_present: bool = False,
@@ -3512,6 +3525,13 @@ def extract_request_schema(question: str, *, adapter, prior_user_context: str = 
             sdk_catalog=getattr(knowledge, 'sdk_catalog', None),
             knowledge=knowledge, role=role,
         )
+        if (_requests_spec_overview(question)
+                and any(goal.kind == 'product' for goal in schema.goals)
+                and not any(goal.kind == 'product'
+                            and goal.capability == 'lookup_spec'
+                            and goal.field == 'all_reviewed_specs'
+                            for goal in schema.goals)):
+            raise SchemaExtractionError('schema_missing_spec_overview_goal')
         if retry_uncontrolled and any(
                 key not in _CONDITIONS
                 for goal in schema.goals for key in goal.unmapped_condition_keys):
@@ -3593,6 +3613,10 @@ def extract_request_schema(question: str, *, adapter, prior_user_context: str = 
         correction = ('上一次回复没有调用要求的工具。现在必须只调用 '
                       '`submit_daq_request_schema` 一次；不要输出正文。'
                       if not calls else
+                      '用户要求产品整体规格参数的详细介绍。上次只列了一个字段。'
+                      '请为已点名产品列一个 `lookup_spec` goal，'
+                      '`field` 必须是 `all_reviewed_specs`；保留用户明确提出的其他目标。'
+                      if str(exc) == 'schema_missing_spec_overview_goal' else
                       '上一次结构化结果漏掉明确规格目标（schema_missing_explicit_spec_goal）。'
                       '请按产品与变体逐项补充 `lookup_spec` goal，保留原有其他目标；'
                       '不要把分辨率版本当成测量条件或第二个产品。'

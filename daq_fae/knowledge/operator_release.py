@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import tempfile
 from copy import deepcopy
 from datetime import date
@@ -23,6 +24,24 @@ from .release_readiness import _lock, _switch
 MODE = 'owner_directed_source_checked_v1'
 MODE_PRO_V2 = 'owner_directed_source_checked_v2'
 MODE_RUNTIME_REBIND = 'owner_directed_runtime_rebind_v3'
+MODE_SPEC_EXTENSION = 'owner_directed_source_checked_specs_v4'
+SPEC_EXTENSION_BASELINE_RELEASE = '25dabeaa34d64b8eae49ca714c63adf759c36fe1159736c65128cab3eb971af8'
+SPEC_EXTENSION_ARCHIVE_SHA256 = 'e35fe11f6773bc157734d65a3b19c87a18fdf14bab3c5458d1b4d75b22387d56'
+SPEC_EXTENSION_BASELINE_SHA256 = '13f7710d08a003c40060582e6f748376a2a1265793606ce9bd6eb15ef833278c'
+SPEC_EXTENSION_BASELINE_IDS = frozenset({
+    'claim:ego-1600-horizontal-fov', 'claim:ego-1600-max-fps',
+    'claim:ego-1600-resolution', 'claim:ego-1600-vertical-fov',
+    'claim:ego-1920-horizontal-fov', 'claim:ego-1920-max-fps',
+    'claim:ego-1920-resolution', 'claim:ego-1920-vertical-fov',
+    'claim:ego-pro-rgb-camera-count', 'claim:ego-pro-rgb-max-fps',
+    'claim:hub-downstream-port-count', 'claim:hub-downstream-port-output',
+    'claim:umi-finger-mono-baseline', 'claim:umi-finger-mono-resolution',
+    'claim:umi-finger-rgb-resolution', 'claim:umi-vision-module-mono-resolution',
+    'claim:umi-vision-module-rgb-resolution', 'entity:eg-db',
+    'entity:ego-1600', 'entity:ego-1920', 'entity:ego-pro', 'entity:hub',
+    'entity:umi-finger', 'entity:umi-vision-module', 'entity:wristcam',
+    'procedure:ego-pro-standalone', 'topology:ego-pro-standalone',
+})
 PRO_BASELINE_RELEASE = 'ee9083f9891630f6727766c276e6dc123ab0b6b79641dada133159871eeaacdb'
 PRO_BASELINE_COUNT = 25
 PRO_RECORD_FINGERPRINTS = {
@@ -504,6 +523,10 @@ def verify_operator_manifest(manifest: dict, *, runtime_release: str, upstream_s
         _verify_pro_manifest(manifest, runtime_release=runtime_release,
                              upstream_sha=upstream_sha)
         return
+    if evidence.get('mode') == MODE_SPEC_EXTENSION:
+        _verify_spec_extension_manifest(manifest, runtime_release=runtime_release,
+                                        upstream_sha=upstream_sha)
+        return
     _require(evidence.get('mode') == MODE
              and evidence.get('authorization_ref') == 'project-owner-direction-2026-10-12'
              and evidence.get('archive_manifest_sha256') == manifest.get('archive_manifest_sha256')
@@ -620,6 +643,169 @@ def _verify_pro_manifest(manifest: dict, *, runtime_release: str,
                  'ego_resolution_conflict_negative'}, 'dev_identity')
 
 
+def _verify_spec_extension_manifest(manifest: dict, *, runtime_release: str,
+                                    upstream_sha: str) -> None:
+    """Keep the 27 reviewed records immutable while adding reviewed fields."""
+    from .records import access_fingerprint, record_fingerprint
+
+    evidence = manifest.get('review', {}).get('operator_release', {})
+    rows = manifest.get('records', [])
+    by_id = {row.get('id'): row for row in rows if isinstance(row, dict)}
+    baseline = [row for row in rows if row.get('id') in SPEC_EXTENSION_BASELINE_IDS]
+    added = [row for row in rows if row.get('id') not in SPEC_EXTENSION_BASELINE_IDS]
+    runtime = evidence.get('runtime', {})
+    _require(evidence.get('mode') == MODE_SPEC_EXTENSION
+             and evidence.get('authorization_ref') ==
+             'project-owner-direction-2026-10-20-publish-reviewed-fields'
+             and manifest.get('sections') == []
+             and len(rows) == len(by_id) and bool(added)
+             and {row['id'] for row in baseline} == SPEC_EXTENSION_BASELINE_IDS
+             and digest(sorted((_record_core(row) for row in baseline),
+                               key=lambda row: row['id'])) ==
+             SPEC_EXTENSION_BASELINE_SHA256
+             and evidence.get('previous_release') == manifest.get('previous_release')
+             and evidence.get('archive_manifest_sha256') ==
+             manifest.get('archive_manifest_sha256')
+             and evidence.get('source_inventory_sha256') ==
+             digest(_inventory(manifest['sources']))
+             and evidence.get('records_sha256') == digest(sorted(
+                 (_record_core(row) for row in rows), key=lambda row: row['id']))
+             and evidence.get('new_record_fingerprints') == {
+                 row['id']: record_fingerprint(row) for row in added}
+             and all(row['kind'] == 'claim' and row['status'] == 'verified'
+                     and row['access_review']['view_roles'] == ['internal_fae']
+                     and row['access_review']['forward_roles'] == ['internal_fae']
+                     and row['fact_review']['record_sha256'] == record_fingerprint(row)
+                     and row['access_review']['record_sha256'] == access_fingerprint(row)
+                     for row in added)
+             and evidence.get('veto_entities') == PRO_VETO_ENTITIES
+             and evidence.get('daq_code_sha256') == _code_sha256()
+             and evidence.get('prompt_sha256') == _prompt_sha256()
+             and evidence.get('candidate_prompt_sha256') == _candidate_prompt_sha256()
+             and evidence.get('schema_prompt_sha256') == _schema_prompt_sha256()
+             and all(isinstance(evidence.get(key), str)
+                     and _SHA.fullmatch(evidence[key]) for key in (
+                         'source_check_sha256', 'dev_review_sha256')),
+             'spec_extension_binding')
+    _require(runtime.get('release') == runtime_release
+             and runtime_release == 'daq-' + _code_sha256()[:12]
+             and runtime.get('upstream_sha') == upstream_sha
+             and runtime.get('tasks_enabled') is False
+             and runtime.get('generic_trace_enabled') is False,
+             'runtime_identity')
+
+
+def stage_operator_spec_extension(root: Path, *, archive: Path,
+                                  new_records: list[dict], source_check: dict,
+                                  dev_review: dict, runtime_release: str,
+                                  upstream_sha: str) -> str:
+    """Stage source-checked incremental specs on the current DAQ release."""
+    from .records import record_fingerprint
+
+    active_path = root / 'active.json'
+    _require(not active_path.is_symlink() and active_path.is_file(),
+             'spec_extension_active_missing')
+    previous_id = json.loads(active_path.read_text())['release_id']
+    previous = _read_rebind_origin(root, previous_id)
+    _require(previous_id == SPEC_EXTENSION_BASELINE_RELEASE or
+             previous.get('review', {}).get('operator_release', {}).get('mode') ==
+             MODE_SPEC_EXTENSION, 'spec_extension_origin')
+    _require(previous.get('archive_manifest_sha256') ==
+             SPEC_EXTENSION_ARCHIVE_SHA256,
+             'archive_identity')
+    _require(verify_archive(archive, previous['archive_manifest_sha256'])['files'] ==
+             len(previous['sources']), 'archive_inventory')
+    _require(isinstance(new_records, list) and bool(new_records)
+             and all(isinstance(row, dict) and row.get('kind') == 'claim'
+                     and row.get('status') == 'verified'
+                     and row.get('id') not in {old['id'] for old in previous['records']}
+                     for row in new_records), 'spec_extension_delta')
+    checks = source_check.get('entries') if isinstance(source_check, dict) else None
+    _require(source_check.get('reviewer') in {'Codex', 'human_fae'}
+             and isinstance(checks, list) and len(checks) == len(new_records)
+             and {entry.get('record_id') for entry in checks if isinstance(entry, dict)}
+             == {row['id'] for row in new_records}, 'source_check')
+    checks_by_id = {entry['record_id']: entry for entry in checks}
+    source_hashes = {row['path']: row['sha256'] for row in previous['sources']}
+    for row in new_records:
+        check = checks_by_id[row['id']]
+        _require(check.get('record_sha256') == record_fingerprint(row)
+                 and len(row.get('source_refs', [])) == 1
+                 and check.get('source_ref') == row['source_refs'][0],
+                 'source_check_binding')
+        ref = row['source_refs'][0]
+        locator = ref.get('locator', {})
+        _require(source_hashes.get(ref.get('path')) == ref.get('sha256')
+                 and locator.get('kind') == 'page'
+                 and type(locator.get('page')) is int
+                 and isinstance(check.get('page_text_sha256'), str)
+                 and _SHA.fullmatch(check['page_text_sha256']),
+                 'source_check_ref')
+        source = (archive / 'files' / ref['path']).resolve()
+        _require(source.is_relative_to((archive / 'files').resolve())
+                 and source.is_file(), 'source_check_path')
+        page = str(locator['page'])
+        extracted = subprocess.run(
+            ['pdftotext', '-f', page, '-l', page, '-layout', str(source), '-'],
+            capture_output=True, check=True, timeout=30).stdout
+        _require(hashlib.sha256(extracted).hexdigest() ==
+                 check['page_text_sha256'], 'source_check_page')
+    _require(isinstance(dev_review, dict)
+             and dev_review.get('environment') == 'dev'
+             and dev_review.get('review_method') in {'codex', 'human_fae'}
+             and dev_review.get('code_sha256') == _code_sha256()
+             and isinstance(dev_review.get('cases'), list)
+             and bool(dev_review['cases'])
+             and all(isinstance(case, dict) and case.get('passed') is True
+                     and isinstance(case.get('trace_id'), str)
+                     and case['trace_id'] and isinstance(case.get('answer'), str)
+                     and case['answer'] for case in dev_review['cases']),
+             'dev_review')
+    _require(runtime_release == 'daq-' + _code_sha256()[:12]
+             and upstream_sha == previous['review']['operator_release']['runtime'][
+                 'upstream_sha'], 'runtime_identity')
+    snapshot = {
+        'archive_manifest_sha256': previous['archive_manifest_sha256'],
+        'source_date': previous['source_date'],
+        'sources': previous['sources'],
+        'chunks': [{'source_path': item['source_path'],
+                    'source_sha256': item['source_sha256'],
+                    'locator': item['locator']}
+                   for item in previous['source_locations']],
+    }
+    rows = [*previous['records'], *deepcopy(new_records)]
+    evidence = {
+        'mode': MODE_SPEC_EXTENSION,
+        'authorization_ref': 'project-owner-direction-2026-10-20-publish-reviewed-fields',
+        'previous_release': previous_id,
+        'archive_manifest_sha256': snapshot['archive_manifest_sha256'],
+        'source_inventory_sha256': digest(_inventory(snapshot['sources'])),
+        'records_sha256': digest(sorted((_record_core(row) for row in rows),
+                                        key=lambda row: row['id'])),
+        'new_record_fingerprints': {
+            row['id']: record_fingerprint(row) for row in rows
+            if row['id'] not in SPEC_EXTENSION_BASELINE_IDS},
+        'veto_entities': deepcopy(PRO_VETO_ENTITIES),
+        'daq_code_sha256': _code_sha256(),
+        'prompt_sha256': _prompt_sha256(),
+        'candidate_prompt_sha256': _candidate_prompt_sha256(),
+        'schema_prompt_sha256': _schema_prompt_sha256(),
+        'source_check_sha256': digest(source_check),
+        'dev_review_sha256': digest(dev_review),
+        'runtime': {'release': runtime_release, 'upstream_sha': upstream_sha,
+                    'tasks_enabled': False, 'generic_trace_enabled': False},
+    }
+    review = {'reviewer': 'Codex', 'reviewed_at': date.today().isoformat(),
+              'dev_batch': 'spec-extension-v4', 'operator_release': evidence}
+    release_id = releases._publish_release(
+        root, snapshot, rows, previous_id, review, sections=[], bodies={},
+        previous_content_verified=True)
+    staged, _ = releases._read_release(root, release_id)
+    _verify_spec_extension_manifest(staged, runtime_release=runtime_release,
+                                    upstream_sha=upstream_sha)
+    return release_id
+
+
 def _read_rebind_origin(root: Path, release_id: str) -> dict:
     """Read an archived, content-addressed manifest without rebinding old code."""
     _require(isinstance(release_id, str) and _SHA.fullmatch(release_id),
@@ -632,7 +818,7 @@ def _read_rebind_origin(root: Path, release_id: str) -> dict:
     _require(hashlib.sha256(raw).hexdigest() == release_id, 'rebind_origin')
     origin = json.loads(raw)
     _require(origin.get('review', {}).get('operator_release', {}).get('mode')
-             in {MODE_PRO_V2, MODE_RUNTIME_REBIND}, 'rebind_origin')
+             in {MODE_PRO_V2, MODE_RUNTIME_REBIND, MODE_SPEC_EXTENSION}, 'rebind_origin')
     return origin
 
 

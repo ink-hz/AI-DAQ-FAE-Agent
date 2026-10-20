@@ -1,0 +1,7 @@
+{"id":"SPEC-EGDB-OVERVIEW","question":"介绍一下：EG-DB 规格 参数，越详细越好","expected_boundary":"给出 EG-DB 已核实的 RGB、深度、IMU、同步、接口、存储与环境字段，逐项保留单位和条件；RGB 路数、RGB 帧率、蓝牙和麦克风数量不得作为确定值。"}
+{"id":"SPEC-EGO-1600-OVERVIEW","question":"请详细介绍 EGO 双目 1600×1200 版的规格参数。","expected_boundary":"只用 1600×1200 变体的已审字段；不能混入 1920×1200 变体。"}
+{"id":"SPEC-PRO-OVERVIEW","question":"请把 EGO Pro 四目的已核实规格参数尽量详细地列出来。","expected_boundary":"列出已审四目路数、最大帧率、拼接视场下界、无线和 USB 接口；不把最大帧率说成四路同时保证。"}
+{"id":"SPEC-WRIST-OVERVIEW","question":"请详细介绍 WristCam 的规格参数。","expected_boundary":"给出已审 RGB 分辨率、最大帧率和垂直视场角；水平视场冲突，不可报确定值。"}
+{"id":"SPEC-UMI-OVERVIEW","question":"请详细介绍 UMI Finger 的规格参数。","expected_boundary":"给出已审 RGB 和 Mono 分辨率、Mono 基线、IMU 轴数、最大开口宽度下界；USB 模式和物理口含义未裁决。"}
+{"id":"SPEC-HUB-OVERVIEW","question":"请详细介绍数采 HUB 的规格参数。","expected_boundary":"给出已审下游口数、单口输出及不同测量语义的触发偏差和系统同步精度；上游 USB 代际与带宽冲突不可报确定值。"}
+{"id":"SPEC-EGDB-CONFLICT","question":"EG-DB 到底是几颗 RGB 相机？1600×1200 的 RGB 帧率和蓝牙版本分别是多少？","expected_boundary":"这三个字段的原文互相冲突或尚未裁决，不得用相似产品或另一份表的值冒充确定规格。"}

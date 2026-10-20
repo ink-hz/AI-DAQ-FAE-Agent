@@ -72,7 +72,8 @@ def _read_release(root: Path, release_id: str) -> tuple[dict, str]:
 
 def _publish_release(root: Path, snapshot: dict, records: list[dict],
                     previous_release: str | None, review: dict, *,
-                    sections: list[dict] | None = None, bodies: dict[str, str] | None = None) -> str:
+                    sections: list[dict] | None = None, bodies: dict[str, str] | None = None,
+                    previous_content_verified: bool = False) -> str:
     """Private storage primitive for D3 and isolated offline contract fixtures."""
     if not _review_ok(review):
         raise ValueError("release review missing")
@@ -84,7 +85,15 @@ def _publish_release(root: Path, snapshot: dict, records: list[dict],
         raise ValueError("record validation failed: " +
                          ", ".join(sorted({finding["code"] for finding in findings})))
     if previous_release is not None:
-        _read_release(root, previous_release)
+        if previous_content_verified:
+            directory = root / 'releases' / previous_release
+            path = directory / 'manifest.json'
+            if (not _RELEASE_ID.fullmatch(previous_release) or directory.is_symlink()
+                    or path.is_symlink()
+                    or not path.is_file() or _digest(path.read_bytes()) != previous_release):
+                raise ValueError('previous release content identity invalid')
+        else:
+            _read_release(root, previous_release)
     manifest = {
         "format_version": 1,
         "archive_manifest_sha256": snapshot["archive_manifest_sha256"],
