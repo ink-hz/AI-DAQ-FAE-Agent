@@ -244,6 +244,21 @@ def test_legacy_v1_task_context_is_readable_without_losing_owner_provenance():
         DaqContextState.model_validate({'task_context': {**legacy, 'unreviewed_claim': 'yes'}})
 
 
+def test_legacy_v3_task_context_without_goal_scope_history_is_readable():
+    from daq_fae.durable_state import DaqContextState
+    from daq_fae.task_context import prepare_turn
+    from pydantic import ValidationError
+
+    legacy = prepare_turn('设备是 EGO；平台是 Linux').context.to_checkpoint()
+    assert legacy.pop('goal_scope_history') == []
+    restored = DaqContextState.model_validate({'task_context': legacy})
+    assert restored.task_context == {**legacy, 'goal_scope_history': []}
+    with pytest.raises(ValidationError, match='daq_task_context_checkpoint_invalid'):
+        DaqContextState.model_validate({
+            'task_context': {**legacy, 'unreviewed_claim': 'yes'},
+        })
+
+
 def test_sealed_legacy_v1_context_survives_database_history_read(pg_database):
     from daq_fae.durable_state import DaqContextState
 

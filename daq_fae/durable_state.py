@@ -99,12 +99,21 @@ class DaqContextState(BaseModel):
             # reject discarded fields/coercions instead of silently promoting
             # or dropping user provenance during restore.
             if _json(normalized) != _json(value):
+                # Early V3 checkpoints have the complete V3 field set except
+                # goal_scope_history, which was added later. Only the empty
+                # default may be supplied; every stored field must be exact.
+                legacy_v3 = {'version', 'topic_id', 'turn', 'values',
+                             'attempted_steps', 'active_capabilities',
+                             'grounded_scope', 'setup_statement'}
+                if value.get('version') == 3:
+                    if (set(value) != legacy_v3
+                            or _json(normalized) != _json({**value, 'goal_scope_history': []})):
+                        raise ValueError
+                    return normalized
                 # V1/V2 checkpoints predate grounded_scope/setup_statement.
                 # Accept only the known legacy fields whose values still round
                 # trip exactly; never admit extra claims during restoration.
-                known = {'version', 'topic_id', 'turn', 'values',
-                         'attempted_steps', 'active_capabilities',
-                         'grounded_scope', 'setup_statement'}
+                known = legacy_v3
                 if (value.get('version') not in {1, 2} or set(value) - known
                         or any(normalized.get(key) != item for key, item in value.items()
                                if key != 'version')):
