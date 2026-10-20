@@ -2,9 +2,11 @@
 
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+
+from daq_fae.platform_identity import SESSION_COOKIE
 
 _BLOCKED = ("assets/", "api/", "enterprise/", "attachments/", "health", "review/")
 
@@ -14,7 +16,27 @@ def mount_local_webui(app: FastAPI, *, dist: Path) -> bool:
 
 
 def mount_authenticated_webui(app: FastAPI, *, dist: Path) -> bool:
-    return _mount_webui(app, dist=dist, prefix="/daq", api_base="/daq/api")
+    mounted = _mount_webui(app, dist=dist, prefix="/daq", api_base="/daq/api")
+    if mounted:
+        @app.middleware("http")
+        async def recover_stale_browser_session(request: Request, call_next):
+            response = await call_next(request)
+            browser_page = (request.url.path in {"/daq", "/daq/"}
+                            or request.url.path.startswith("/daq/conversations/"))
+            if (request.method == "GET" and browser_page
+                    and request.cookies.get(SESSION_COOKIE)
+                    and response.status_code == 401):
+                redirect = RedirectResponse(
+                    request.url.path, status_code=303,
+                    headers={"Cache-Control": "no-store"},
+                )
+                redirect.delete_cookie(
+                    SESSION_COOKIE, secure=True, httponly=True,
+                    samesite="lax", path="/",
+                )
+                return redirect
+            return response
+    return mounted
 
 
 def _mount_webui(app: FastAPI, *, dist: Path, prefix: str, api_base: str) -> bool:

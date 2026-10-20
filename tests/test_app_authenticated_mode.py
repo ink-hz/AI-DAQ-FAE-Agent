@@ -133,6 +133,43 @@ def test_authenticated_browser_uses_daq_entry_and_proxied_api(tmp_path, monkeypa
     assert client.get('/app/').status_code == 404
 
 
+def test_expired_daq_browser_cookie_recovers_page_without_weakening_api(tmp_path, monkeypatch):
+    env = {**identity_environment(tmp_path), **persistence_environment(tmp_path)}
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    dist = tmp_path / 'dist'
+    dist.mkdir()
+    (dist / 'index.html').write_text('<html><head></head><body>DAQ workspace</body></html>')
+    app = create_app(
+        provider_mode='offline', webui_dist=dist,
+        identity_repository=InMemoryAuthenticatedSessionRepository(),
+        platform_client=FakePlatform(),
+    )
+    client = TestClient(app, base_url=env['DAQ_PLATFORM_PUBLIC_ORIGIN'])
+    stale = {'Cookie': '__Host-daq_enterprise_session=invalid-test-session'}
+
+    client.cookies.set('__Host-daq_enterprise_session', 'invalid-test-session',
+                       domain='agent.orbbec.com.cn', path='/')
+    page = client.get('/daq/', follow_redirects=True)
+    assert page.status_code == 200
+    assert len(page.history) == 1
+    assert page.history[0].status_code == 303
+    assert page.history[0].headers['location'] == '/daq/'
+    assert 'Max-Age=0' in page.history[0].headers['set-cookie']
+    assert 'DAQ workspace' in page.text
+
+    api = client.get('/enterprise/session', headers=stale)
+    assert api.status_code == 401
+    assert api.json()['error']['code'] == 'enterprise_session_invalid'
+
+    launch = client.post('/enterprise/session', json={'code': CODE},
+                         headers={'Origin': env['DAQ_PLATFORM_PUBLIC_ORIGIN']})
+    assert launch.status_code == 201
+    valid_page = client.get('/daq/', follow_redirects=False)
+    assert valid_page.status_code == 200
+    assert 'set-cookie' not in valid_page.headers
+
+
 def test_attachment_capability_is_available_only_after_daq_identity(tmp_path, monkeypatch):
     env = {**identity_environment(tmp_path), **persistence_environment(tmp_path)}
     for key, value in env.items():
