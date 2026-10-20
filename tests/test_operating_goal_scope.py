@@ -109,6 +109,23 @@ def test_standalone_recording_failure_question_recognizes_single_procedure():
         'procedure:pro-single']
 
 
+def test_english_standalone_recording_paraphrase_retrieves_reviewed_checks():
+    question = ('客户说 EGO Pro 录制时看到了红灯。能把红灯解释成文件保存完成吗？'
+                '已审单机流程里实际有哪些可核对的完成检查点？')
+    result = DaqToolBox(question=question, knowledge=_formal_knowledge(),
+                        role='internal_fae').dispatch('lookup_procedure', {
+                            'task': 'standalone recording', 'entity': 'EGO Pro'})
+    assert result.status == 'ok'
+    assert [source['source_id'] for source in result.sources] == [
+        'procedure:pro-single']
+    for task in ('standalone recording on SSD', 'standalone red LED meaning'):
+        rejected = DaqToolBox(
+            question=question, knowledge=_formal_knowledge(),
+            role='internal_fae').dispatch('lookup_procedure', {
+                'task': task, 'entity': 'EGO Pro'})
+        assert rejected.status == 'not_found'
+
+
 def test_generic_lamp_state_and_elliptical_recording_steps_are_source_covered():
     from daq_fae.request_schema import DaqRequestSchema
     from daq_fae.task_context import prepare_turn

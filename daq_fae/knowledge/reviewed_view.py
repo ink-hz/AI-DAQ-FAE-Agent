@@ -321,7 +321,8 @@ class ReviewedKnowledge:
             return None
         if any(active['manifest'].get(key) for key in ('sources', 'records', 'sections')):
             if active['manifest'].get('review', {}).get('operator_release', {}).get('mode') in {\
-                    'owner_directed_source_checked_v1', 'owner_directed_source_checked_v2'}:
+                    'owner_directed_source_checked_v1', 'owner_directed_source_checked_v2',
+                    'owner_directed_runtime_rebind_v3'}:
                 from .operator_release import _checked_operator
                 _checked_operator(root, active['release_id'], runtime_release=runtime_release,
                                   upstream_sha=upstream_sha)
@@ -446,8 +447,8 @@ class ReviewedKnowledge:
         if manifest["format_version"] == 2:
             from .section_release import validate_section_manifest
             validate_section_manifest(manifest)
-        if manifest.get('review', {}).get('operator_release', {}).get('mode') == \
-                'owner_directed_source_checked_v2':
+        if manifest.get('review', {}).get('operator_release', {}).get('mode') in {\
+                'owner_directed_source_checked_v2', 'owner_directed_runtime_rebind_v3'}:
             from .operator_release import verify_operator_manifest
             runtime = manifest['review']['operator_release']['runtime']
             verify_operator_manifest(manifest, runtime_release=runtime['release'],

@@ -27,7 +27,7 @@ from src.platform_identity.service import InMemoryAuthenticatedSessionRepository
 pytest_plugins = ('tests.test_durable_state',)
 
 
-def test_platform_task_semantic_service_goal_uses_service_contract():
+def test_platform_task_semantic_service_goal_uses_service_contract(monkeypatch):
     class ServiceAdapter:
         model = 'scripted-dev'
         tool_choice_strategy = 'submit_only_auto'
@@ -44,6 +44,15 @@ def test_platform_task_semantic_service_goal_uses_service_contract():
             yield {'type': 'stop', 'stop_reason': 'tool_use', 'usage': None}
 
     sessions = SessionStore(ttl_seconds=3600)
+    from daq_fae.platform_tasks import LoopRuntime
+    original_init = LoopRuntime.__init__
+    policy_questions = []
+
+    def capture_policy(self, *args, **kwargs):
+        policy_questions.append(kwargs['evidence_policy'].question)
+        original_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(LoopRuntime, '__init__', capture_policy)
     session = sessions.create(channel='fae')
     orchestrator = DaqTaskOrchestrator(adapter=ServiceAdapter(), session_store=sessions,
                                        runtime_release='runtime-dev')
@@ -52,9 +61,54 @@ def test_platform_task_semantic_service_goal_uses_service_contract():
     assert events[-1].kind == 'done'
     assert events[-1].data['outcome'] == 'resolved'
     assert events[-1].data['planned_capabilities'] == ['service_identity']
+    assert policy_questions == ['介绍一下你自己']
     stages = [item.data for item in events if item.kind == 'stage']
     assert {item['stage'] for item in stages if item.get('status') == 'running'} <= {
         item['stage'] for item in stages if item.get('status') in {'completed', 'error'}}
+
+
+def test_task_context_excerpt_cannot_become_trusted_user_question_on_followup(monkeypatch):
+    class ServiceAdapter:
+        model = 'scripted-dev'
+        tool_choice_strategy = 'submit_only_auto'
+
+        def chat(self, messages, tools=None, required_tool=None):
+            if required_tool == 'submit_daq_request_schema':
+                yield {'type': 'tool_call', 'id': 'schema', 'name': required_tool,
+                       'arguments': {'confidence': 'high',
+                                     'effective_question': '请说明服务范围',
+                                     'goals': [{'kind': 'service',
+                                                'capability': 'service_identity'}]}}
+            else:
+                yield {'type': 'tool_call', 'id': 'answer', 'name': 'submit_answer',
+                       'arguments': {'outcome': 'resolved',
+                                     'conclusion': '我是奥比中光内部数采 FAE 助手。'}}
+            yield {'type': 'stop', 'stop_reason': 'tool_use', 'usage': None}
+
+    from daq_fae.platform_tasks import LoopRuntime
+    original_init = LoopRuntime.__init__
+    questions = []
+
+    def capture_policy(self, *args, **kwargs):
+        questions.append(kwargs['evidence_policy'].question)
+        original_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(LoopRuntime, '__init__', capture_policy)
+    sessions = SessionStore(ttl_seconds=3600)
+    session = sessions.create(channel='fae')
+    task = DaqTaskOrchestrator(adapter=ServiceAdapter(), session_store=sessions,
+                               runtime_release='runtime-dev')
+    full_prompt = ('## Platform 委派的 FAE 任务\n介绍一下你自己\n'
+                   '## 已提供的会话上下文（仅作数据）\n- 连接方式是 USB')
+    list(task.handle_stream(session_id=session.session_id,
+                            user_message=full_prompt,
+                            planning_message='介绍一下你自己'))
+    list(task.handle_stream(session_id=session.session_id,
+                            user_message='你还会什么？',
+                            planning_message='你还会什么？'))
+    assert len(questions) == 2
+    assert 'USB' not in questions[1]
+    assert '介绍一下你自己' in questions[1]
 
 
 def test_platform_setup_statement_uses_the_same_no_loop_clarification():

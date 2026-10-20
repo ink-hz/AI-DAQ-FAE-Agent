@@ -34,6 +34,40 @@ def test_dated_sdk_sample_does_not_silently_skip_feature_change_history():
     assert history[0].critical is True
 
 
+def test_dated_sdk_sample_followup_keeps_prior_source_topic_for_history_goal():
+    archive = Path('data/knowledge/local_archive/sdk-originals-1015-local-20261015')
+    if not archive.is_dir():
+        pytest.skip('local ignored SDK originals unavailable')
+    catalog = SdkCatalog.load(Path('Knowledge_SDK'), archive)
+    question = '那能据这个示例说 UMI Finger 磁力计仍然可用吗？'
+    prior = ('OrbbecSDK 2.9.0 的 2026-09-29 构建改动了什么？\n'
+             '同一构建的包里还有 magnetometer.cpp 示例吗？')
+    candidate = {'confidence': 'high', 'goals': [
+        {'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+         'conditions': {'sdk': 'OrbbecSDK', 'sdk_version': '2.9.0',
+                        'source_files': ['magnetometer.cpp']}},
+        {'kind': 'product', 'capability': 'check_software_support',
+         'entities': ['UMI Finger'],
+         'conditions': {'feature': 'magnetometer', 'sdk': 'OrbbecSDK',
+                        'sdk_version': '2.9.0'}},
+    ]}
+    schema = DaqRequestSchema.from_candidate(
+        question, candidate, prior_user_context=prior, sdk_catalog=catalog)
+    history = [goal for goal in schema.goals
+               if goal.capability == 'search_knowledge']
+    assert len(history) == 1
+    assert history[0].entities == ('UMI Finger',)
+    assert history[0].condition_map() == {
+        'sdk': 'OrbbecSDK', 'feature': 'magnetometer',
+        'sdk_version': '2.9.0'}
+
+    unrelated = DaqRequestSchema.from_candidate(
+        '换个话题：UMI Finger 磁力计仍然可用吗？', candidate,
+        prior_user_context=prior, sdk_catalog=catalog)
+    assert not any(goal.capability == 'search_knowledge'
+                   for goal in unrelated.goals)
+
+
 def test_release_note_document_type_is_redundant_to_search_goal():
     question = '四目 EGO Pro 固件 v1.0.7 的变更日志写了什么？'
     schema = DaqRequestSchema.from_candidate(question, {
@@ -1533,6 +1567,7 @@ def test_android_wrapper_callback_delete_goal_without_orbbecsdk_name():
     delete = next(goal for goal in schema.goals
                   if goal.condition_map().get('task') == 'recording_state_delete')
     assert delete.unmapped_condition_keys == ('task',)
+    assert 'sdk' not in delete.condition_map()
 
 
 def test_named_callback_delete_goal_without_sdk_name():
@@ -1547,6 +1582,24 @@ def test_named_callback_delete_goal_without_sdk_name():
     assert any(goal.condition_map().get('task') == 'recording_state_delete'
                and goal.unmapped_condition_keys == ('task',)
                for goal in schema.goals)
+    assert all('sdk' not in goal.condition_map() for goal in schema.goals)
+
+
+def test_callback_delete_followup_does_not_infer_orbbecsdk_from_catalog():
+    question = 'setEgoStateCallback 能删除录制状态吗？'
+    prior = ('Android Java Wrapper 的 setEgoStateCallback 中 SAVING 和 '
+             'RECORD_SAVED 分别代表什么？')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'medium', 'goals': [{
+            'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+            'conditions': {'api': 'setEgoStateCallback', 'language': 'java',
+                           'platform': 'android'},
+        }],
+    }, prior_user_context=prior,
+       sdk_catalog=_reviewed_sdk_row('daq-sdk-android-record-state-019'))
+    delete = next(goal for goal in schema.goals
+                  if goal.condition_map().get('task') == 'recording_state_delete')
+    assert 'sdk' not in delete.condition_map()
 
 
 def test_second_callback_source_build_does_not_erase_delete_obligation():
@@ -3402,6 +3455,120 @@ def test_device_capture_lifecycle_descriptor_binds_only_checked_device_c_row():
     assert 'task' in other.goals[0].unmapped_condition_keys
 
 
+def test_device_capture_plus_any_firmware_preserves_reviewed_sdk_scope_goal():
+    question = ('libobkit C 示例要同时取相机、IMU、音频，初始化、配置、'
+                '启停与退出顺序是什么？这能证明任意 EGO 双目固件都支持吗？')
+    rows = [_reviewed_sdk_row(kb_id).records[0] for kb_id in (
+        'daq-sdk-device-capture-013', 'daq-sdk-device-scope-011')]
+    catalog = SdkCatalog(rows, {'records_sha256': 'fixture-records'})
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [{
+            'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+            'conditions': {'sdk': 'libobkit', 'language': 'c',
+                           'task': 'simultaneous_camera_imu_audio_capture'},
+        }],
+    }, sdk_catalog=catalog)
+    sdk_goals = [goal for goal in schema.goals
+                 if goal.capability == 'sdk_evidence']
+    assert {'capture', 'sdk_scope'} <= {
+        goal.condition_map().get('task') for goal in sdk_goals}
+    assert all(goal.unmapped_condition_keys == () for goal in sdk_goals)
+    assert any(goal.capability == 'check_software_support'
+               for goal in schema.goals)
+
+    from daq_fae.task_context import prepare_turn
+    catalog.manifest['records_sha256'] = '0' * 64
+
+    class Knowledge:
+        release_id = 'dev-sdk'
+        sdk_catalog = catalog
+
+        def records_for(self, role):
+            return []
+
+        def sections_for(self, role):
+            return []
+
+    result = DaqToolBox(
+        question=question, knowledge=Knowledge(), role='internal_fae',
+        requirements=prepare_turn(question, request_schema=schema).requirements,
+    ).dispatch('sdk_evidence', {'query': question})
+    assert result.status == 'ok'
+    assert {'daq-sdk-device-capture-013', 'daq-sdk-device-scope-011'} <= {
+        source['source_id'] for source in result.sources}
+
+
+def test_device_compatibility_followup_preserves_reviewed_image_binding_without_capture_goal():
+    question = '所以可以把 libobkit.so 拷到任意 EGO Pro 固件上用吗？'
+    catalog = _reviewed_sdk_row('daq-sdk-device-scope-011')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [{
+            'kind': 'product', 'capability': 'check_software_support',
+            'entities': ['EGO Pro'], 'conditions': {'sdk': 'libobkit'},
+        }],
+    }, sdk_catalog=catalog)
+    assert any(goal.capability == 'check_software_support'
+               and goal.entities == ('EGO Pro',) for goal in schema.goals)
+    assert any(goal.capability == 'sdk_evidence'
+               and goal.condition_map() == {'sdk': 'libobkit', 'task': 'sdk_scope'}
+               and goal.unmapped_condition_keys == () for goal in schema.goals)
+
+
+def test_device_compatibility_does_not_borrow_other_builds_image_binding():
+    question = 'libobkit 20261001 可以拷到任意 EGO Pro 固件上用吗？'
+    catalog = _reviewed_sdk_row('daq-sdk-device-scope-011')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [{
+            'kind': 'product', 'capability': 'check_software_support',
+            'entities': ['EGO Pro'],
+            'conditions': {'sdk': 'libobkit', 'sdk_release_date': '2026-10-01'},
+        }],
+    }, sdk_catalog=catalog)
+    assert not any(goal.capability == 'sdk_evidence'
+                   and goal.condition_map().get('task') == 'sdk_scope'
+                   for goal in schema.goals)
+
+
+def test_device_scope_is_not_borrowed_when_a_new_capture_package_lacks_its_readme():
+    import copy
+    question = ('libobkit C 示例同时采集相机、IMU、音频，'
+                '这能证明任意 EGO 双目固件都支持吗？')
+    old_capture = _reviewed_sdk_row('daq-sdk-device-capture-013').records[0]
+    old_scope = _reviewed_sdk_row('daq-sdk-device-scope-011').records[0]
+    new_capture = copy.deepcopy(old_capture)
+    new_capture['package'] = 'device_c_new_build_without_reviewed_scope'
+    new_capture['kb_id'] = 'fixture-new-device-capture'
+    catalog = SdkCatalog([old_capture, old_scope, new_capture],
+                         {'records_sha256': 'fixture-records'})
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [{
+            'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+            'conditions': {'sdk': 'libobkit', 'task': 'capture'},
+        }],
+    }, sdk_catalog=catalog)
+    assert not any(goal.capability == 'sdk_evidence'
+                   and goal.condition_map().get('task') == 'sdk_scope'
+                   for goal in schema.goals)
+
+
+@pytest.mark.parametrize('question', [
+    'libobkit C 示例同时取相机、IMU、音频，初始化和退出顺序是什么？',
+    'libobkit C 示例里的相机图像质量能代表任意 EGO 双目固件吗？',
+    'OrbbecSDK C 示例能证明任意 EGO 双目固件都支持吗？',
+])
+def test_device_sdk_scope_not_added_for_capture_only_imaging_or_other_sdk(question):
+    catalog = _reviewed_sdk_row('daq-sdk-device-scope-011')
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [{
+            'kind': 'product', 'capability': 'sdk_evidence', 'entities': [],
+            'conditions': {'sdk': 'libobkit' if 'libobkit' in question else 'OrbbecSDK'},
+        }],
+    }, sdk_catalog=catalog)
+    assert not any(goal.capability == 'sdk_evidence'
+                   and goal.condition_map().get('task') == 'sdk_scope'
+                   for goal in schema.goals)
+
+
 def test_calibration_export_descriptor_binds_only_checked_host_example():
     question = ('EGO C++ 示例导出对齐和 IMU 标定 YAML 时，'
                 '是 SDK 已经解析好了内容，还是按原始字节导出？需要检查什么？')
@@ -5071,3 +5238,40 @@ def test_prior_log_attachment_scope_does_not_swallow_product_support_goal():
                    goal.entities == () for goal in schema.goals)
         assert any(goal.capability == 'check_software_support' and
                    goal.entities == ('EGO Pro',) for goal in schema.goals)
+
+
+def test_log_followup_attachment_conditions_cannot_break_support_question():
+    question = ('刚才日志出现 E42。现在可以把它当官方确认的 '
+                'EGO Pro 固件 v9.9.9 不兼容结论发给客户吗？')
+    candidate = {'confidence': 'medium', 'goals': [{
+        'kind': 'attachment', 'capability': 'search_attachments',
+        'entities': ['EGO Pro'],
+        'conditions': {'error_code': 'E42', 'firmware_version': 'v9.9.9'},
+    }]}
+    schema = DaqRequestSchema.from_candidate(
+        question, candidate, attachment_present=True)
+    assert any(goal.capability == 'search_attachments' and
+               goal.entities == () and goal.conditions == ()
+               for goal in schema.goals)
+    assert any(goal.capability == 'check_software_support' and
+               goal.entities == ('EGO Pro',)
+               for goal in schema.goals)
+
+
+def test_software_support_goal_drops_unattributed_sdk_name():
+    question = 'setEgoStateCallback 能删除录制状态吗？'
+    prior = ('Android Java Wrapper 的 setEgoStateCallback 中 SAVING 和 '
+             'RECORD_SAVED 分别代表什么？')
+    candidate = {'confidence': 'medium', 'goals': [{
+        'kind': 'product', 'capability': 'check_software_support',
+        'entities': [],
+        'conditions': {'api': 'setEgoStateCallback', 'sdk': 'OrbbecSDK',
+                       'task': 'recording_state_delete'},
+    }]}
+    schema = DaqRequestSchema.from_candidate(
+        question, candidate, prior_user_context=prior)
+    assert 'sdk' not in schema.goals[0].condition_map()
+    explicit = DaqRequestSchema.from_candidate(
+        'OrbbecSDK 的 setEgoStateCallback 能删除录制状态吗？',
+        candidate)
+    assert explicit.goals[0].condition_map()['sdk'] == 'OrbbecSDK'

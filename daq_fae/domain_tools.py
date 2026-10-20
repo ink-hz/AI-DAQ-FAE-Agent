@@ -142,7 +142,8 @@ def _procedure_task_paraphrase_matches(task: str, row: dict) -> bool:
         return False
     recording = '录制' in compact or 'record' in compact
     local_storage = any(value in compact for value in
-                        ('tf卡', 'tfcard', '本机', '本地', '单机', '独立', 'local'))
+                        ('tf卡', 'tfcard', '本机', '本地', '单机', '独立',
+                         'local', 'standalone'))
     reviewed_checks = all(value in conditions.get('indicators', [])
                           for value in ('voice_prompt', 'green_led'))
     check_sequence = (reviewed_checks and '步骤' in compact and
@@ -612,11 +613,16 @@ class DaqToolBox:
                 "example_build_status": (
                     "unknown" if any(row.get("doc_type") in {"example", "build"}
                                      for row in matches) else "not_applicable"),
+                "matched_requirement_ids": self._sdk_usage_requirement_ids(matches),
+                "requirement_source_ids": {
+                    requirement_id: [row['kb_id'] for row in matches
+                                     if requirement_id in self._sdk_usage_requirement_ids([row])]
+                    for requirement_id in self._sdk_usage_requirement_ids(matches)
+                },
                 "matches": [{key: row[key] for key in (
                     "kb_id", "title", "answer", "sdk_layer", "doc_type", "version",
                     "build", "platform", "symbols", "code_tokens", "confidence", "last_verified")}
                     for row in matches],
-                "matched_requirement_ids": self._sdk_usage_requirement_ids(matches),
                 "partial_requirement_ids": sorted(set(partial_requirement_ids)),
             }, sources=[{
                 "type": "daq_governed_sdk" if getattr(
@@ -660,8 +666,19 @@ class DaqToolBox:
                 and any(key in requirement['conditions'] for key in (
                     'viewer_release_date', 'sdk_release_date', 'firmware_version'))
                 for requirement in self.requirements)
+            historical_support_goal = bool(
+                re.search(r'这个示例|该示例|this example', text, re.I)
+                and re.search(r'仍(?:然)?可用|还能用|still available', text, re.I)
+                and any(isinstance(item, dict)
+                        and item.get('capability') == 'search_knowledge'
+                        and isinstance(item.get('conditions'), dict)
+                        and item['conditions'].get('sdk') == 'OrbbecSDK'
+                        and item['conditions'].get('feature')
+                        and item['conditions'].get('sdk_version')
+                        for item in self.requirements))
             note_intent = (explicit_note or dated_comparison or scoped_log_probe
-                           or colloquial_log or typed_note_goal)
+                           or colloquial_log or typed_note_goal
+                           or historical_support_goal)
             if note_intent:
                 # A tool query cannot supply a product the user did not name.
                 # Report the identity gap, rather than implying that neither
@@ -724,6 +741,53 @@ class DaqToolBox:
                                     and source_topics & set(row.get('topics', []))
                                     and row not in matches):
                                 matches.append(row)
+                if re.search(r'这个示例|该示例|this example', text, re.I) and \
+                        re.search(r'仍(?:然)?可用|还能用|still available', text, re.I):
+                    # A typed historical-note goal can be added after a
+                    # source-checked SDK example in a prior turn. Compare its
+                    # product/topic with the separate support goal and use
+                    # the latter's current build only as a chronology bound.
+                    # The note remains a statement about a past change, not
+                    # device support for the requested build.
+                    note_goals = [item for item in self.requirements
+                                  if isinstance(item, dict)
+                                  and item.get('capability') == 'search_knowledge'
+                                  and isinstance(item.get('conditions'), dict)]
+                    support_goals = [item for item in self.requirements
+                                     if isinstance(item, dict)
+                                     and item.get('capability') == 'check_software_support'
+                                     and isinstance(item.get('conditions'), dict)]
+                    for note_goal in note_goals:
+                        note_scope = note_goal['conditions']
+                        feature = note_scope.get('feature')
+                        if (not isinstance(feature, str)
+                                or note_scope.get('sdk') != 'OrbbecSDK'
+                                or not isinstance(note_scope.get('sdk_version'), str)
+                                or len(note_goal.get('entities') or []) != 1):
+                            continue
+                        entity = note_goal['entities'][0]
+                        for support_goal in support_goals:
+                            support_scope = support_goal['conditions']
+                            if (entity not in (support_goal.get('entities') or [])
+                                    or support_scope.get('feature') != feature
+                                    or support_scope.get('sdk_version') !=
+                                    note_scope['sdk_version']):
+                                continue
+                            current_build = re.sub(
+                                r'\D', '', str(support_scope.get('sdk_release_date', '')))[:8]
+                            if len(current_build) != 8:
+                                continue
+                            for row in notes.records:
+                                if (self.role in row.get('view_roles', [])
+                                        and row.get('family', '').casefold() == 'orbbecsdk'
+                                        and row.get('version') == note_scope['sdk_version']
+                                        and feature in row.get('topics', [])
+                                        and _identity_text(entity) in _identity_text(
+                                            str(row.get('title', '')) + ' ' +
+                                            str(row.get('answer', '')))
+                                        and re.sub(r'\D', '', str(row.get('build', '')))[:8]
+                                        < current_build and row not in matches):
+                                    matches.append(row)
                 # A software version mentioned only in a support question is
                 # not a request for that software's change log. Keep source
                 # attribution within the families of typed log goals.
@@ -754,10 +818,16 @@ class DaqToolBox:
                         "release_notes_sha256": notes.manifest["records_sha256"],
                         "evidence_scope": "release_note_statement_only",
                         "device_support": "unknown",
+                        "matched_requirement_ids": self._release_note_requirement_ids(matches),
+                        "requirement_source_ids": {
+                            requirement_id: [row['kb_id'] for row in matches
+                                             if requirement_id in
+                                             self._release_note_requirement_ids([row])]
+                            for requirement_id in self._release_note_requirement_ids(matches)
+                        },
                         "matches": [{key: row[key] for key in (
                             "title", "answer", "family", "version", "build", "platform")}
                             for row in matches],
-                        "matched_requirement_ids": self._release_note_requirement_ids(matches),
                     }, sources=[{
                         "type": ("daq_governed_release_note" if getattr(
                             self.knowledge.sdk_catalog, "published", False)
@@ -1226,19 +1296,25 @@ class DaqToolBox:
                                  and row['status'] == 'verified'
                                  and row['data'].get('entity_id') == entity_row['id']})
                 field_coverage[entity_row['id']] = fields
-        matched_requirements = sorted({
-            requirement["id"] for requirement in self.requirements
-            if isinstance(requirement, dict) and isinstance(requirement.get("id"), str)
-            and requirement.get("capability") == name
-            and any(self._requirement_matches(requirement, row, entities, topologies,
-                                              topology_identity_records,
-                                              candidate_preview=(governed_operating if row['kind'] in {
-                                                  'topology', 'procedure'} else candidate_preview))
-                    and (name != 'lookup_spec' or self._positive_spec_covers_requirement(
-                        requirement, row, arguments, rows, entity_records,
-                        conflict_notices))
-                    for row in matches)
-        })
+        requirement_source_ids = {}
+        for requirement in self.requirements:
+            if (not isinstance(requirement, dict)
+                    or not isinstance(requirement.get('id'), str)
+                    or requirement.get('capability') != name):
+                continue
+            source_ids = [row['id'] for row in matches
+                          if self._requirement_matches(
+                              requirement, row, entities, topologies,
+                              topology_identity_records,
+                              candidate_preview=(governed_operating if row['kind'] in {
+                                  'topology', 'procedure'} else candidate_preview))
+                          and (name != 'lookup_spec' or
+                               self._positive_spec_covers_requirement(
+                                   requirement, row, arguments, rows,
+                                   entity_records, conflict_notices))]
+            if source_ids:
+                requirement_source_ids[requirement['id']] = source_ids
+        matched_requirements = sorted(requirement_source_ids)
         return ToolResult(status="ok", content={
             "release_id": self.knowledge.release_id,
             **({'query_entity': str(original_query_entity or '')}
@@ -1259,11 +1335,12 @@ class DaqToolBox:
             "evidence_level": ("dev_source_checked" if
                                getattr(self.knowledge, "is_candidate_preview", False)
                                else "reviewed"),
+            "matched_requirement_ids": matched_requirements,
+            "requirement_source_ids": requirement_source_ids,
             "matches": [{**{key: row[key] for key in ("id", "kind", "status", "scope", "data")},
                          **({"status": "source_checked"} if
                             getattr(self.knowledge, "is_candidate_preview", False) else {})}
                         for row in matches],
-            "matched_requirement_ids": matched_requirements,
         }, sources=[{
             "type": ("daq_dev_source_checked_claim" if
                      getattr(self.knowledge, "is_candidate_preview", False)

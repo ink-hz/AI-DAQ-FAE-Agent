@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+import json
 import re
 
 from src.agent.loop.answer_contract import AnswerSubmission
@@ -35,6 +36,7 @@ class _Requirement:
     entities: tuple[str, ...]
     identity_conditions: tuple[tuple[str, str], ...]
     measurement_conditions: tuple[tuple[str, str], ...]
+    delivery_required: bool
 
 
 def _spec_field_key(field: str) -> str:
@@ -119,6 +121,10 @@ def _capture_failure_supported(
 
 
 class DaqEvidencePolicy:
+    # The shared Loop keeps its camera submit_answer schema unchanged. DAQ
+    # opts into source-bound, visible answer units for requested product goals.
+    answer_delivery_units_enabled = True
+
     def __init__(self, *, allow_dev_source_check: bool = False,
                  service_contract: ServiceContract | None = None,
                  question: str = '',
@@ -171,6 +177,7 @@ class DaqEvidencePolicy:
                       if key in {'variant', 'resolution_variant', 'hardware_revision'}),
                 tuple((key, _entity_label(str(value))) for key, value in conditions.items()
                       if key == 'resolution'),
+                entry.get('delivery_required') is True,
             ))
         if not parsed:
             raise ValueError("daq_requirements_empty")
@@ -209,6 +216,8 @@ class DaqEvidenceSession:
         self._observed_numeric_specs: set[tuple[str, int | float, str, str, str]] = set()
         self._alternative_numeric_measurements: set[tuple[int | float, str, str, str]] = set()
         self._resolved_entities_by_label: dict[str, set[str]] = {}
+        self._deliverable_sources: dict[str, set[str]] = {
+            item.id: set() for item in requirements}
         self.question = question
         self.allow_dev_source_check = allow_dev_source_check
         self.answer_language = answer_language
@@ -378,6 +387,22 @@ class DaqEvidenceSession:
         matched_ids = set(matched) if isinstance(matched, list) and all(
             isinstance(value, str) for value in matched
         ) else set()
+        if result.status == 'ok' and _has_governed_source(
+                result, allow_dev_source_check=self.allow_dev_source_check):
+            visible_source_ids = _governed_source_ids(
+                result, allow_dev_source_check=self.allow_dev_source_check)
+            exact = content.get('requirement_source_ids')
+            if isinstance(exact, dict):
+                for requirement_id, source_ids in exact.items():
+                    if (requirement_id in self._deliverable_sources
+                            and requirement_id in matched_ids and isinstance(source_ids, list)
+                            and all(isinstance(value, str) for value in source_ids)):
+                        self._deliverable_sources[requirement_id].update(
+                            set(source_ids) & visible_source_ids)
+            elif (len(matched_ids) == len(visible_source_ids) == 1
+                  and next(iter(matched_ids)) in self._deliverable_sources):
+                self._deliverable_sources[next(iter(matched_ids))].update(
+                    visible_source_ids)
         empty_release = content.get("reason") == "empty_knowledge_release"
         for item in self.requirements:
             if item.evidence_class in {'service_contract', 'clarification_required'}:
@@ -424,7 +449,8 @@ class DaqEvidenceSession:
                   submission.next_steps, submission.missing,
                   submission.pending_confirmation, submission.handoff_reason,
                   submission.unresolved_constraints)
-        visible_text = '\n'.join(value for value in fields if value)
+        visible_text = '\n'.join(value for value in (
+            *fields, *(unit.text for unit in submission.delivery_units)) if value)
         failure_claims = (_capture_failure_claims(visible_text)
                           if self._observed_attachment_text else [])
         if any(not _capture_failure_supported(claim_id, self._observed_attachment_text,
@@ -480,6 +506,7 @@ class DaqEvidenceSession:
             submission.conclusion, submission.basis, submission.cautions,
             submission.next_steps, submission.missing, submission.pending_confirmation,
             submission.handoff_reason, submission.unresolved_constraints,
+            *(unit.text for unit in submission.delivery_units),
         ) if value).casefold()
         code_scan = prose
         # A symbol the user typed is public conversation content, even when
@@ -527,6 +554,35 @@ class DaqEvidenceSession:
             return EvidenceDecision("reject", "daq_evidence_tool_failure")
         if self.attachment_failed and submission.outcome == "resolved":
             return EvidenceDecision("reject", "daq_attachment_evidence_failed")
+        delivered_ids: set[str] = set()
+        by_id = {item.id: item for item in self.requirements}
+        for unit in submission.delivery_units:
+            item = by_id.get(unit.requirement_id)
+            if item is None or self.status[item.id] != 'satisfied':
+                return EvidenceDecision('request_evidence',
+                                        'daq_delivery_requirement_unverified',
+                                        '删除没有本轮已审目标支持的交付单元。')
+            if not set(unit.source_ids) <= self._deliverable_sources[item.id]:
+                return EvidenceDecision('request_evidence',
+                                        'daq_delivery_source_mismatch',
+                                        '交付单元必须引用该目标在本轮实际匹配的来源。')
+            delivered_ids.add(item.id)
+        missing_deliveries = [item.id for item in self.requirements
+                              if item.delivery_required
+                              and self.status[item.id] == 'satisfied'
+                              and item.id not in delivered_ids]
+        if missing_deliveries:
+            source_map = {requirement_id: sorted(
+                self._deliverable_sources[requirement_id])
+                for requirement_id in missing_deliveries}
+            return EvidenceDecision(
+                'request_evidence', 'daq_known_goal_delivery_missing',
+                '本轮已核实的目标尚未逐项交付。请将每项目标的适用条件和已知事实写入 '
+                'delivery_units；当前缺失目标及可用来源是 '
+                + json.dumps(source_map, ensure_ascii=False, sort_keys=True)
+                + '。每个目标单独一项，source_ids 只能取对应列表；'
+                  '空列表表示尚无可绑定来源，须继续取证。'
+                  '未知目标继续保留在 missing。')
         if submission.outcome != "resolved":
             missing_fps_resolutions = {
                 expected for item in self.requirements
@@ -545,7 +601,9 @@ class DaqEvidenceSession:
                                                   submission.missing,
                                                   submission.pending_confirmation,
                                                   submission.handoff_reason,
-                                                  submission.unresolved_constraints))):
+                                                  submission.unresolved_constraints,
+                                                  *(unit.text for unit in
+                                                    submission.delivery_units)))):
                     uncertainty = bool(re.search(
                             r'未知|待核实|未(?:核实|证实|确认|查到|找到|给出|标明|获证)|'
                             r'无法(?:确认|判断|证明)|不能(?:确认|证明|断言|填写|填|据此)|'
@@ -735,8 +793,16 @@ class DaqEvidenceSession:
 
 
 def _has_governed_source(result: ToolResult, *, allow_dev_source_check: bool = False) -> bool:
-    return any(
-        isinstance(source, dict)
+    return bool(_governed_source_ids(
+        result, allow_dev_source_check=allow_dev_source_check))
+
+
+def _governed_source_ids(result: ToolResult, *, allow_dev_source_check: bool = False
+                         ) -> set[str]:
+    return {
+        source['source_id']
+        for source in result.sources
+        if isinstance(source, dict)
         and ((source.get("type") in {"daq_governed_claim", "daq_governed_sdk"}
               and source.get("verification_status") == "verified")
              or (isinstance(result.content, dict)
@@ -756,5 +822,4 @@ def _has_governed_source(result: ToolResult, *, allow_dev_source_check: bool = F
         and bool(source["release_id"].strip())
         and isinstance(source.get("source_id"), str)
         and bool(source["source_id"].strip())
-        for source in result.sources
-    )
+    }

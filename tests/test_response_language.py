@@ -10,6 +10,13 @@ def test_english_presentation_translates_only_renderer_headings():
     assert done['sources'] == [{'source_id': 'service'}]
 
 
+def test_english_presentation_translates_verified_delivery_heading():
+    done = {'answer': '**核实结果**\n\nThe 1600×1200 variant has a verified FOV.',
+            'outcome': 'safe_abstained', 'sources': []}
+    localize_answer(done, 'en')
+    assert done['answer'].startswith('**Verified results**\n\n')
+
+
 def test_chinese_presentation_preserves_original_answer():
     done = {'answer': '**结论**\n\n我是数采助手。'}
     localize_answer(done, 'zh')

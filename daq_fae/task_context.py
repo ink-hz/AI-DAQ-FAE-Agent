@@ -75,6 +75,7 @@ _SPEC_EVIDENCE_CONDITIONS = frozenset({
     'lens_type', 'port', 'simultaneous_port_count',
 })
 _IDENTITY_SELECTOR_KEYS = frozenset({'variant', 'resolution_variant', 'hardware_revision'})
+_GOAL_SCOPE_HISTORY_LIMIT = 96
 
 
 @dataclass(frozen=True)
@@ -94,6 +95,9 @@ class DaqTaskContext:
     active_capabilities: tuple[str, ...] = ()
     grounded_scope: dict = field(default_factory=dict)
     setup_statement: UserAssertion | None = None
+    # User-grounded scope cues, kept separately from device setup assertions.
+    # A release-note version or compared firmware is never installed firmware.
+    goal_scope_history: tuple[dict, ...] = ()
 
     def get(self, name, default=None):
         item = self.values.get(name)
@@ -106,7 +110,8 @@ class DaqTaskContext:
                 'active_capabilities': list(self.active_capabilities),
                 'grounded_scope': copy.deepcopy(self.grounded_scope),
                 'setup_statement': (asdict(self.setup_statement)
-                                    if self.setup_statement else None)}
+                                    if self.setup_statement else None),
+                'goal_scope_history': copy.deepcopy(list(self.goal_scope_history))}
 
     @classmethod
     def from_checkpoint(cls, checkpoint):
@@ -135,9 +140,28 @@ class DaqTaskContext:
         setup = (UserAssertion(raw_setup['value'], raw_setup['origin_turn'],
                                _certainty(raw_setup.get('certainty', 'asserted')))
                  if raw_setup is not None else None)
+        raw_history = checkpoint.get('goal_scope_history', [])
+        if (not isinstance(raw_history, list)
+                or len(raw_history) > _GOAL_SCOPE_HISTORY_LIMIT):
+            raise ValueError('daq_goal_scope_history_invalid')
+        scope_history = []
+        for item in raw_history:
+            if (not isinstance(item, dict)
+                    or set(item) != {'field', 'value', 'origin_turn',
+                                     'authority', 'certainty'}
+                    or not isinstance(item['field'], str)
+                    or not re.fullmatch(r'[a-z][a-z0-9_]{0,63}', item['field'])
+                    or not _scope_value_safe(item['value'])
+                    or not isinstance(item['origin_turn'], int)
+                    or not 0 < item['origin_turn'] <= int(checkpoint['turn'])
+                    or item['authority'] != 'user_supplied'
+                    or item['certainty'] not in {'asserted', 'hypothesis'}):
+                raise ValueError('daq_goal_scope_history_invalid')
+            scope_history.append(copy.deepcopy(item))
         return cls(str(checkpoint['topic_id']), int(checkpoint['turn']), values,
                    tuple(checkpoint.get('attempted_steps', [])),
-                   tuple(checkpoint.get('active_capabilities', [])), grounded, setup)
+                   tuple(checkpoint.get('active_capabilities', [])), grounded, setup,
+                   tuple(scope_history))
 
     def tool_context(self):
         return {'authority': 'user_supplied_only', **self.to_checkpoint()}
@@ -151,9 +175,24 @@ class TurnPlan:
     planning_status: str
     context_note: str
     request_schema: DaqRequestSchema | None = None
+    invalidated_fields: tuple[dict[str, str], ...] = ()
+    goal_scope_lineage: dict[str, dict] = field(default_factory=dict)
 
     def evidence_requirements(self):
         return {'requirements': copy.deepcopy(self.requirements)}
+
+    def field_lineage(self) -> dict[str, dict]:
+        return {key: {
+            'value': copy.deepcopy(item.value),
+            'origin_turn': item.origin_turn,
+            'authority': item.authority,
+            'certainty': item.certainty,
+            'use': ('current_turn' if item.origin_turn == self.context.turn
+                    else 'carried_from_prior_turn'),
+        } for key, item in self.context.values.items()}
+
+    def goal_field_lineage(self) -> dict[str, dict]:
+        return copy.deepcopy(self.goal_scope_lineage)
 
 
 def explicit_topic_switch(message: str) -> bool:
@@ -164,6 +203,199 @@ def _certainty(value):
     if value not in {'asserted', 'hypothesis'}:
         raise ValueError('daq_context_certainty_invalid')
     return value
+
+
+def _scope_value_safe(value):
+    return ((isinstance(value, str) and 0 < len(value) <= 128)
+            or (type(value) is int and -10_000_000_000 <= value <= 10_000_000_000)
+            or type(value) is bool
+            or (type(value) is list and 0 < len(value) <= 8
+                and all(isinstance(item, str) and 0 < len(item) <= 128
+                        for item in value)))
+
+
+def _scope_key(name, value):
+    if isinstance(value, str):
+        normalized = re.sub(r'\s+', '', value.casefold().replace('×', 'x'))
+        if name.endswith('_version') and re.match(r'^v\d', normalized):
+            normalized = normalized[1:]
+        value = normalized
+    return json.dumps([name, value], ensure_ascii=False, sort_keys=True)
+
+
+def _scope_cue_in_message(name, value, message):
+    """Mark provenance only when the current user's words support the cue."""
+    if not _scope_value_safe(value):
+        return False
+    # These are provenance aliases for the schema's bounded selector values.
+    # They do not authorize a product fact or a software support conclusion.
+    if name == 'language' and value == 'cpp':
+        return bool(re.search(r'(?<![A-Za-z0-9_])C\+\+(?![A-Za-z0-9_])|\bC plus plus\b',
+                              message, re.I))
+    if name == 'feature' and isinstance(value, str):
+        feature_cues = {
+            'multi_device_sync_mode_check_and_set':
+                r'多设备.{0,8}主从同步|主从同步.{0,8}(?:模式|示例)|'
+                r'multi.device.{0,12}sync',
+            'master_slave_sync': r'主从同步|master.slave.sync',
+            'network_device_enumeration': r'网络设备枚举|network.device.enumeration',
+            'magnetometer': r'磁力计|magnetometer',
+            'image_requirements': r'摄像头成像|成像(?:质量|要求)|image.requirements?',
+        }
+        if value in feature_cues:
+            return bool(re.search(feature_cues[value], message, re.I))
+    if name == 'task' and isinstance(value, str):
+        task_cues = {
+            'synchronized_recording': r'同步(?:录制|保存|落盘|采集)|'
+                                      r'synchroni[sz]ed.recording',
+            'sync_recording': r'同步(?:录制|保存|落盘|采集)|'
+                              r'synchroni[sz]ed.recording',
+            'recording_state': r'录制状态(?:回调)?|recording.state',
+            'recording_state_delete': r'删(?:除|掉).{0,6}录制状态|'
+                                      r'(?:delete|clear).{0,12}recording.state',
+            'firmware_upgrade': r'固件.{0,8}升级|升级(?:步骤|流程|固件)|'
+                                r'firmware.{0,8}(?:upgrade|update)',
+        }
+        if value in task_cues:
+            return bool(re.search(task_cues[value], message, re.I))
+    if name == 'steps' and value == 'stop_recording':
+        return bool(re.search(r'停止(?:录制|后)|停录|stop.recording', message, re.I))
+    if name == 'indicators' and isinstance(value, str):
+        indicator_cues = {
+            'led_state': r'灯态|指示灯|[红绿蓝黄]灯',
+            'green_led': r'绿灯|green.led',
+            'voice_prompt': r'语音|播报|(?:听到|听见).{0,12}[“"「]?(?:数据已保存|录制已停止)',
+        }
+        if value in indicator_cues:
+            return bool(re.search(indicator_cues[value], message, re.I))
+    if name == 'per_port' and type(value) is bool:
+        return bool(value and re.search(r'每(?:个|路)?口|单(?:个|路)?口|单口|单路', message))
+    if name == 'standalone' and type(value) is bool:
+        return bool(value and re.search(r'单机|独立|脱机|不(?:连接|接)(?:电脑|主机)', message))
+    if name == 'host_connection' and value == 'none':
+        return bool(re.search(r'不(?:连接|接)(?:电脑|手机|主机|PC)|无需(?:电脑|手机|主机|PC)|脱机',
+                              message, re.I))
+    if name == 'host_connection' and value in {'computer', 'pc'}:
+        return bool(re.search(r'(?<!不)(?:接|连接)(?:到|上)?(?:电脑|主机|PC)|'
+                              r'(?:通过|经由?)\s*(?:电脑|主机|PC)|'
+                              r'\b(?:on|via|through)\s+(?:a\s+)?PC\b',
+                              message, re.I))
+    if name == 'recording_mode' and value == 'local_tf_card':
+        return bool(re.search(r'(?:本机|单机|本地|独立).{0,12}(?:TF|SD|存储)\s*卡|'
+                              r'(?:TF|SD|存储)\s*卡.{0,12}(?:本机|单机|本地|独立)',
+                              message, re.I))
+    if type(value) is list:
+        return bool(value) and all(_scope_cue_in_message(name, item, message)
+                                   for item in value)
+    if name == 'wristcam_count' and type(value) is int:
+        chinese = {1: '一', 2: '[两二]', 3: '三', 4: '四'}.get(value, '')
+        numeral = rf'(?:{value}|{chinese})' if chinese else str(value)
+        return bool(re.search(
+            rf'{numeral}\s*(?:台|个)\s*WristCam|'
+            rf'WristCam\s*{numeral}\s*(?:台|个)', message, re.I))
+    if name in {'simultaneous_port_count', 'simultaneous_camera_count'} \
+            and type(value) is int:
+        chinese = {1: '一', 2: '[两二]', 3: '三', 4: '四',
+                   5: '五', 6: '六', 7: '七', 8: '八'}.get(value, '')
+        numeral = rf'(?:{value}|{chinese})' if chinese else str(value)
+        if name == 'simultaneous_port_count':
+            return bool(re.search(
+                rf'(?<!\d){numeral}\s*(?:个|路)?(?:口|端口)', message))
+        return bool(re.search(
+            rf'(?<!\d){numeral}\s*(?:颗|个|路|台)\s*'
+            rf'(?:RGB\s*)?(?:相机|摄像头|RGB)', message, re.I))
+    if type(value) is bool:
+        return False
+    if type(value) is int:
+        return bool(re.search(rf'(?<!\d){value}(?!\d)', message))
+    asked = re.sub(r'\s+', '', message.casefold().replace('×', 'x'))
+    token = re.sub(r'\s+', '', value.casefold().replace('×', 'x'))
+    return bool(token and token in asked)
+
+
+def _goal_scope_provenance(message, schema, old, turn, switched):
+    # A switch invalidates the active setup, but an explicit comparison or
+    # return can still refer to the earlier user's exact words. Keep those
+    # audit cues without treating them as verified product evidence.
+    return_to_prior = bool(re.search(
+        r'回到|返回(?:刚才|之前|前面)|'
+        r'综合.{0,12}(?:两条|线索|前面|上述)|'
+        r'结合.{0,12}(?:两条|线索|前面|上述)|两者|二者', message))
+    old_history = list(copy.deepcopy(old.goal_scope_history))
+    # Preserve the bounded audit archive across topic switches. An ordinary
+    # follow-up may reuse only cues from its active topic; explicit return or
+    # synthesis may refer to older user words without reviving old grounding.
+    history = old_history
+    active_start = int(old.topic_id.removeprefix('topic_')) if re.fullmatch(
+        r'topic_\d+', old.topic_id) else 1
+    eligible = (old_history if return_to_prior else
+                [item for item in old_history
+                 if not switched and item['origin_turn'] >= active_start])
+    prior = {_scope_key(item['field'], item['value']): item for item in eligible}
+    last_by_field = {}
+    for item in old_history:
+        last_by_field[item['field']] = item
+    lineage: dict[str, dict] = {}
+    changed: dict[str, object] = {}
+
+    # A schema model can omit a selector on the first turn and add it on a
+    # follow-up. Retain only bounded cues stated in the user's own words, so
+    # later goal provenance does not depend on that first schema shape.
+    for name, value in (
+        ('feature', 'multi_device_sync_mode_check_and_set'),
+        ('feature', 'master_slave_sync'),
+        ('task', 'recording_state'),
+    ):
+        if _scope_cue_in_message(name, value, message):
+            item = {'field': name, 'value': value, 'origin_turn': turn,
+                    'authority': 'user_supplied', 'certainty': 'asserted'}
+            changed[_scope_key(name, value)] = item
+            history.append(item)
+
+    def locate(name, value):
+        if _scope_cue_in_message(name, value, message):
+            item = {'field': name, 'value': copy.deepcopy(value),
+                    'origin_turn': turn, 'authority': 'user_supplied',
+                    'certainty': 'asserted'}
+            if _scope_value_safe(value):
+                key = _scope_key(name, value)
+                if key not in changed:
+                    changed[key] = item
+                    history.append(item)
+            return {key: copy.deepcopy(item[key]) for key in (
+                'value', 'origin_turn', 'authority', 'certainty')} | {'use': 'current_turn'}
+        item = prior.get(_scope_key(name, value)) if _scope_value_safe(value) else None
+        if item is not None:
+            return {key: copy.deepcopy(item[key]) for key in (
+                'value', 'origin_turn', 'authority', 'certainty')} | {
+                    'use': 'carried_from_prior_turn'}
+        return {'value': copy.deepcopy(value), 'origin_turn': None,
+                'authority': 'schema_unattributed', 'certainty': 'unknown',
+                'use': 'unattributed'}
+
+    if schema is not None:
+        for goal in schema.goals:
+            if goal.kind != 'product':
+                continue
+            fields = {'entities': [locate('entity', name) for name in goal.entities]}
+            for name, value in goal.condition_map().items():
+                fields[name] = locate(name, value)
+            lineage[goal.id] = fields
+    invalidated = []
+    if switched:
+        invalidated = [{'field': name, 'reason': 'topic_switch'}
+                       for name in sorted(last_by_field)]
+    else:
+        current_by_field = {}
+        for item in changed.values():
+            current_by_field.setdefault(item['field'], set()).add(
+                _scope_key(item['field'], item['value']))
+        for name, keys in current_by_field.items():
+            if (len(keys) == 1 and name in last_by_field
+                    and next(iter(keys)) != _scope_key(
+                        name, last_by_field[name]['value'])):
+                invalidated.append({'field': name, 'reason': 'user_correction'})
+    return lineage, tuple(history[-_GOAL_SCOPE_HISTORY_LIMIT:]), invalidated
 
 
 def _extract(message):
@@ -553,6 +785,7 @@ def prepare_turn(message: str, *, previous=None, updates=None, topic_switch=None
                     'id': 'req_' + goal.id, 'goal_id': goal.id,
                     'capability': goal.capability, 'critical': True,
                     'status': 'unknown', 'evidence_class': 'governed_required',
+                    'delivery_required': goal.capability != 'resolve_entity',
                     **goal_scope,
                     'conditions_authority': ('platform_context_unverified' if used_hints
                                              and (goal.capability not in {
@@ -591,6 +824,9 @@ def prepare_turn(message: str, *, previous=None, updates=None, topic_switch=None
                 'source_ids': ids, 'evidence_class': 'user_evidence_required',
             })
     planned = tuple(dict.fromkeys(item['capability'] for item in requirements))
+    goal_lineage, scope_history, scope_invalidated = _goal_scope_provenance(
+        message, request_schema, old, turn, switched)
+    context = replace(context, goal_scope_history=scope_history)
     note = 'DAQ session context: user declarations only; not verified product facts.\n' + json.dumps(context.tool_context(), ensure_ascii=False, sort_keys=True)
     if request_schema is not None:
         note += '\nValidated request goals: ' + json.dumps({
@@ -612,4 +848,24 @@ def prepare_turn(message: str, *, previous=None, updates=None, topic_switch=None
                  'fine texture, noise or compression artifacts. For a visibility-only '
                  'question, lead with visible content; mention missing product attribution '
                  'only if it matters to the question.')
-    return TurnPlan(context, requirements, planned, status, note, request_schema)
+    invalidated = []
+    for key, prior in old.values.items():
+        current = context.values.get(key)
+        if current is None:
+            reason = ('topic_switch' if switched else
+                      'user_cleared' if key in incoming and incoming[key] is None else
+                      'selector_invalidated' if key in _IDENTITY_SELECTOR_KEYS else
+                      'context_invalidated')
+        elif current.origin_turn == turn and current.value != prior.value:
+            reason = 'user_correction'
+        else:
+            continue
+        invalidated.append({'field': key, 'reason': reason})
+    for item in scope_invalidated:
+        if item not in invalidated:
+            invalidated.append(item)
+    if invalidated:
+        note += '\nInvalidated prior user fields: ' + json.dumps(
+            invalidated, ensure_ascii=False, sort_keys=True)
+    return TurnPlan(context, requirements, planned, status, note, request_schema,
+                    tuple(invalidated), goal_lineage)

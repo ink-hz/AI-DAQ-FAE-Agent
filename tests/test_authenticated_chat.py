@@ -16,6 +16,37 @@ from tests.test_platform_identity import CODE, FakePlatform, environment as iden
 pytest_plugins = ('tests.test_durable_state',)
 
 
+def test_role_or_release_rebinding_discards_old_reviewed_grounding_and_model_history():
+    from daq_fae.authenticated_chat import _prior_for_binding
+
+    previous = {'version': 3, 'turn': 1, 'topic_id': 'topic_1',
+                'values': {'sdk_version': {'value': '2.9.0', 'origin_turn': 1,
+                                           'authority': 'user_supplied',
+                                           'certainty': 'asserted'}},
+                'grounded_scope': {'entities': ['entity:private-product'],
+                                   'conditions': {}}}
+    history = [{'role': 'assistant', 'content': 'Old role-visible fact.'}]
+    retained, visible_history, invalidated, floor = _prior_for_binding(
+        previous, history, prior_release='old-release', prior_role='internal_fae',
+        current_release='new-release', current_role='channel', history_floor=0)
+    assert retained['values']['sdk_version']['value'] == '2.9.0'
+    assert retained['grounded_scope'] == {}
+    assert visible_history == []
+    assert {item['reason'] for item in invalidated} == {
+        'knowledge_release_changed', 'knowledge_role_changed'}
+    assert floor == len(history)
+    assert previous['grounded_scope']['entities'] == ['entity:private-product']
+
+    resumed_history = [*history, {'role': 'user', 'content': '新问题'},
+                       {'role': 'assistant', 'content': '新发布答案'}]
+    same, same_history, same_invalidations, same_floor = _prior_for_binding(
+        retained, resumed_history, prior_release='new-release', prior_role='channel',
+        current_release='new-release', current_role='channel', history_floor=floor)
+    assert same is retained and not same_invalidations
+    assert same_floor == floor
+    assert same_history == resumed_history[floor:]
+
+
 def test_authenticated_stage_lifecycle_is_closed_and_persisted(
     tmp_path, monkeypatch, pg_database,
 ):
@@ -88,6 +119,15 @@ def test_authenticated_service_question_uses_service_contract_without_product_se
             yield {'type': 'stop', 'stop_reason': 'tool_use', 'usage': None}
 
     adapter = ServiceAdapter()
+    from daq_fae.authenticated_chat import LoopRuntime
+    original_init = LoopRuntime.__init__
+    policy_questions = []
+
+    def capture_policy(self, *args, **kwargs):
+        policy_questions.append(kwargs['evidence_policy'].question)
+        original_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(LoopRuntime, '__init__', capture_policy)
     conversations = Conversations()
     app = create_app(
         adapter=adapter, platform_client=FakePlatform(),
@@ -109,6 +149,7 @@ def test_authenticated_service_question_uses_service_contract_without_product_se
     assert '当前无法下结论' not in done['answer']
     assert adapter.calls.count('submit_daq_request_schema') == 1
     assert conversations.writes[0][1].stages
+    assert policy_questions == ['介绍一下你自己']
 
 
 def test_authenticated_setup_statement_clarifies_and_persists_without_loop(

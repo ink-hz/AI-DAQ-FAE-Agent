@@ -441,6 +441,47 @@ def test_viewer_connection_question_does_not_borrow_release_note_evidence():
         for source in result.sources)
 
 
+def test_source_checked_sdk_history_goal_returns_prior_note_without_support_claim():
+    if not ARCHIVE.is_dir():
+        pytest.skip('local ignored SDK originals unavailable')
+    catalog = SdkCatalog.load(DIRECTORY, ARCHIVE)
+    class Knowledge:
+        release_id = 'dev-main'
+        sdk_catalog = catalog
+        def records_for(self, role): return []
+        def sections_for(self, role): return []
+
+    question = '那能据这个示例说 UMI Finger 磁力计仍然可用吗？'
+    history = {'id': 'history', 'capability': 'search_knowledge',
+               'entities': ['UMI Finger'],
+               'conditions': {'sdk': 'OrbbecSDK', 'sdk_version': '2.9.0',
+                              'feature': 'magnetometer'}}
+    support = {'id': 'support', 'capability': 'check_software_support',
+               'entities': ['UMI Finger'],
+               'conditions': {'sdk': 'OrbbecSDK', 'sdk_version': '2.9.0',
+                              'sdk_release_date': '2026-09-29',
+                              'feature': 'magnetometer'}}
+    result = DaqToolBox(question=question, knowledge=Knowledge(),
+                        role='internal_fae',
+                        requirements=[history, support]).dispatch(
+                            'search_knowledge',
+                            {'query': 'UMI Finger magnetometer OrbbecSDK'})
+    assert result.status == 'ok'
+    assert {source['source_id'] for source in result.sources} == {
+        'daq-note-sdk-20260921', 'daq-note-sdk-20260923'}
+    assert result.content['matched_requirement_ids'] == ['history']
+    assert result.content['device_support'] == 'unknown'
+
+    older = {**support, 'conditions': {**support['conditions'],
+                                      'sdk_release_date': '2026-09-21'}}
+    unavailable = DaqToolBox(question=question, knowledge=Knowledge(),
+                             role='internal_fae',
+                             requirements=[history, older]).dispatch(
+                                 'search_knowledge',
+                                 {'query': 'UMI Finger magnetometer OrbbecSDK'})
+    assert unavailable.status == 'not_found'
+
+
 @pytest.mark.parametrize('question, query, expected', [
     ('桌面 EgoViewer v2.0.12 的日志提到 EGO 加两腕带首尾和分片对齐；'
      '能证明 EGO Pro + 两台 WristCam + HUB 在 Windows 11 同步落盘吗？',

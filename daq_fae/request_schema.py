@@ -1614,6 +1614,12 @@ class DaqRequestSchema:
                 # User-provided context is retained separately in the turn state.
                 raw = {**raw, 'entities': [], 'conditions': {}}
                 raw.pop('field', None)
+            if kind == 'attachment' and capability == 'search_attachments':
+                # Attachment selectors belong to the read call, not a product
+                # evidence goal. The actual question and attachment owner
+                # govern retrieval; model-added product conditions cannot
+                # make the whole follow-up fail schema validation.
+                raw = {**raw, 'conditions': {}}
             entities = raw.get('entities', [])
             if not isinstance(entities, list) or len(entities) > 6 or any(
                 not isinstance(entity, str) or not entity.strip() or
@@ -1722,6 +1728,14 @@ class DaqRequestSchema:
             conditions = _normalize_sdk_conditions(
                 capability, conditions, question + ' ' + prior_user_context,
                 sdk_catalog, current_question=question)
+            if (capability == 'check_software_support'
+                    and isinstance(conditions.get('sdk'), str)
+                    and _normalized(conditions['sdk']) not in _normalized(
+                        question + ' ' + prior_user_context)):
+                # A model cannot invent a named SDK for a compatibility
+                # request. A Java Wrapper question, for example, does not
+                # authorize a separate OrbbecSDK selector.
+                conditions.pop('sdk')
             if (capability == 'check_software_support'
                     and firmware_versions_compared_without_current(question)):
                 conditions.pop('firmware_version', None)
@@ -2338,14 +2352,68 @@ class DaqRequestSchema:
                              or conditions.get('feature') == 'audio_playback')):
                     goals.remove(goal)
                     ids.remove(goal.id)
+        libobkit_any_firmware = bool(
+            re.search(r'\blibobkit(?:\.so)?\b', question, re.I)
+            and re.search(r'(?:任意|任何|其他|不同|未配套|非配套)'
+                          r'[^。？！?；;\n]{0,20}固件|'
+                          r'固件[^。？！?；;\n]{0,20}'
+                          r'(?:上用|使用|兼容|支持)', question))
+        # A capture example and its package README are separate deliverables.
+        # The README can prove image binding for this exact package, while the
+        # device/firmware compatibility question remains unresolved.
+        if (isinstance(sdk_catalog, SdkCatalog)
+                and libobkit_any_firmware
+                and device_sdk_scope_matches_question(question)
+                and not re.search(r'\b[A-Za-z][A-Za-z0-9_-]*SDK\b|'
+                                  r'\b(?:OpenCV|EgoLowBle|EgoViewer)\b',
+                                  question, re.I)):
+            capture_rows = [row for row in sdk_catalog.records
+                if row.get('sdk_layer') == 'device_c'
+                and 'capture' in row.get('usage_tasks', [])
+                and row.get('source_refs')]
+            has_capture_goal = any(
+                goal.capability == 'sdk_evidence'
+                and goal.condition_map().get('sdk') == 'libobkit'
+                and goal.condition_map().get('task') == 'capture'
+                for goal in goals)
+            has_support_goal = any(
+                goal.capability == 'check_software_support'
+                and goal.condition_map().get('sdk') == 'libobkit'
+                for goal in goals)
+            requested_builds = set(re.findall(r'(?<!\d)20\d{6}(?!\d)', question))
+            scope_rows = [row for row in sdk_catalog.records
+                          if ((has_capture_goal and len(capture_rows) == 1
+                               and row.get('package') == capture_rows[0].get('package'))
+                              or (not has_capture_goal and has_support_goal
+                                  and (not requested_builds
+                                       or str(row.get('build')) in requested_builds)))
+                          and row.get('sdk_layer') == 'device_c'
+                          and 'sdk_scope' in row.get('usage_tasks', [])
+                          and 'image_binding' in row.get('topics', [])
+                          and any(str(ref.get('member', '')).endswith('/README.md')
+                                  for ref in row.get('source_refs', []))]
+            has_scope_goal = any(
+                goal.capability == 'sdk_evidence'
+                and goal.condition_map().get('sdk') == 'libobkit'
+                and goal.condition_map().get('task') == 'sdk_scope'
+                for goal in goals)
+            if ((has_capture_goal or has_support_goal)
+                    and not has_scope_goal and len(scope_rows) == 1):
+                scoped = {'sdk': 'libobkit', 'task': 'sdk_scope'}
+                payload = ['product', 'sdk_evidence', [], None, scoped]
+                goal_id = 'goal_' + hashlib.sha256(json.dumps(
+                    payload, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:16]
+                if goal_id not in ids:
+                    ids.add(goal_id)
+                    goals.append(DaqGoal(
+                        goal_id, 'product', 'sdk_evidence', (), None,
+                        tuple(sorted(scoped.items())), ()))
+                    if len(goals) > 16:
+                        raise SchemaExtractionError('schema_goals_expansion_limit')
         # Package image binding is not proof that the SDK works on every
         # firmware of a named device. Preserve the compatibility obligation
         # when a model supplied only the README/package goal.
-        if (re.search(r'\blibobkit(?:\.so)?\b', question, re.I)
-                and re.search(r'(?:任意|任何|其他|不同|未配套|非配套)'
-                              r'[^。？！?；;\n]{0,20}固件|'
-                              r'固件[^。？！?；;\n]{0,20}'
-                              r'(?:上用|使用|兼容|支持)', question)
+        if (libobkit_any_firmware
                 and any(goal.capability == 'sdk_evidence'
                         and goal.condition_map().get('sdk') == 'libobkit'
                         for goal in goals)
@@ -2805,8 +2873,11 @@ class DaqRequestSchema:
                         str(goal.condition_map().get(key, '')), re.I)
                         for key in ('task', 'feature'))
                     for goal in goals)):
-            scoped = {'sdk': 'OrbbecSDK', 'api': 'setEgoStateCallback',
+            scoped = {'api': 'setEgoStateCallback',
                       'task': 'recording_state_delete'}
+            if re.search(r'(?<![A-Za-z0-9_])OrbbecSDK(?![A-Za-z0-9_])',
+                         question + ' ' + prior_user_context, re.I):
+                scoped['sdk'] = 'OrbbecSDK'
             payload = ['product', 'sdk_evidence', [], None, scoped]
             goal_id = 'goal_' + hashlib.sha256(json.dumps(
                 payload, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:16]
@@ -2959,6 +3030,49 @@ class DaqRequestSchema:
                 raise SchemaExtractionError('schema_goal_normalization_collision')
             goals = scoped_by_peer
             ids = {goal.id for goal in goals}
+        # A family FOV question may leave its SKU unselected or explicitly
+        # compare several reviewed variants. Give each requested visible
+        # variant its own source-bound goal; an unqualified goal cannot match
+        # the scoped claims. A prior single-variant follow-up stays scoped to
+        # that prior selection rather than expanding to every family member.
+        if (knowledge is not None and hasattr(knowledge, 'verified_variant_scopes')
+                and ((not current_versions and not prior_versions)
+                     or len(current_versions) >= 2)):
+            expanded_goals = []
+            for goal in goals:
+                if (goal.kind != 'product' or goal.capability != 'lookup_spec'
+                        or goal.field not in {'horizontal_fov', 'vertical_fov',
+                                              'rgb_horizontal_fov', 'rgb_vertical_fov'}
+                        or len(goal.entities) != 1 or goal.condition_map()
+                        or goal.unmapped_condition_keys):
+                    expanded_goals.append(goal)
+                    continue
+                choices = knowledge.verified_variant_scopes(
+                    goal.entities[0], goal.field, role=role)
+                visible_variants = choices.get('resolution_variant', [])
+                variants = (sorted(current_versions) if current_versions
+                            else visible_variants)
+                if (set(choices) != {'resolution_variant'}
+                        or not set(variants) <= set(visible_variants)
+                        or not 2 <= len(variants) <= 4):
+                    expanded_goals.append(goal)
+                    continue
+                for variant in variants:
+                    scoped = {'resolution_variant': variant}
+                    payload = [goal.kind, goal.capability, sorted(goal.entities),
+                               goal.field, scoped]
+                    digest = hashlib.sha256(json.dumps(
+                        payload, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:16]
+                    expanded_goals.append(DaqGoal(
+                        'goal_' + digest, goal.kind, goal.capability,
+                        goal.entities, goal.field, tuple(scoped.items()),
+                        goal.unmapped_condition_keys, goal.critical))
+            if len(expanded_goals) > 16:
+                raise SchemaExtractionError('schema_goals_expansion_limit')
+            if len({goal.id for goal in expanded_goals}) != len(expanded_goals):
+                raise SchemaExtractionError('schema_goal_normalization_collision')
+            goals = expanded_goals
+            ids = {goal.id for goal in goals}
         for goal in goals:
             if goal.kind == 'product' and goal.capability == 'lookup_spec' \
                     and 'resolution_variant' not in goal.condition_map() \
@@ -3032,13 +3146,20 @@ class DaqRequestSchema:
         if (isinstance(sdk_catalog, SdkCatalog)
                 and sdk_catalog.release_notes is not None
                 and not any(goal.capability == 'search_knowledge' for goal in goals)
-                and re.search(r'仍可用|还能用|已恢复|是否可用|still available|restored',
+                and re.search(r'仍(?:然)?可用|还能用|已恢复|是否可用|still available|restored',
                               question, re.I)):
+            source_words = question
+            if (re.search(r'这个示例|该示例|this example', question, re.I)
+                    and candidate.get('topic_switch') is not True):
+                # An explicit follow-up may refer to the source file and
+                # build named in earlier user turns. The history is a cue,
+                # never a product-support fact.
+                source_words += '\n' + prior_user_context
             stems = {match.group(1).casefold() for match in re.finditer(
                 r'\b([A-Za-z][A-Za-z0-9_-]*)\.(?:cpp|hpp|c|h)\b',
-                question, re.I)}
+                source_words, re.I)}
             builds = {re.sub(r'\D', '', match.group()) for match in re.finditer(
-                r'(?<!\d)20\d{2}[-/]?\d{2}[-/]?\d{2}(?!\d)', question)}
+                r'(?<!\d)20\d{2}[-/]?\d{2}[-/]?\d{2}(?!\d)', source_words)}
             if len(stems) == len(builds) == 1:
                 stem, build = next(iter(stems)), next(iter(builds))
                 for support in goals:
@@ -3050,12 +3171,16 @@ class DaqRequestSchema:
                     entity = support.entities[0]
                     history = [row for row in sdk_catalog.release_notes.records
                                if row.get('family', '').casefold() == 'orbbecsdk'
+                               and role in row.get('view_roles', [])
                                and row.get('build', '') < build
                                and stem in row.get('topics', [])
                                and _normalized(entity) in _normalized(
                                    row.get('title', '') + row.get('answer', ''))]
                     if history:
                         conditions = {'sdk': 'OrbbecSDK', 'feature': stem}
+                        sdk_version = support.condition_map().get('sdk_version')
+                        if isinstance(sdk_version, str):
+                            conditions['sdk_version'] = sdk_version
                         payload = ['product', 'search_knowledge', [entity], None,
                                    conditions]
                         digest = hashlib.sha256(json.dumps(
@@ -3542,6 +3667,12 @@ def extract_request_schema(question: str, *, adapter, prior_user_context: str = 
                       '请按每个产品分别列 `resolve_entity` goal，只保留该产品实际适用的版本条件。'
                       '现在只调用结构化工具一次。'
                       if str(exc) == 'schema_multi_entity_identity_conditions_ambiguous' else
+                      '上一次把产品实体或产品条件放进非产品目标。附件目标只用 '
+                      '`attachment/search_attachments`，不填实体和条件；'
+                      '日志中的设备、固件及 SDK 只是用户线索，官方兼容结论须另列 '
+                      '`product/check_software_support` 目标。'
+                      '现在只重新调用结构化工具一次。'
+                      if str(exc) == 'schema_goal_scope_invalid' else
                       '上一次结构化结果未通过校验（' + str(exc) + '）。请仅重新调用 '
                       '`submit_daq_request_schema` 一次。产品实体只能逐字来自本轮问题或'
                       '提供的用户历史；无法接地的实体请省略。不要补产品事实。')

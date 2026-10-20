@@ -59,6 +59,116 @@ def test_family_phrase_can_query_each_explicit_variant_without_crossing_to_pro()
     assert unresolved.content['reason'] == 'variant_selector_required'
 
 
+def test_unselected_family_fov_creates_one_source_bound_goal_per_visible_variant():
+    from daq_fae.request_schema import DaqRequestSchema
+    from daq_fae.task_context import prepare_turn
+
+    question = 'EGO 双目的水平视场角是多少？我没说分辨率版本。'
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [{
+            'kind': 'product', 'capability': 'lookup_spec',
+            'entities': ['EGO 双目'], 'field': 'horizontal_fov',
+            'conditions': {},
+        }],
+    }, knowledge=FamilyKnowledge(), role='internal_fae')
+    spec_goals = [goal for goal in schema.goals
+                  if goal.capability == 'lookup_spec']
+    assert {goal.condition_map().get('resolution_variant') for goal in spec_goals} == {
+        '1600x1200', '1920x1200'}
+    requirements = prepare_turn(question, request_schema=schema).requirements
+    box = DaqToolBox(question=question, knowledge=FamilyKnowledge(),
+                     role='internal_fae', requirements=requirements)
+    for variant in ('1600x1200', '1920x1200'):
+        result = box.dispatch('lookup_spec', {
+            'entity': 'EGO 双目', 'field': 'horizontal_fov',
+            'conditions': {'resolution_variant': variant},
+        })
+        assert result.status == 'ok'
+        matched = [item for item in requirements
+                   if item['id'] in result.content['matched_requirement_ids']]
+        assert len(matched) == 1
+        assert matched[0]['conditions']['resolution_variant'] == variant
+        assert result.content['requirement_source_ids'] == {
+            matched[0]['id']: ['claim:fov-' + variant[:4]]}
+
+
+def test_explicit_two_variant_comparison_repairs_unscoped_fov_candidate():
+    from daq_fae.request_schema import DaqRequestSchema
+    from daq_fae.task_context import prepare_turn
+
+    question = 'EGO 双目 1600×1200 和 1920×1200 两个版本的水平视场角分别是多少？'
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [{
+            'kind': 'product', 'capability': 'lookup_spec',
+            'entities': ['EGO 双目'], 'field': 'horizontal_fov',
+            'conditions': {},
+        }],
+    }, knowledge=FamilyKnowledge(), role='internal_fae')
+    specs = [goal for goal in schema.goals if goal.capability == 'lookup_spec']
+    assert {goal.condition_map().get('resolution_variant') for goal in specs} == {
+        '1600x1200', '1920x1200'}
+    requirements = prepare_turn(question, request_schema=schema).requirements
+    box = DaqToolBox(question=question, knowledge=FamilyKnowledge(),
+                     role='internal_fae', requirements=requirements)
+    for variant in ('1600x1200', '1920x1200'):
+        result = box.dispatch('lookup_spec', {
+            'entity': 'EGO 双目', 'field': 'horizontal_fov',
+            'conditions': {'resolution_variant': variant},
+        })
+        assert len(result.content['matched_requirement_ids']) == 1
+
+
+def test_prior_single_variant_does_not_expand_current_unscoped_goal_to_all():
+    from daq_fae.request_schema import DaqRequestSchema
+
+    schema = DaqRequestSchema.from_candidate(
+        '那水平视场角呢？', {
+            'confidence': 'high', 'goals': [{
+                'kind': 'product', 'capability': 'lookup_spec',
+                'entities': ['EGO 双目'], 'field': 'horizontal_fov',
+                'conditions': {},
+            }],
+        }, knowledge=FamilyKnowledge(), role='internal_fae',
+        prior_user_context='我的 EGO 双目是 1600×1200 版。')
+    assert len([goal for goal in schema.goals
+                if goal.capability == 'lookup_spec']) == 1
+
+
+def test_unselected_fov_does_not_expand_from_wrong_product_or_hidden_role():
+    from daq_fae.request_schema import DaqRequestSchema
+
+    class Restricted(FamilyKnowledge):
+        def records_for(self, role):
+            return super().records_for('internal_fae') if role == 'internal_fae' else []
+
+        def verified_variant_scopes(self, entity, field, *, role):
+            if role != 'internal_fae' or entity != 'EGO 双目':
+                return {}
+            return super().verified_variant_scopes(entity, field, role=role)
+
+    question = 'EGO Pro 的水平视场角是多少？'
+    schema = DaqRequestSchema.from_candidate(question, {
+        'confidence': 'high', 'goals': [{
+            'kind': 'product', 'capability': 'lookup_spec',
+            'entities': ['EGO Pro'], 'field': 'horizontal_fov',
+            'conditions': {},
+        }],
+    }, knowledge=Restricted(), role='internal_fae')
+    assert len(schema.goals) == 1
+    assert schema.goals[0].condition_map() == {}
+
+    hidden = DaqRequestSchema.from_candidate(
+        'EGO 双目的水平视场角是多少？', {
+            'confidence': 'high', 'goals': [{
+                'kind': 'product', 'capability': 'lookup_spec',
+                'entities': ['EGO 双目'], 'field': 'horizontal_fov',
+                'conditions': {},
+            }],
+        }, knowledge=Restricted(), role='channel')
+    assert len(hidden.goals) == 1
+    assert hidden.goals[0].condition_map() == {}
+
+
 def test_generic_family_identity_goal_is_satisfied_by_visible_variant_set():
     box = DaqToolBox(
         question='泛称 EGO 是否只支持 1600×1200？',

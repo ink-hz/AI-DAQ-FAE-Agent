@@ -1,7 +1,7 @@
 {
   "repository": "AI-FAE-Agent",
-  "revision": "4f453b77073005d24d9f07f36016b7172009443a",
+  "revision": "6bad94591dc4c40c29ad054b526c0ec526478607",
   "deployed_basis_revision": "a6234f6be546efebb230ffc74bd9a00bebdc2814",
-  "source": "tracked git archive of src/ and requirements.txt at camera origin/master",
-  "purpose": "exact reviewed shared runtime snapshot, including EvidencePolicy, trusted agent identity, scoped browser session cookie, Agent-scoped attachment archive and deletion, authenticated-turn transaction hook, Platform task failure projection, structured task adapter hook, and preserved vision gateway diagnostics; replace with a protected pinned dependency when branch protection is verified"
+  "source": "tracked git archive of src/ and requirements.txt at camera commit 6bad94591dc4c40c29ad054b526c0ec526478607, currently reachable from origin/feat/daq-delivery-units-20261020",
+  "purpose": "exact reviewed shared runtime snapshot with the opt-in DAQ answer delivery contract; camera defaults remain unchanged; replace with a protected pinned dependency when branch protection is verified"
 }

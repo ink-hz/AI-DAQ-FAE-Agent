@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import re
+import tempfile
 from copy import deepcopy
 from datetime import date
 from pathlib import Path
@@ -21,6 +22,7 @@ from .release_readiness import _lock, _switch
 
 MODE = 'owner_directed_source_checked_v1'
 MODE_PRO_V2 = 'owner_directed_source_checked_v2'
+MODE_RUNTIME_REBIND = 'owner_directed_runtime_rebind_v3'
 PRO_BASELINE_RELEASE = 'ee9083f9891630f6727766c276e6dc123ab0b6b79641dada133159871eeaacdb'
 PRO_BASELINE_COUNT = 25
 PRO_RECORD_FINGERPRINTS = {
@@ -494,6 +496,10 @@ def stage_operator_pro_release(root: Path, bundle: dict, archive: Path,
 def verify_operator_manifest(manifest: dict, *, runtime_release: str, upstream_sha: str) -> None:
     """Recheck immutable scope and build identity at activation and startup."""
     evidence = manifest.get('review', {}).get('operator_release', {})
+    if evidence.get('mode') == MODE_RUNTIME_REBIND:
+        _verify_runtime_rebind_manifest(
+            None, manifest, runtime_release=runtime_release, upstream_sha=upstream_sha)
+        return
     if evidence.get('mode') == MODE_PRO_V2:
         _verify_pro_manifest(manifest, runtime_release=runtime_release,
                              upstream_sha=upstream_sha)
@@ -614,11 +620,146 @@ def _verify_pro_manifest(manifest: dict, *, runtime_release: str,
                  'ego_resolution_conflict_negative'}, 'dev_identity')
 
 
+def _read_rebind_origin(root: Path, release_id: str) -> dict:
+    """Read an archived, content-addressed manifest without rebinding old code."""
+    _require(isinstance(release_id, str) and _SHA.fullmatch(release_id),
+             'rebind_origin')
+    directory = root / 'releases' / release_id
+    path = directory / 'manifest.json'
+    _require(not directory.is_symlink() and directory.is_dir()
+             and not path.is_symlink() and path.is_file(), 'rebind_origin')
+    raw = path.read_bytes()
+    _require(hashlib.sha256(raw).hexdigest() == release_id, 'rebind_origin')
+    origin = json.loads(raw)
+    _require(origin.get('review', {}).get('operator_release', {}).get('mode')
+             in {MODE_PRO_V2, MODE_RUNTIME_REBIND}, 'rebind_origin')
+    return origin
+
+
+def _rebind_content(manifest: dict) -> dict:
+    return {key: value for key, value in manifest.items()
+            if key not in {'review', 'previous_release'}}
+
+
+def _valid_runtime_rebind_evidence(evidence: object) -> bool:
+    if not isinstance(evidence, dict) or set(evidence) != {
+        'reviewer', 'dev_preview_code_sha256', 'single_results_sha256',
+        'single_review_sha256', 'single_reviewed_turns', 'single_unrun_cases',
+        'focus_results_sha256', 'focus_review_sha256', 'focus_reviewed_turns',
+        'quality_gate_status',
+    }:
+        return False
+    return (evidence['reviewer'] in {'Codex', 'human_fae'}
+            and all(isinstance(evidence[key], str) and _SHA.fullmatch(evidence[key])
+                    for key in ('dev_preview_code_sha256', 'single_results_sha256',
+                                'single_review_sha256', 'focus_results_sha256',
+                                'focus_review_sha256'))
+            and type(evidence['single_reviewed_turns']) is int
+            and evidence['single_reviewed_turns'] > 0
+            and type(evidence['single_unrun_cases']) is int
+            and evidence['single_unrun_cases'] >= 0
+            and type(evidence['focus_reviewed_turns']) is int
+            and evidence['focus_reviewed_turns'] > 0
+            and evidence['quality_gate_status'] == 'user_directed_partial_no_repeat')
+
+
+def _verify_runtime_rebind_manifest(root: Path | None, manifest: dict, *,
+                                    runtime_release: str, upstream_sha: str) -> None:
+    evidence = manifest.get('review', {}).get('operator_release', {})
+    identity = evidence.get('runtime', {})
+    _require(evidence.get('mode') == MODE_RUNTIME_REBIND
+             and evidence.get('authorization_ref') ==
+             'project-owner-direction-2026-10-20-no-repeat-release'
+             and isinstance(evidence.get('origin_release'), str)
+             and _SHA.fullmatch(evidence['origin_release'])
+             and manifest.get('previous_release') == evidence['origin_release']
+             and evidence.get('origin_content_sha256') == digest(_rebind_content(manifest))
+             and evidence.get('daq_code_sha256') == _code_sha256()
+             and evidence.get('prompt_sha256') == _prompt_sha256()
+             and _valid_runtime_rebind_evidence(evidence.get('dev_evidence')),
+             'rebind_identity')
+    _require(identity.get('release') == runtime_release
+             and identity.get('upstream_sha') == upstream_sha
+             and identity.get('tasks_enabled') is False
+             and identity.get('generic_trace_enabled') is False,
+             'runtime_identity')
+    if root is not None:
+        origin = _read_rebind_origin(root, evidence['origin_release'])
+        _require(_rebind_content(manifest) == _rebind_content(origin),
+                 'rebind_content')
+
+
+def stage_operator_runtime_rebind(root: Path, *, origin_release: str,
+                                  runtime_release: str, upstream_sha: str,
+                                  evidence: dict) -> str:
+    """Rebind an unchanged reviewed release to DAQ code; preserve the partial gate."""
+    _require(_valid_runtime_rebind_evidence(evidence), 'rebind_dev_evidence')
+    _require(isinstance(upstream_sha, str) and re.fullmatch(r'[0-9a-f]{40}', upstream_sha)
+             and isinstance(runtime_release, str) and runtime_release.startswith('daq-')
+             and not runtime_release.endswith('-dev'), 'runtime_identity')
+    active_path = root / 'active.json'
+    _require(not active_path.is_symlink() and active_path.is_file()
+             and json.loads(active_path.read_text()).get('release_id') == origin_release,
+             'rebind_active_origin')
+    origin = _read_rebind_origin(root, origin_release)
+    manifest = deepcopy(origin)
+    manifest['previous_release'] = origin_release
+    manifest['review'] = {
+        'reviewer': 'Codex', 'reviewed_at': date.today().isoformat(),
+        'dev_batch': 'candidate11-no-repeat-release',
+        'operator_release': {
+            'mode': MODE_RUNTIME_REBIND,
+            'authorization_ref': 'project-owner-direction-2026-10-20-no-repeat-release',
+            'origin_release': origin_release,
+            'origin_content_sha256': digest(_rebind_content(origin)),
+            'daq_code_sha256': _code_sha256(),
+            'prompt_sha256': _prompt_sha256(),
+            'runtime': {'release': runtime_release, 'upstream_sha': upstream_sha,
+                        'tasks_enabled': False, 'generic_trace_enabled': False},
+            'dev_evidence': deepcopy(evidence),
+        },
+    }
+    _verify_runtime_rebind_manifest(root, manifest,
+                                    runtime_release=runtime_release,
+                                    upstream_sha=upstream_sha)
+    raw = releases._json_bytes(manifest)
+    release_id = hashlib.sha256(raw).hexdigest()
+    releases_dir = releases._prepare_root(root)
+    destination = releases_dir / release_id
+    if destination.exists():
+        _require(destination.is_dir() and not destination.is_symlink()
+                 and (destination / 'manifest.json').read_bytes() == raw,
+                 'rebind_collision')
+        return release_id
+    stage = Path(tempfile.mkdtemp(prefix='.release-rebind-', dir=releases_dir))
+    try:
+        path = stage / 'manifest.json'
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)
+        with os.fdopen(descriptor, 'wb') as stream:
+            stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
+        stage.chmod(0o500)
+        os.replace(stage, destination)
+    finally:
+        if stage.exists():
+            stage.chmod(0o700)
+            for path in stage.iterdir():
+                path.chmod(0o600)
+                path.unlink()
+            stage.rmdir()
+    return release_id
+
+
 def _checked_operator(root: Path, release_id: str, *, runtime_release: str,
                       upstream_sha: str) -> dict:
     manifest, _ = releases._read_release(root, release_id)
     verify_operator_manifest(manifest, runtime_release=runtime_release,
                              upstream_sha=upstream_sha)
+    if manifest['review']['operator_release']['mode'] == MODE_RUNTIME_REBIND:
+        _verify_runtime_rebind_manifest(
+            root, manifest, runtime_release=runtime_release,
+            upstream_sha=upstream_sha)
     if manifest['review']['operator_release']['mode'] == MODE_PRO_V2:
         previous, _ = releases._read_release(root, manifest['previous_release'])
         origin, _ = releases._read_release(root, PRO_BASELINE_RELEASE)
@@ -667,6 +808,8 @@ def activate_operator_release(root: Path, release_id: str, *, observe) -> dict:
         manifest = _checked_operator(root, release_id,
                                      runtime_release=runtime['release'],
                                      upstream_sha=runtime['upstream_sha'])
+        _require(manifest['review']['operator_release']['mode'] != MODE_RUNTIME_REBIND,
+                 'coordinated_image_cutover_required')
         if manifest['review']['operator_release']['mode'] == MODE_PRO_V2:
             sdk_main = _active_sdk_notes_main_binding()
             _require(sdk_main is None or sdk_main == release_id,
@@ -684,6 +827,8 @@ def rollback_operator_release(root: Path, *, observe) -> dict:
         _require(active is not None and active['manifest'].get('previous_release'),
                  'previous_release_unavailable')
         current = active['manifest']
+        _require(current['review']['operator_release']['mode'] != MODE_RUNTIME_REBIND,
+                 'cross_runtime_image_restore_required')
         runtime = current['review']['operator_release']['runtime']
         _checked_operator(root, active['release_id'],
                           runtime_release=runtime['release'],

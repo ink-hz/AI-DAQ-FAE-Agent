@@ -4,7 +4,7 @@ from __future__ import annotations
 import copy
 import time
 import threading
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -38,6 +38,34 @@ from daq_fae.workflow import (StageLedger, prepare_workflow, allowed_tools_for,
                               context_clarification_done)
 from daq_fae.response_language import localize_answer
 from daq_fae.offline_adapter import OfflineAdapter
+
+
+def _prior_for_binding(previous, history, *, prior_release, prior_role,
+                       current_release, current_role, history_floor=0):
+    """Keep user assertions while dropping prior reviewed grounding on rebinding."""
+    reasons = []
+    try:
+        floor = int(history_floor)
+    except (TypeError, ValueError):
+        floor = len(history)
+        reasons.append('history_floor_invalid')
+    if floor < 0 or floor > len(history):
+        floor = len(history)
+        reasons.append('history_floor_invalid')
+    if prior_release != current_release:
+        reasons.append('knowledge_release_changed')
+    if prior_role != current_role:
+        reasons.append('knowledge_role_changed')
+    if not reasons:
+        return previous, history[floor:], (), floor
+    sanitized = copy.deepcopy(previous)
+    if isinstance(sanitized, dict):
+        sanitized['grounded_scope'] = {}
+    invalidated = tuple({'field': 'grounded_scope', 'reason': reason}
+                        for reason in reasons)
+    # Earlier assistant turns may contain facts that are not visible under the
+    # new role/release. The persisted history stays intact for audit and UI.
+    return sanitized, [], invalidated, len(history)
 
 
 def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
@@ -152,6 +180,21 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
         done = None
         calls = []
         stages = StageLedger(trace.trace_id)
+        previous = checkpoint.state.task_context if checkpoint is not None else None
+        effective_history = prior_history
+        binding_invalidations = ()
+        history_floor = 0
+        if checkpoint is not None:
+            previous, effective_history, binding_invalidations, history_floor = \
+                _prior_for_binding(
+                    previous, prior_history,
+                    prior_release=checkpoint.state.knowledge_release,
+                    prior_role=checkpoint.state.roles.get('knowledge_role'),
+                    current_release=knowledge_release,
+                    current_role=binding['role'] if binding else None,
+                    history_floor=checkpoint.state.roles.get(
+                        'history_floor_message_index', '0'),
+                )
 
         def emit(name, payload):
             frame = sse_event(name, payload)
@@ -181,7 +224,6 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
                 visible = session.visible_attachments()
                 images = [item.source_id for item in visible if item.kind == "image"]
                 texts = [item.source_id for item in visible if item.kind != "image"]
-                previous = checkpoint.state.task_context if checkpoint is not None else None
                 yield emit('stage', stages.start('schema'))
                 try:
                     prepared = prepare_workflow(
@@ -192,7 +234,7 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
                         knowledge=knowledge, role=binding['role'] if binding else 'internal_fae',
                         runtime_release=runtime_release,
                         prior_user_context='\n'.join(
-                            item['content'] for item in prior_history[-8:]
+                            item['content'] for item in effective_history[-8:]
                             if item.get('role') == 'user' and isinstance(item.get('content'), str)),
                         attachment_source_ids=texts, image_source_ids=images,
                         grounded_targets=(knowledge.ground_question(
@@ -209,6 +251,14 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
                     yield emit('stage', stages.finish('schema', error=done['outcome']))
                 else:
                     plan = prepared.plan
+                    if binding_invalidations:
+                        plan = replace(
+                            plan,
+                            invalidated_fields=(*plan.invalidated_fields,
+                                                *binding_invalidations),
+                            context_note=(plan.context_note + '\nPrior reviewed grounding '
+                                          'invalidated after role or release change.'))
+                        prepared = replace(prepared, plan=plan)
                     yield emit('stage', stages.finish(
                         'schema', request_kind=prepared.schema.request_kind,
                         goal_ids=[goal.id for goal in prepared.schema.goals],
@@ -217,7 +267,10 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
                         entity_scope=sorted({entity for goal in prepared.schema.goals
                                              for entity in goal.entities}),
                         attachment_dependency=prepared.schema.attachment_dependency,
-                        confidence=prepared.schema.confidence))
+                        confidence=prepared.schema.confidence,
+                        field_lineage=plan.field_lineage(),
+                        goal_field_lineage=plan.goal_field_lineage(),
+                        invalidated_fields=list(plan.invalidated_fields)))
                 if done is None and not isinstance(adapter, OfflineAdapter):
                     done = context_clarification_done(prepared)
                     if done is not None:
@@ -252,6 +305,7 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
                             allow_dev_source_check=(getattr(knowledge, 'sdk_catalog', None) is not None
                                                     and not getattr(knowledge.sdk_catalog, 'published', False)),
                             service_contract=prepared.service_contract,
+                            question=prepared.schema.effective_question,
                             answer_language=prepared.schema.answer_language,
                             allowed_tools=allowed_tools,
                             allowed_chinese_terms=tuple({entity for goal in prepared.schema.goals
@@ -262,7 +316,7 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
                     yield emit('stage', stages.start('loop'))
                     try:
                         for event in runtime.run(
-                            prepared.loop_question, history=prior_history,
+                            prepared.loop_question, history=effective_history,
                             entity_note=plan.context_note,
                             evidence_requirements=plan.evidence_requirements(),
                             required_attachment_source_ids=(
@@ -380,7 +434,9 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
                 durable.renew(subject, reservation)
                 context = DaqContextState(
                     task_context=plan.context.to_checkpoint() if plan else None,
-                    roles={"knowledge_role": binding["role"]} if binding else {},
+                    roles=({"knowledge_role": binding["role"],
+                            "history_floor_message_index": str(history_floor)}
+                           if binding else {}),
                     knowledge_release=knowledge_release if binding else None,
                 ) if plan or binding else None
                 def terminal_events(turn_id):

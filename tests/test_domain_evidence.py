@@ -960,6 +960,48 @@ def test_model_added_interface_must_be_in_user_question_or_reviewed_source():
         outcome='resolved', conclusion='示例通过 USB 枚举打开设备。')).action == 'allow'
 
 
+def test_same_evidence_interface_decision_depends_only_on_trusted_question():
+    requirements = {'requirements': [{'id': 'sdk', 'capability': 'sdk_evidence'}]}
+    result = ToolResult(
+        status='ok',
+        content={'matched_requirement_ids': ['sdk'],
+                 'matches': [{'answer': '此包提供设备枚举示例。'}]},
+        sources=[{'source_id': 'sdk-example', 'type': 'daq_sdk_source_checked',
+                  'verification_status': 'source_checked',
+                  'release_id': 'dev-sdk'}],
+    )
+    answer = AnswerSubmission(
+        outcome='safe_abstained', basis='本轮按 USB 连接核对支持。',
+        missing='设备与固件的组合支持仍未知。')
+    for question, expected in (
+        ('iOS framework 如何嵌入？', 'daq_unrequested_interface_in_answer'),
+        ('iOS framework 通过 USB 如何嵌入？', ''),
+    ):
+        # Dev, authenticated chat and Task now pass this same effective question
+        # to the policy. Their entrypoint wiring is asserted separately.
+        decisions = []
+        for _entry in ('dev', 'authenticated', 'task'):
+            session = DaqEvidencePolicy(
+                question=question, allow_dev_source_check=True).begin(requirements)
+            session.observe('sdk_evidence', result)
+            decisions.append(session.evaluate(answer))
+        assert len({(item.action, item.reason_code) for item in decisions}) == 1
+        assert decisions[0].reason_code == expected
+
+    reviewed = ToolResult(
+        status='ok', content={'matched_requirement_ids': ['sdk'],
+                              'matches': [{'answer': '通过 USB 枚举设备。'}]},
+        sources=[{'source_id': 'sdk-usb', 'type': 'daq_sdk_source_checked',
+                  'verification_status': 'source_checked',
+                  'release_id': 'dev-sdk'}],
+    )
+    session = DaqEvidencePolicy(
+        question='iOS framework 如何嵌入？',
+        allow_dev_source_check=True).begin(requirements)
+    session.observe('sdk_evidence', reviewed)
+    assert session.evaluate(answer).action == 'allow'
+
+
 def test_sdk_output_filenames_are_allowed_but_source_member_paths_are_not():
     session = DaqEvidencePolicy(allow_dev_source_check=True).begin({"requirements": [
         {"id": "sdk", "capability": "sdk_evidence"},

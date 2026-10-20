@@ -658,7 +658,10 @@ class LoopRuntime:
             {"role": "user", "content": question},
         ]
         evidence_schemas = self.toolbox.tool_schemas()
-        submit_schema = submit_answer_tool_schema()
+        delivery_units_enabled = bool(getattr(
+            self.evidence_policy, 'answer_delivery_units_enabled', False))
+        submit_schema = submit_answer_tool_schema(
+            include_delivery_units=delivery_units_enabled)
         schemas = [*evidence_schemas, submit_schema]
         tool_log: list[dict] = []
         vision_tool_available = any(
@@ -720,6 +723,8 @@ class LoopRuntime:
         thinking_block_count = 0
         final_answer = ""
         final_outcome = OUTCOME_RESOLVED
+        final_delivery_units: list[dict] = []
+        submitted_rendered_answer: str | None = None
         # T3(20260713):token usage 跨回合累计。网关不回传 usage 的回合不计入
         # usage_turns——评测按缺失口径处理,不许拿工具调用数冒充 token 成本。
         usage_totals = {"input_tokens": 0, "output_tokens": 0}
@@ -917,7 +922,9 @@ class LoopRuntime:
                     final_answer = _FAILURE_ANSWERS[final_outcome]
                     break
 
-                submission, errors = validate_submission(submit_calls[0].get("arguments"))
+                submission, errors = validate_submission(
+                    submit_calls[0].get("arguments"),
+                    allow_delivery_units=delivery_units_enabled)
                 if errors:
                     error = ";".join(errors)
                     if self._retry_answer_contract(messages, text, calls, error,
@@ -1263,6 +1270,11 @@ class LoopRuntime:
 
                 submitted_outcome = submission.outcome
                 final_answer = rendered
+                submitted_rendered_answer = rendered
+                final_delivery_units = [
+                    {'requirement_id': unit.requirement_id,
+                     'source_ids': list(unit.source_ids), 'text': unit.text}
+                    for unit in submission.delivery_units]
                 final_outcome = forced_stop or submission.outcome
                 break
 
@@ -1557,6 +1569,9 @@ class LoopRuntime:
                 "requirement_status": (
                     dict(policy_snapshot.requirement_status) if policy_snapshot else {}),
             }
+            if (final_delivery_units and final_answer == submitted_rendered_answer
+                    and final_outcome == submitted_outcome):
+                done['evidence_policy']['delivery_units'] = final_delivery_units
             if policy_snapshot is not None:
                 done["planned_capabilities"] = list(dict.fromkeys([
                     *policy_snapshot.planned_capabilities,
@@ -1681,6 +1696,10 @@ class LoopRuntime:
         entry = {"tool": call["name"],
                  "input": self.toolbox.redact_tool_input(call["name"], call["arguments"]),
                  "status": result.status, "duration_ms": duration_ms}
+        if isinstance(result.content, dict):
+            binding = result.content.get('requirement_source_ids')
+            if isinstance(binding, dict):
+                entry['requirement_source_ids'] = binding
         if call["name"] == "analyze_image" and result.diagnostics:
             entry["vision_diagnostics"] = dict(result.diagnostics)
         if call["name"] in {"sdk_evidence", "official_links"}:

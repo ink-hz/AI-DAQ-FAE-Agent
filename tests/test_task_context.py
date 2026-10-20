@@ -439,6 +439,410 @@ def test_topic_switch_clears_prior_setup_and_keeps_new_observations():
     assert 'old-device' not in second.context_note
 
 
+def test_field_lineage_distinguishes_carried_sdk_from_correction_and_topic_reset():
+    first = prepare_turn('当前 SDK 2.9.0', updates={'sdk_version': '2.9.0'})
+    follow = prepare_turn('上轮日志 E42 怎么看？', previous=first.context)
+    assert follow.field_lineage()['sdk_version'] == {
+        'value': '2.9.0', 'origin_turn': 1, 'authority': 'user_supplied',
+        'certainty': 'asserted', 'use': 'carried_from_prior_turn'}
+    assert follow.invalidated_fields == ()
+
+    correction = prepare_turn('改用 SDK 2.8.0', previous=first.context,
+                              updates={'sdk_version': '2.8.0'})
+    assert correction.field_lineage()['sdk_version']['origin_turn'] == 2
+    assert {'field': 'sdk_version', 'reason': 'user_correction'} in \
+        correction.invalidated_fields
+
+    switched = prepare_turn('换个话题', previous=first.context,
+                            topic_switch=True)
+    assert 'sdk_version' not in switched.field_lineage()
+    assert {'field': 'sdk_version', 'reason': 'topic_switch'} in \
+        switched.invalidated_fields
+
+
+def test_goal_selector_lineage_tracks_variant_correction_and_followup_scope():
+    from daq_fae.request_schema import DaqGoal, DaqRequestSchema
+
+    def schema(question, goal_id, conditions, *, switched=False):
+        return DaqRequestSchema(
+            question, question, 'product',
+            (DaqGoal(goal_id, 'product', 'lookup_spec', ('EGO 双目',),
+                     'horizontal_fov', tuple(sorted(conditions.items()))),),
+            switched, 'unknown', 'high', 'zh')
+
+    q1 = 'EGO 双目 1600×1200 版本的视场角？'
+    first = prepare_turn(q1, request_schema=schema(q1, 'g1',
+                                                    {'resolution_variant': '1600x1200'}))
+    assert first.goal_field_lineage()['g1']['resolution_variant']['origin_turn'] == 1
+    assert first.goal_field_lineage()['g1']['resolution_variant']['use'] == 'current_turn'
+
+    q2 = '换成 EGO 双目 1920×1200 版本的视场角？'
+    second = prepare_turn(q2, previous=first.context,
+                          request_schema=schema(q2, 'g2',
+                                                {'resolution_variant': '1920x1200'}))
+    assert second.goal_field_lineage()['g2']['resolution_variant']['origin_turn'] == 2
+    assert {'field': 'resolution_variant', 'reason': 'user_correction'} in \
+        second.invalidated_fields
+
+    q3 = '第二个版本的 1920×1080 RGB 模式呢？'
+    third = prepare_turn(q3, previous=second.context,
+                         request_schema=schema(q3, 'g3', {
+                             'resolution_variant': '1920x1200',
+                             'resolution': '1920x1080'}))
+    lineage = third.goal_field_lineage()['g3']
+    assert lineage['resolution_variant']['origin_turn'] == 2
+    assert lineage['resolution_variant']['use'] == 'carried_from_prior_turn'
+    assert lineage['resolution']['origin_turn'] == 3
+    assert lineage['resolution']['use'] == 'current_turn'
+    restored = type(third.context).from_checkpoint(third.context.to_checkpoint())
+    assert restored.goal_scope_history == third.context.goal_scope_history
+
+    q4 = '换个话题：EGO 双目 1600×1200 版本？'
+    switched = prepare_turn(q4, previous=third.context,
+                            request_schema=schema(q4, 'g4',
+                                                  {'resolution_variant': '1600x1200'},
+                                                  switched=True))
+    assert switched.goal_field_lineage()['g4']['resolution_variant']['origin_turn'] == 4
+
+
+def test_goal_scope_lineage_marks_per_port_current_and_never_licenses_a_total():
+    from daq_fae.request_schema import DaqGoal, DaqRequestSchema
+
+    def schema(question, goal_id, field, conditions):
+        return DaqRequestSchema(
+            question, question, 'product',
+            (DaqGoal(goal_id, 'product', 'lookup_spec', ('数采 HUB',),
+                     field, tuple(sorted(conditions.items()))),),
+            False, 'unknown', 'high', 'zh')
+
+    q1 = '数采 HUB 每个口额定输出多少？'
+    first = prepare_turn(q1, request_schema=schema(q1, 'port1',
+                        'downstream_port_power_output', {'per_port': True}))
+    assert first.goal_field_lineage()['port1']['per_port']['origin_turn'] == 1
+    q2 = '同时用 3 个口，能把单口输出乘以 3 当总供电吗？'
+    second = prepare_turn(q2, previous=first.context,
+                          request_schema=schema(q2, 'total',
+                              'total_downstream_port_power_output',
+                              {'simultaneous_port_count': 3}))
+    assert second.goal_field_lineage()['total']['simultaneous_port_count']['origin_turn'] == 2
+    assert second.goal_field_lineage()['total']['simultaneous_port_count']['authority'] == 'user_supplied'
+    assert 'per_port' not in second.goal_field_lineage()['total']
+
+
+def test_goal_scope_lineage_tracks_explicit_two_wristcams_in_combination():
+    from daq_fae.request_schema import DaqGoal, DaqRequestSchema
+    question = ('如果我再加两台 WristCam、经 HUB 接电脑，'
+                '刚才流程能保证三路同步保存吗？')
+    schema = DaqRequestSchema(
+        question, question, 'product',
+        (DaqGoal('combo', 'product', 'inspect_topology',
+                 ('EGO Pro', 'WristCam', 'HUB'), None,
+                 (('wristcam_count', 2),)),),
+        False, 'unknown', 'high', 'zh')
+    plan = prepare_turn(question, request_schema=schema)
+    lineage = plan.goal_field_lineage()['combo']['wristcam_count']
+    assert lineage['origin_turn'] == 1
+    assert lineage['authority'] == 'user_supplied'
+    unrelated_count = '两台 EGO Pro 配一台 WristCam，这样能录吗？'
+    unrelated_schema = DaqRequestSchema(
+        unrelated_count, unrelated_count, 'product',
+        (DaqGoal('not_two_wristcams', 'product', 'inspect_topology',
+                 ('EGO Pro', 'WristCam'), None,
+                 (('wristcam_count', 2),)),),
+        False, 'unknown', 'high', 'zh')
+    ungrounded = prepare_turn(unrelated_count, request_schema=unrelated_schema)
+    assert ungrounded.goal_field_lineage()['not_two_wristcams'][
+        'wristcam_count']['authority'] == 'schema_unattributed'
+
+
+def test_goal_scope_lineage_attributes_explicit_operating_and_sdk_cues():
+    from daq_fae.request_schema import DaqGoal, DaqRequestSchema
+
+    examples = [
+        ('经 HUB 接电脑，能三路同步录制吗？',
+         {'host_connection': 'pc', 'task': 'synchronized_recording'}),
+        ('经 HUB 接电脑，能三路同步录制吗？',
+         {'task': 'sync_recording'}),
+        ('停止录制后绿灯常亮，但没听到语音。',
+         {'steps': ['stop_recording'],
+          'indicators': ['green_led', 'voice_prompt']}),
+        ('OrbbecSDK 2.9.0 的多设备主从同步 C++ 示例怎样判断？',
+         {'language': 'cpp',
+          'feature': 'multi_device_sync_mode_check_and_set'}),
+        ('网络设备枚举在这个构建恢复了吗？',
+         {'feature': 'network_device_enumeration'}),
+        ('UMI Finger 磁力计仍可用吗？', {'feature': 'magnetometer'}),
+        ('README 对摄像头成像有什么要求？',
+         {'feature': 'image_requirements'}),
+        ('给我固件升级步骤。', {'task': 'firmware_upgrade'}),
+        ('录制状态回调显示 SAVING。', {'task': 'recording_state'}),
+        ('能删除录制状态吗？', {'task': 'recording_state_delete'}),
+    ]
+    for question, conditions in examples:
+        goal = DaqGoal('g', 'product', 'sdk_evidence', (), None,
+                       tuple(sorted(conditions.items())))
+        schema = DaqRequestSchema(question, question, 'product', (goal,),
+                                  False, 'unknown', 'high', 'zh')
+        lineage = prepare_turn(question, request_schema=schema).goal_field_lineage()['g']
+        for key in conditions:
+            assert lineage[key]['origin_turn'] == 1, (question, key, lineage[key])
+            assert lineage[key]['authority'] == 'user_supplied'
+
+
+def test_goal_scope_lineage_does_not_invent_nearby_operating_cues():
+    from daq_fae.request_schema import DaqGoal, DaqRequestSchema
+
+    examples = [
+        ('EGO Pro 不接电脑。', {'host_connection': 'pc'}),
+        ('停止后只看到蓝灯。',
+         {'indicators': ['green_led', 'voice_prompt']}),
+        ('这个 SDK 的固件版本是多少？', {'task': 'firmware_upgrade'}),
+        ('这个 SDK 的版本是多少？', {'task': 'sync_recording'}),
+        ('状态回调是什么？', {'task': 'recording_state_delete'}),
+        ('EGO Pro 的相机数量？', {'feature': 'magnetometer'}),
+    ]
+    for question, conditions in examples:
+        goal = DaqGoal('g', 'product', 'sdk_evidence', (), None,
+                       tuple(sorted(conditions.items())))
+        schema = DaqRequestSchema(question, question, 'product', (goal,),
+                                  False, 'unknown', 'high', 'zh')
+        lineage = prepare_turn(question, request_schema=schema).goal_field_lineage()['g']
+        for key in conditions:
+            assert lineage[key]['authority'] == 'schema_unattributed', (
+                question, key, lineage[key])
+
+
+def test_later_sync_goal_recovers_explicit_feature_from_prior_user_words():
+    from daq_fae.request_schema import DaqGoal, DaqRequestSchema
+
+    def schema(question, goal_id, conditions):
+        return DaqRequestSchema(
+            question, question, 'product',
+            (DaqGoal(goal_id, 'product', 'sdk_evidence', (), None,
+                     tuple(sorted(conditions.items()))),),
+            False, 'unknown', 'high', 'zh')
+
+    first_question = 'OrbbecSDK 2.9.0 的 EGO 多设备主从同步 C++ 示例如何判断模式支持？'
+    first = prepare_turn(first_question, request_schema=schema(
+        first_question, 'first', {'sdk': 'OrbbecSDK', 'language': 'cpp'}))
+    second_question = '那用这个示例能证明三台设备已经同步录制吗？'
+    second = prepare_turn(second_question, previous=first.context.to_checkpoint(),
+                          request_schema=schema(second_question, 'second', {
+                              'feature': 'multi_device_sync_mode_check_and_set'}))
+    feature = second.goal_field_lineage()['second']['feature']
+    assert (feature['origin_turn'], feature['authority'], feature['use']) == (
+        1, 'user_supplied', 'carried_from_prior_turn')
+
+    unrelated_question = 'EGO 的 RGB 数量是多少？'
+    unrelated = prepare_turn(unrelated_question, request_schema=schema(
+        unrelated_question, 'unrelated', {
+            'feature': 'multi_device_sync_mode_check_and_set'}))
+    assert unrelated.goal_field_lineage()['unrelated']['feature'][
+        'authority'] == 'schema_unattributed'
+
+
+def test_combined_clues_can_refer_to_older_topic_without_reusing_unrelated_scope():
+    from daq_fae.request_schema import DaqGoal, DaqRequestSchema
+
+    def schema(question, goal_id, conditions, *, switched=False):
+        return DaqRequestSchema(
+            question, question, 'product',
+            (DaqGoal(goal_id, 'product', 'sdk_evidence', (), None,
+                     tuple(sorted(conditions.items()))),),
+            switched, 'unknown', 'high', 'zh')
+
+    first_question = 'Android Java 录制状态回调显示 SAVING，保存完了吗？'
+    first = prepare_turn(first_question, request_schema=schema(
+        first_question, 'first', {'language': 'java', 'platform': 'android'}))
+    second_question = '另外 EGO Pro 单机 TF 卡录制时，停止后绿灯常亮但没听见语音。'
+    second = prepare_turn(second_question, previous=first.context.to_checkpoint(),
+                          request_schema=schema(second_question, 'second', {},
+                                                switched=True))
+    third_question = '综合这两条线索，我能向客户确认完整落盘吗？'
+    third = prepare_turn(third_question, previous=second.context.to_checkpoint(),
+                         request_schema=schema(third_question, 'combined', {
+                             'language': 'java', 'platform': 'android',
+                             'task': 'recording_state'}, switched=True))
+    lineage = third.goal_field_lineage()['combined']
+    for key in ('language', 'platform', 'task'):
+        assert (lineage[key]['origin_turn'], lineage[key]['authority']) == (
+            1, 'user_supplied')
+
+    new_topic = '另一个问题：这个产品有几颗 RGB 相机？'
+    unrelated = prepare_turn(new_topic, previous=second.context.to_checkpoint(),
+                             request_schema=schema(new_topic, 'new', {
+                                 'language': 'java', 'platform': 'android',
+                                 'task': 'recording_state'}, switched=True))
+    assert all(value['authority'] == 'schema_unattributed'
+               for value in unrelated.goal_field_lineage()['new'].values()
+               if isinstance(value, dict))
+
+
+def test_goal_scope_lineage_tracks_chinese_camera_count_without_promoting_other_counts():
+    from daq_fae.request_schema import DaqGoal, DaqRequestSchema
+
+    def lineage(question):
+        schema = DaqRequestSchema(
+            question, question, 'product',
+            (DaqGoal('concurrent', 'product', 'lookup_spec', ('EGO Pro',),
+                     'rgb_simultaneous_max_frame_rate',
+                     (('simultaneous_camera_count', 4),)),),
+            False, 'unknown', 'high', 'zh')
+        return prepare_turn(question, request_schema=schema).goal_field_lineage()[
+            'concurrent']['simultaneous_camera_count']
+
+    assert lineage('那四颗 RGB 相机同时录制都能达到这个帧率吗？')[
+        'origin_turn'] == 1
+    assert lineage('两颗 RGB 相机加四个下游端口，帧率呢？')[
+        'authority'] == 'schema_unattributed'
+
+
+def test_return_to_prior_standalone_scope_retains_exact_prior_no_host_cue():
+    from daq_fae.request_schema import DaqGoal, DaqRequestSchema
+
+    def schema(question, goal_id, conditions, switched=False):
+        return DaqRequestSchema(
+            question, question, 'product',
+            (DaqGoal(goal_id, 'product', 'lookup_procedure', ('EGO Pro',),
+                     None, tuple(sorted(conditions.items()))),),
+            switched, 'unknown', 'high', 'zh')
+
+    q1 = 'EGO Pro 不接电脑，用本机 TF 卡单机录制。'
+    first = prepare_turn(q1, request_schema=schema(
+        q1, 'single', {'host_connection': 'none'}))
+    q2 = '如果加两台 WristCam，经 HUB 接电脑同步保存呢？'
+    second = prepare_turn(q2, previous=first.context.to_checkpoint(),
+                          request_schema=schema(
+                              q2, 'combo', {'host_connection': 'computer'}))
+    q3 = ('先不接腕带了，回到刚才的 EGO Pro 单机 TF 卡场景：'
+          '停止录制时只见绿灯常亮但没听到语音，算保存了吗？')
+    returned = prepare_turn(q3, previous=second.context.to_checkpoint(),
+                            request_schema=schema(
+                                q3, 'returned', {'host_connection': 'none'},
+                                switched=True))
+    lineage = returned.goal_field_lineage()['returned']['host_connection']
+    assert lineage['origin_turn'] == 1
+    assert lineage['use'] == 'carried_from_prior_turn'
+    assert {'field': 'host_connection', 'reason': 'topic_switch'} in \
+        returned.invalidated_fields
+
+    unrelated = '换个话题：EGO Pro 的固件版本。'
+    reset = prepare_turn(unrelated, previous=second.context.to_checkpoint(),
+                         request_schema=schema(
+                             unrelated, 'reset', {'host_connection': 'none'},
+                             switched=True))
+    assert reset.goal_field_lineage()['reset']['host_connection'][
+        'authority'] == 'schema_unattributed'
+
+
+def test_goal_scope_lineage_keeps_two_builds_separate_in_one_followup():
+    from daq_fae.request_schema import DaqGoal, DaqRequestSchema
+
+    def schema(question, builds):
+        goals = tuple(DaqGoal(
+            f'build_{build}', 'product', 'search_knowledge', ('EgoViewer',),
+            None, (('viewer_release_date', build),)) for build in builds)
+        return DaqRequestSchema(question, question, 'product', goals,
+                                False, 'unknown', 'high', 'zh')
+
+    q1 = 'EgoViewer build 2026092302 记了什么？'
+    first = prepare_turn(q1, request_schema=schema(q1, ['2026092302']))
+    q2 = '换到 EgoViewer build 2026092901 呢？'
+    second = prepare_turn(q2, previous=first.context,
+                          request_schema=schema(q2, ['2026092901']))
+    q3 = '两个 build 的网络枚举已经恢复了吗？'
+    third = prepare_turn(q3, previous=second.context,
+                         request_schema=schema(q3, ['2026092302', '2026092901']))
+    lineages = third.goal_field_lineage()
+    assert lineages['build_2026092302']['viewer_release_date']['origin_turn'] == 1
+    assert lineages['build_2026092901']['viewer_release_date']['origin_turn'] == 2
+
+
+def test_goal_scope_lineage_tracks_exact_source_file_through_followup():
+    from daq_fae.request_schema import DaqGoal, DaqRequestSchema
+
+    def schema(question, goal_id):
+        return DaqRequestSchema(
+            question, question, 'product',
+            (DaqGoal(goal_id, 'product', 'sdk_evidence', (), None,
+                     (('sdk', 'OrbbecSDK'),
+                      ('source_files', ['magnetometer.cpp']))),),
+            False, 'unknown', 'high', 'zh')
+
+    q1 = '同一构建的包里还有 magnetometer.cpp 示例吗？'
+    first = prepare_turn(q1, request_schema=schema(q1, 'file'))
+    assert first.goal_field_lineage()['file']['source_files'][
+        'origin_turn'] == 1
+    q2 = '那能据这个示例说 UMI Finger 磁力计仍然可用吗？'
+    second = prepare_turn(q2, previous=first.context.to_checkpoint(),
+                          request_schema=schema(q2, 'support'))
+    assert second.goal_field_lineage()['support']['source_files'][
+        'origin_turn'] == 1
+
+
+def test_goal_scope_lineage_never_promotes_unattributed_schema_value_to_user_assertion():
+    from daq_fae.request_schema import DaqGoal, DaqRequestSchema
+
+    question = 'EGO Pro 固件支持吗？'
+    schema = DaqRequestSchema(
+        question, question, 'product',
+        (DaqGoal('g', 'product', 'check_software_support', ('EGO Pro',),
+                 None, (('firmware_version', 'v9.9.9'),)),),
+        False, 'unknown', 'high', 'zh')
+    plan = prepare_turn(question, request_schema=schema)
+    lineage = plan.goal_field_lineage()['g']['firmware_version']
+    assert lineage['origin_turn'] is None
+    assert lineage['authority'] == 'schema_unattributed'
+    assert all(item['field'] != 'firmware_version'
+               for item in plan.context.goal_scope_history)
+
+
+def test_goal_entity_lineage_keeps_product_switch_and_two_entity_followup_separate():
+    from daq_fae.request_schema import DaqGoal, DaqRequestSchema
+
+    def schema(question, names):
+        goals = tuple(DaqGoal(name, 'product', 'lookup_spec', (name,),
+                              'rgb_resolution') for name in names)
+        return DaqRequestSchema(question, question, 'product', goals,
+                                False, 'unknown', 'high', 'zh')
+
+    q1 = 'UMI Finger 的 RGB 分辨率？'
+    first = prepare_turn(q1, request_schema=schema(q1, ['UMI Finger']))
+    q2 = '换成 UMI 视觉模块呢？'
+    second = prepare_turn(q2, previous=first.context,
+                          request_schema=schema(q2, ['UMI 视觉模块']))
+    q3 = '两者 RGB 分辨率分别是多少？'
+    third = prepare_turn(q3, previous=second.context,
+                         request_schema=schema(q3, ['UMI Finger', 'UMI 视觉模块']))
+    assert third.goal_field_lineage()['UMI Finger']['entities'][0]['origin_turn'] == 1
+    assert third.goal_field_lineage()['UMI 视觉模块']['entities'][0]['origin_turn'] == 2
+
+
+def test_goal_entity_lineage_retains_prior_named_product_for_two_subject_followup_after_switch():
+    from daq_fae.request_schema import DaqGoal, DaqRequestSchema
+
+    def schema(question, goals, switched=False):
+        return DaqRequestSchema(
+            question, question, 'product',
+            tuple(DaqGoal(name, 'product', 'lookup_spec', (name,),
+                          'rgb_resolution') for name in goals),
+            switched, 'unknown', 'high', 'zh')
+
+    first_q = 'UMI Finger 的双目 Mono 基线和分辨率是多少？'
+    first = prepare_turn(first_q, request_schema=schema(first_q, ['UMI Finger']))
+    second_q = '换成 UMI 视觉模块，它的双目 Mono 基线也有 50 mm 吗？'
+    second = prepare_turn(second_q, previous=first.context.to_checkpoint(),
+                          request_schema=schema(second_q, ['UMI 视觉模块'], True))
+    third_q = '两者 RGB 分辨率分别是多少？'
+    third = prepare_turn(
+        third_q, previous=second.context.to_checkpoint(),
+        request_schema=schema(third_q, ['UMI Finger', 'UMI 视觉模块']))
+    assert third.goal_field_lineage()['UMI Finger']['entities'][0][
+        'origin_turn'] == 1
+    assert third.goal_field_lineage()['UMI 视觉模块']['entities'][0][
+        'origin_turn'] == 2
+
+
 def test_multicapability_plan_has_stable_scoped_ids_and_explicit_unknowns():
     kwargs = {'updates': {'equipment': ['device-a'], 'platform': 'Linux'}}
     first = prepare_turn('规格、接线和 SDK 安装步骤，给官方下载链接', **kwargs)

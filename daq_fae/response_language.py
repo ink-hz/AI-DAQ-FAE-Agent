@@ -5,7 +5,8 @@ from __future__ import annotations
 _EN_HEADINGS = {
     '结论': 'Conclusion', '依据': 'Basis', '注意': 'Cautions',
     '验证与下一步': 'Next steps', '当前无法下结论': 'Unable to conclude yet',
-    '已确认信息': 'Confirmed information', '建议': 'Next steps',
+    '已确认信息': 'Confirmed information', '核实结果': 'Verified results',
+    '建议': 'Next steps',
     '已确认部分': 'Confirmed portion', '需研发确认': 'Needs R&D confirmation',
     '建议转人工 FAE': 'FAE handoff recommended', '下一步': 'Next steps',
     '候选性质': 'Candidate status', '未闭合约束': 'Open constraints',

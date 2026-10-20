@@ -42,6 +42,17 @@ def _daq_code_sha() -> str:
     return daq_code_sha(ROOT)
 
 
+def _shared_src_sha() -> str:
+    """Bind the actual copied runtime bytes, not only its upstream ref label."""
+    digest = hashlib.sha256()
+    for path in sorted((ROOT / 'src').rglob('*.py')):
+        digest.update(str(path.relative_to(ROOT)).encode())
+        digest.update(b'\0')
+        digest.update(path.read_bytes())
+        digest.update(b'\0')
+    return digest.hexdigest()
+
+
 def _cases(suite: str, *, suite_file: Path | None = None) -> list[dict]:
     if suite == 'file':
         if suite_file is None:
@@ -267,10 +278,14 @@ def main() -> int:
                 if sdk_catalog is not None and sdk_catalog.release_notes is not None else None,
                 'runtime_release': runtime_release,
                 'daq_code_sha256': _daq_code_sha(),
+                'shared_src_sha256': _shared_src_sha(),
                 'upstream_revision': json.loads((ROOT / 'upstream-source.json').read_text())['revision'],
                 'prompt_sha256': _sha(ROOT / 'prompts/reviewed_knowledge_system.md'),
                 'schema_prompt_sha256': _sha(ROOT / 'prompts/daq_schema_extraction.md'),
                 'model': app.state.chat_adapter.model if hasattr(app.state, 'chat_adapter') else os.environ['DAQ_ANTHROPIC_MODEL'],
+                'gateway_base_url_sha256': hashlib.sha256(
+                    os.environ['DAQ_ANTHROPIC_BASE_URL'].encode()).hexdigest(),
+                'knowledge_role': 'internal_fae',
                 'concurrency': 2 if args.concurrency_probe else 1,
                 'selected_response_language': args.response_language,
             }
@@ -345,6 +360,15 @@ def main() -> int:
                               row['turns'][0]['duration_ms'], 'overlap', overlap,
                               flush=True)
                     stream.flush()
+                    identity['daq_code_sha256_after'] = _daq_code_sha()
+                    identity['shared_src_sha256_after'] = _shared_src_sha()
+                    identity['code_unchanged_during_replay'] = (
+                        identity['daq_code_sha256_after'] == identity['daq_code_sha256']
+                        and identity['shared_src_sha256_after'] == identity['shared_src_sha256'])
+                    (output / 'identity.json').write_text(json.dumps(
+                        identity, ensure_ascii=False, indent=2))
+                    if not identity['code_unchanged_during_replay']:
+                        raise RuntimeError('Dev replay code identity changed during run')
                     print('output', output, 'sha256', _sha(result_path), flush=True)
                     return 0
                 for case in cases:
@@ -456,6 +480,14 @@ def main() -> int:
                     last = outputs[-1]
                     print(case['id'], last['done']['outcome'], last['duration_ms'],
                           len(last['done']['answer']), last['done']['trace_id'], flush=True)
+            identity['daq_code_sha256_after'] = _daq_code_sha()
+            identity['shared_src_sha256_after'] = _shared_src_sha()
+            identity['code_unchanged_during_replay'] = (
+                identity['daq_code_sha256_after'] == identity['daq_code_sha256']
+                and identity['shared_src_sha256_after'] == identity['shared_src_sha256'])
+            (output / 'identity.json').write_text(json.dumps(identity, ensure_ascii=False, indent=2))
+            if not identity['code_unchanged_during_replay']:
+                raise RuntimeError('Dev replay code identity changed during run')
             print('output', output, 'sha256', _sha(result_path), flush=True)
         finally:
             _stop_postgres(workspace)

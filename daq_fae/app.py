@@ -547,7 +547,10 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                                 'entity_scope': sorted({entity for goal in prepared.schema.goals
                                                         for entity in goal.entities}),
                                 'attachment_dependency': prepared.schema.attachment_dependency,
-                                'confidence': prepared.schema.confidence}
+                                'confidence': prepared.schema.confidence,
+                                'field_lineage': plan.field_lineage(),
+                                'goal_field_lineage': plan.goal_field_lineage(),
+                                'invalidated_fields': list(plan.invalidated_fields)}
                                if prepared else {}))
                         base_toolbox = DaqToolBox(
                             current_question=(prepared.schema.original_question

@@ -36,7 +36,7 @@ _ALLOWED_FIELDS = frozenset((
 ))
 
 
-def submit_answer_tool_schema() -> dict:
+def submit_answer_tool_schema(*, include_delivery_units: bool = False) -> dict:
     """Return the OpenAI-format terminal tool schema.
 
     Gateways do not enforce JSON Schema consistently, so this schema is only
@@ -47,7 +47,7 @@ def submit_answer_tool_schema() -> dict:
     def text(description: str) -> dict:
         return {"type": "string", "minLength": 1, "description": description}
 
-    return {
+    schema = {
         "type": "function",
         "function": {
             "name": SUBMIT_ANSWER_TOOL,
@@ -103,6 +103,26 @@ def submit_answer_tool_schema() -> dict:
             },
         },
     }
+    if include_delivery_units:
+        schema['function']['parameters']['properties']['delivery_units'] = {
+            'type': 'array', 'maxItems': 16,
+            'description': ('DAQ 已核对且实际交付的子目标。每项正文会直接呈现给用户；'
+                            '只填写本轮工具返回、已匹配该 requirement_id 的 source_id。'),
+            'items': {'type': 'object', 'additionalProperties': False,
+                      'properties': {
+                          'requirement_id': {'type': 'string'},
+                          'source_ids': {'type': 'array', 'items': {'type': 'string'}},
+                          'text': {'type': 'string'},
+                      }, 'required': ['requirement_id', 'source_ids', 'text']},
+        }
+    return schema
+
+
+@dataclass(frozen=True)
+class AnswerDeliveryUnit:
+    requirement_id: str
+    source_ids: tuple[str, ...]
+    text: str
 
 
 @dataclass(frozen=True)
@@ -117,15 +137,18 @@ class AnswerSubmission:
     handoff_reason: str = ""
     selection_evidence_status: str = ""
     unresolved_constraints: str = ""
+    delivery_units: tuple[AnswerDeliveryUnit, ...] = ()
 
 
-def validate_submission(arguments: object) -> tuple[AnswerSubmission | None, list[str]]:
+def validate_submission(arguments: object, *, allow_delivery_units: bool = False
+                        ) -> tuple[AnswerSubmission | None, list[str]]:
     """Validate a terminal submission without trusting provider enforcement."""
     if not isinstance(arguments, dict):
         return None, ["arguments_not_object"]
 
     errors: list[str] = []
-    unknown = sorted(set(arguments) - _ALLOWED_FIELDS)
+    unknown = sorted(set(arguments) - _ALLOWED_FIELDS
+                     - ({'delivery_units'} if allow_delivery_units else set()))
     if unknown:
         errors.append("unknown_fields:" + ",".join(unknown))
 
@@ -166,6 +189,29 @@ def validate_submission(arguments: object) -> tuple[AnswerSubmission | None, lis
         if field in arguments and not values[field]:
             errors.append(f"empty_field:{field}")
 
+    delivery_units: list[AnswerDeliveryUnit] = []
+    if allow_delivery_units and 'delivery_units' in arguments:
+        raw_units = arguments['delivery_units']
+        if not isinstance(raw_units, list) or len(raw_units) > 16:
+            errors.append('delivery_units_invalid')
+        else:
+            for raw in raw_units:
+                if (not isinstance(raw, dict)
+                        or set(raw) != {'requirement_id', 'source_ids', 'text'}
+                        or not isinstance(raw['requirement_id'], str)
+                        or not 0 < len(raw['requirement_id']) <= 128
+                        or not isinstance(raw['source_ids'], list)
+                        or not 0 < len(raw['source_ids']) <= 8
+                        or not all(isinstance(item, str) and 0 < len(item) <= 256
+                                   for item in raw['source_ids'])
+                        or not isinstance(raw['text'], str)
+                        or not 0 < len(raw['text'].strip()) <= 2000):
+                    errors.append('delivery_unit_invalid')
+                    continue
+                delivery_units.append(AnswerDeliveryUnit(
+                    raw['requirement_id'], tuple(dict.fromkeys(raw['source_ids'])),
+                    raw['text'].strip()))
+
     if outcome == OUTCOME_RESOLVED:
         _require(values, "conclusion", errors)
         _forbid(values, ("missing", "pending_confirmation", "handoff_reason"), errors)
@@ -189,6 +235,7 @@ def validate_submission(arguments: object) -> tuple[AnswerSubmission | None, lis
     return AnswerSubmission(
         outcome=str(outcome),
         selection_evidence_status=selection_evidence_status,
+        delivery_units=tuple(delivery_units),
         **values,
     ), []
 
@@ -207,6 +254,7 @@ def _forbid(values: dict[str, str], fields: tuple[str, ...], errors: list[str]) 
 def render_submission(submission: AnswerSubmission) -> str:
     """Render validated fields without semantic rewriting."""
     sections: list[tuple[str, str]] = []
+    delivered = '\n'.join(unit.text for unit in submission.delivery_units)
     outcome = submission.outcome
     if outcome == OUTCOME_RESOLVED:
         sections.append(("结论", submission.conclusion))
@@ -218,22 +266,26 @@ def render_submission(submission: AnswerSubmission) -> str:
                 "未闭合约束", submission.unresolved_constraints,
             ))
         _append(sections, "依据", submission.basis)
+        _append(sections, "核实结果", delivered)
         _append(sections, "注意", submission.cautions)
         _append(sections, "验证与下一步", submission.next_steps)
     elif outcome == OUTCOME_SAFE_ABSTAINED:
         sections.append(("当前无法下结论", submission.missing))
-        _append(sections, "已确认信息", submission.basis)
+        _append(sections, "已确认信息", '\n'.join(
+            part for part in (submission.basis, delivered) if part))
         _append(sections, "注意", submission.cautions)
         _append(sections, "建议", submission.next_steps)
     elif outcome == OUTCOME_ESCALATE_RD:
         _append(sections, "已确认部分", submission.conclusion)
         _append(sections, "依据", submission.basis)
+        _append(sections, "核实结果", delivered)
         _append(sections, "注意", submission.cautions)
         sections.append(("需研发确认", submission.pending_confirmation))
         _append(sections, "验证与下一步", submission.next_steps)
     else:
         _append(sections, "已确认部分", submission.conclusion)
         _append(sections, "依据", submission.basis)
+        _append(sections, "核实结果", delivered)
         _append(sections, "注意", submission.cautions)
         sections.append(("建议转人工 FAE", submission.handoff_reason))
         _append(sections, "下一步", submission.next_steps)

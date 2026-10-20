@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import tempfile
+from copy import deepcopy
 
 from .sdk_catalog import SdkCatalog
 from .release_notes import ReleaseNoteCatalog, _serialized as _serialized_notes
@@ -109,7 +110,99 @@ def _read(root: Path, release_id: str) -> dict:
                         or type(ref.get("end_line")) is not int
                         or not 1 <= ref["start_line"] <= ref["end_line"]):
                     raise ValueError("SDK release-note source reference invalid")
+    if 'rebind' in manifest:
+        _verify_sdk_rebind(root, manifest)
     return manifest
+
+
+def _sdk_rebind_content(manifest: dict) -> dict:
+    return {key: value for key, value in manifest.items()
+            if key not in {'runtime_release', 'upstream_sha', 'daq_code_sha256',
+                           'knowledge_release', 'rebind'}}
+
+
+def _verify_sdk_rebind(root: Path, manifest: dict) -> None:
+    rebind = manifest.get('rebind')
+    if (not isinstance(rebind, dict)
+            or rebind.get('mode') != 'unchanged_reviewed_content_v1'
+            or rebind.get('authorization_ref') !=
+            'project-owner-direction-2026-10-20-no-repeat-release'
+            or not isinstance(rebind.get('origin_release'), str)
+            or not _SHA.fullmatch(rebind['origin_release'])
+            or not isinstance(rebind.get('evidence'), dict)
+            or rebind['evidence'].get('reviewer') not in {'Codex', 'human_fae'}
+            or not _SHA.fullmatch(str(rebind['evidence'].get('focus_review_sha256', '')))
+            or rebind['evidence'].get('quality_gate_status') !=
+            'user_directed_partial_no_repeat'):
+        raise ValueError('SDK rebind evidence invalid')
+    origin = _read(root, rebind['origin_release'])
+    if (_sdk_rebind_content(manifest) != _sdk_rebind_content(origin)
+            or rebind.get('origin_content_sha256') !=
+            _digest(_json_bytes(_sdk_rebind_content(origin)))):
+        raise ValueError('SDK rebind content changed')
+
+
+def rebind_sdk_release(root: Path, *, origin_release: str,
+                       runtime_release: str, upstream_sha: str,
+                       daq_code_sha256: str, knowledge_release: str,
+                       evidence: dict) -> str:
+    """Bind unchanged SDK rows and inherited review to a new DAQ runtime."""
+    if (not isinstance(runtime_release, str) or not runtime_release.startswith('daq-')
+            or runtime_release.endswith('-dev')
+            or not isinstance(upstream_sha, str) or not _UPSTREAM.fullmatch(upstream_sha)
+            or daq_code_sha256 != daq_code_sha()
+            or not isinstance(knowledge_release, str)
+            or not _SHA.fullmatch(knowledge_release)
+            or not isinstance(evidence, dict)
+            or evidence.get('reviewer') not in {'Codex', 'human_fae'}
+            or not _SHA.fullmatch(str(evidence.get('focus_review_sha256', '')))
+            or evidence.get('quality_gate_status') != 'user_directed_partial_no_repeat'):
+        raise ValueError('SDK rebind identity or evidence invalid')
+    active = root / 'active.json'
+    if (active.is_symlink() or not active.is_file()
+            or json.loads(active.read_text()).get('release_id') != origin_release):
+        raise ValueError('SDK rebind active origin mismatch')
+    origin = _read(root, origin_release)
+    rebound = deepcopy(origin)
+    rebound.update(runtime_release=runtime_release, upstream_sha=upstream_sha,
+                   daq_code_sha256=daq_code_sha256,
+                   knowledge_release=knowledge_release,
+                   rebind={
+                       'mode': 'unchanged_reviewed_content_v1',
+                       'authorization_ref':
+                       'project-owner-direction-2026-10-20-no-repeat-release',
+                       'origin_release': origin_release,
+                       'origin_content_sha256':
+                       _digest(_json_bytes(_sdk_rebind_content(origin))),
+                       'evidence': deepcopy(evidence),
+                   })
+    _verify_sdk_rebind(root, rebound)
+    raw = _json_bytes(rebound)
+    release_id = _digest(raw)
+    releases = _root(root)
+    destination = releases / release_id
+    if destination.exists():
+        if destination.is_symlink() or (destination / 'manifest.json').read_bytes() != raw:
+            raise ValueError('SDK rebind ID collision')
+        return release_id
+    stage = Path(tempfile.mkdtemp(prefix='.sdk-rebind-', dir=releases))
+    try:
+        path = stage / 'manifest.json'
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)
+        with os.fdopen(descriptor, 'wb') as stream:
+            stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
+        stage.chmod(0o500)
+        os.replace(stage, destination)
+    finally:
+        if stage.exists():
+            stage.chmod(0o700)
+            for path in stage.iterdir():
+                path.chmod(0o600)
+                path.unlink()
+            stage.rmdir()
+    return release_id
 
 
 def stage_sdk_release(root: Path, directory: Path, archive: Path, review_report: dict, *,

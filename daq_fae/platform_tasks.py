@@ -60,6 +60,24 @@ class DaqTaskOrchestrator:
                        else 'empty_knowledge_system.md')
         self._prompt_path = prompt_path or Path(__file__).resolve().parents[1] / 'prompts' / prompt_name
         self._contexts = {}
+        self._trusted_questions = {}
+
+    def _trusted_history(self, session_id, messages):
+        """Replay only user text supplied as a planning question, never Task hints."""
+        questions = self._trusted_questions.get(session_id, ())
+        history = []
+        turn_index = 0
+        include_answer = False
+        for item in messages:
+            if item.get('role') == 'user':
+                include_answer = turn_index < len(questions)
+                if include_answer:
+                    history.append({'role': 'user', 'content': questions[turn_index]})
+                turn_index += 1
+            elif item.get('role') == 'assistant' and include_answer:
+                history.append(item)
+                include_answer = False
+        return history
 
     def handle_stream(self, *, session_id, user_message,
                       planning_message=None,
@@ -76,6 +94,8 @@ class DaqTaskOrchestrator:
         if self._knowledge is not None and not knowledge_role:
             raise ValueError('daq_task_knowledge_role_required')
         guard()
+        question = planning_message or user_message
+        trusted_history = self._trusted_history(session_id, session.messages)
         trace = (self._trace_recorder.start_trace("daq_platform_task", {
             "agent_id": AGENT_ID, "session_id": session_id,
             "message_length": len(user_message),
@@ -84,7 +104,7 @@ class DaqTaskOrchestrator:
         try:
             prepared = None
             yield StreamEvent('stage', stages.start('guardrail'))
-            refusal = categorize_refusal(planning_message or user_message)
+            refusal = categorize_refusal(question)
             yield StreamEvent('stage', stages.finish('guardrail', refusal=bool(refusal)))
             plan = None
             if refusal:
@@ -94,7 +114,6 @@ class DaqTaskOrchestrator:
                         "capability_coverage": {}, "refusal_category": category}
             else:
                 yield StreamEvent('stage', stages.start('schema'))
-                question = planning_message or user_message
                 if isinstance(self._adapter, OfflineAdapter):
                     plan = prepare_turn(question,
                                         previous=self._contexts.get(session_id),
@@ -112,8 +131,8 @@ class DaqTaskOrchestrator:
                             context_hints=context_hints,
                             knowledge=self._knowledge, role=knowledge_role or 'internal_fae',
                             prior_user_context='\n'.join(
-                                item['content'] for item in session.messages[-8:]
-                                if item.get('role') == 'user' and isinstance(item.get('content'), str)),
+                                item['content'] for item in trusted_history[-16:]
+                                if item.get('role') == 'user'),
                             grounded_targets=(self._knowledge.ground_question(
                                 question, role=knowledge_role) if self._knowledge is not None else None),
                         )
@@ -155,7 +174,10 @@ class DaqTaskOrchestrator:
                         'entity_scope': sorted({entity for goal in prepared.schema.goals
                                                 for entity in goal.entities}),
                         'attachment_dependency': prepared.schema.attachment_dependency,
-                        'confidence': prepared.schema.confidence}
+                        'confidence': prepared.schema.confidence,
+                        'field_lineage': plan.field_lineage(),
+                        'goal_field_lineage': plan.goal_field_lineage(),
+                        'invalidated_fields': list(plan.invalidated_fields)}
                        if prepared else {})))
                 allowed_tools = (allowed_tools_for(prepared.schema)
                                  if prepared else None)
@@ -172,6 +194,7 @@ class DaqTaskOrchestrator:
                         allow_dev_source_check=(getattr(self._knowledge, 'sdk_catalog', None) is not None
                                                 and not getattr(self._knowledge.sdk_catalog, 'published', False)),
                         service_contract=prepared.service_contract if prepared else None,
+                        question=prepared.schema.effective_question if prepared else user_message,
                         answer_language=prepared.schema.answer_language if prepared else 'zh',
                         allowed_tools=allowed_tools,
                         allowed_chinese_terms=tuple({entity for goal in prepared.schema.goals
@@ -189,7 +212,7 @@ class DaqTaskOrchestrator:
                     yield StreamEvent('stage', stages.start('loop'))
                 try:
                     events = iter((clarification,)) if clarification is not None else runtime.run(
-                        user_message, history=list(session.messages), entity_note=plan.context_note,
+                        user_message, history=trusted_history, entity_note=plan.context_note,
                         evidence_requirements=plan.evidence_requirements(),
                     )
                     for event in events:
@@ -264,6 +287,7 @@ class DaqTaskOrchestrator:
                 self._contexts[session_id] = plan.context
             session.append_message("user", user_message)
             session.append_message("assistant", done["answer"])
+            self._trusted_questions.setdefault(session_id, []).append(question)
             yield StreamEvent("text_delta", {"delta": done["answer"]})
             yield StreamEvent("sources", done.get("sources", []))
             if trace is not None:
