@@ -459,6 +459,8 @@ class ReviewedKnowledge:
             raise ValueError("knowledge release answerable count invalid")
         domain = manifest.get('review', {}).get('readiness', {}).get('scope', {}).get('domain_evidence')
         if domain is not None:
+            if manifest.get('review', {}).get('operator_release'):
+                raise ValueError('mixed domain authority in knowledge release')
             from .domain_metadata import validate_domain_metadata
             validate_domain_metadata(domain, manifest['records'])
         if manifest["format_version"] == 2:

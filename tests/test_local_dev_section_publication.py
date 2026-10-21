@@ -211,3 +211,19 @@ def test_invalid_domain_alias_or_veto_cannot_enter_readiness_release(tmp_path):
     from daq_fae.knowledge.release_readiness import audit_readiness
     report = audit_readiness(sign(b), verify_approval=verify, allow_local_dev=True)
     assert not report['ready'] and 'content_contract' in report['reasons']
+
+
+def test_operator_and_readiness_domain_metadata_cannot_mix(tmp_path):
+    from daq_fae.knowledge.operator_release import PRO_VETO_ENTITIES
+    b = local_bundle(tmp_path)
+    b['scope']['domain_evidence'] = {
+        'contract': 'daq-reviewed-operating-scope/v1',
+        'field_aliases': {'resolution': ['分辨率']},
+        'scoped_field_aliases': {}, 'veto_entities': deepcopy(PRO_VETO_ENTITIES),
+    }
+    from daq_fae.knowledge.release_readiness import stage_release
+    rid = stage_release(tmp_path/'release', sign(b), verify_approval=verify, allow_local_dev=True)
+    manifest = releases._read_release(tmp_path/'release', rid)[0]
+    manifest['review']['operator_release'] = {'mode': 'other-authority'}
+    with pytest.raises(ValueError, match='mixed domain authority'):
+        ReviewedKnowledge.from_manifest(rid, manifest)
