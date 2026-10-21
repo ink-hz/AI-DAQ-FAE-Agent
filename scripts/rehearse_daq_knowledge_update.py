@@ -305,14 +305,20 @@ def main(argv=None):
     source_root = args.source_root or bundle.get('source_root')
     if not source_root:
         parser.error('--source-root or bundle.source_root is required for exact byte verification')
-    # CLI batches are restricted to the repository's ignored private tmp tree.
-    private = (ROOT / 'tmp').resolve(strict=True)
+    # Both repository-private artifact trees remain ignored; resolving first also
+    # supports a worktree sharing the repository's private data/tmp directories.
+    resolved = args.output.resolve(strict=False)
+    private = next((root.resolve() for root in (ROOT / 'tmp', ROOT / 'data/knowledge/curated')
+                    if root.is_dir() and resolved.is_relative_to(root.resolve())), None)
+    if private is None:
+        parser.error('--output must be below private tmp or data/knowledge/curated')
     ignored = subprocess.run(['git', 'check-ignore', '--quiet', '--no-index',
                               str(args.output.resolve(strict=False))],
                              cwd=private.parent, check=False)
     if ignored.returncode != 0:
         parser.error('--output must be Git-ignored')
-    report = rehearse(bundle, source_root, args.output, release_root=args.release_root)
+    report = rehearse(bundle, source_root, args.output, release_root=args.release_root,
+                      private_root=private)
     print(json.dumps({'status': 'private_unapproved_simulation',
                       'input_bundle_sha256': report['input_bundle_sha256'],
                       'scenario_count': len(report['scenarios']),

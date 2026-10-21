@@ -191,3 +191,22 @@ def test_target_prefers_parameter_used_by_real_section(tmp_path):
     claim, source = module._target(bundle)
     assert claim['id'] == 'claim:beta'
     assert source['path'] == 'beta.md'
+
+
+def test_cli_accepts_new_ignored_curated_batch(tmp_path, monkeypatch):
+    import subprocess
+    module = drill_module()
+    bundle, originals = fixture_bundle(tmp_path)
+    repository = tmp_path / 'repo'
+    repository.mkdir()
+    subprocess.run(['git', 'init', '-q', str(repository)], check=True)
+    (repository / '.gitignore').write_text('/data/\n/tmp/\n')
+    (repository / 'tmp').mkdir()
+    curated = repository / 'data/knowledge/curated'
+    curated.mkdir(parents=True)
+    bundle_path = tmp_path / 'bundle.json'
+    bundle_path.write_text(json.dumps(bundle))
+    monkeypatch.setattr(module, 'ROOT', repository)
+    assert module.main(['--bundle', str(bundle_path), '--source-root', str(originals),
+                        '--output', str(curated / 'drill')]) == 0
+    assert (curated / 'drill/report.json').is_file()
