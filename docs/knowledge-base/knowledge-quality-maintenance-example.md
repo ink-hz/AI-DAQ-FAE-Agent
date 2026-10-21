@@ -28,7 +28,7 @@ PYTHONPATH=. .venv/bin/python scripts/audit_daq_knowledge_quality.py \
 
 事实审核者必须先读原件，再留下逐项决定；权限审核决定与事实决定分开。`unit_fingerprint`、`section_fingerprint` 只计算绑定值，不批准事实。内容、条件、来源、依赖或角色改变后旧审核失效。格式变化也必须被显式处理，不能靠重新填审核人名字继承旧决定。
 
-状态要说明对象和审计范围：库存无记录是 `not_audited`；有来源未审核是 `candidate_pending`；明确冲突是 `conflict_pending`。真正的 `audited_no_source` 要有具名原件复核、精确来源引用、有界审计范围和日期。它仍不能推出 `unsupported`。
+状态要说明对象和审计范围：库存无记录是 `not_audited`；有来源未审核是 `candidate_pending`；明确冲突是 `conflict_pending`。真正的 `audited_no_source` 要有具名原件复核、精确来源引用、有界审计范围和日期。它仍不能推出 `unsupported`。`source_audit.audit_sha256` 必须等于 `source_audit_fingerprint(row)`，绑定覆盖 ID、实体/拓扑、字段、条件、范围、来源引用及完整审核属性；旧的无指纹决定或改变对象后的旧决定保持 `not_audited`。引用路径、十六进制哈希和物理页/行定位还要通过严格格式核验。
 
 ## 3. 用已有公共发布器构建本机候选
 
@@ -86,3 +86,6 @@ PYTHONPATH=. .venv/bin/python scripts/rehearse_daq_knowledge_update.py \
 交接记录至少包含：原件/抽取/正文/审核哈希、实体和条件、每项决定、主知识与 SDK ID、代码/上游身份、实际工具结果、失败/通过证据、旧版及回滚、每个未发布候选的原因。私有索引绑定这些文件，Git 只提交合同、工具及脱敏汇总。
 
 默认认证应用拒绝本机发布模式，不能只把这个目录复制到生产。完整应用先另外构建符合目标环境合同的主知识与 SDK 绑定，完成变更范围内的 Dev 问答和独立答案复审，再走现行发布/回滚程序。来源候选、代码提交、Dev 工具通过和生产生效分别记账。
+
+
+若只改离线审计代码，也要留意 `daq_code_sha` 会计算整个 `daq_fae/` 包。不能把旧的已测运行时改名为当前代码。应保留旧案例的真实 ID，说明依赖为何不受影响；如需当前代码的 Dev 指针，再通过同一公共发布/加载路径做运行时重绑，核对内容逐对象一致，记录新的加载证据。无需因此重跑已通过且无依赖变化的模型题。
