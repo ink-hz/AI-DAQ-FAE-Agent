@@ -227,3 +227,27 @@ def test_operator_and_readiness_domain_metadata_cannot_mix(tmp_path):
     manifest['review']['operator_release'] = {'mode': 'other-authority'}
     with pytest.raises(ValueError, match='mixed domain authority'):
         ReviewedKnowledge.from_manifest(rid, manifest)
+
+
+def test_canonical_field_beats_legacy_global_alias_but_scoped_override_is_preserved(tmp_path):
+    from daq_fae.knowledge.operator_release import PRO_VETO_ENTITIES
+    from daq_fae.knowledge.records import record_fingerprint, access_fingerprint
+    from daq_fae.knowledge.release_readiness import stage_release
+    b = local_bundle(tmp_path)
+    extra = deepcopy(b['records'][1])
+    extra['id'] = 'claim:extra'
+    extra['data']['field'] = 'extra_field'
+    extra['fact_review']['record_sha256'] = record_fingerprint(extra)
+    extra['access_review']['record_sha256'] = access_fingerprint(extra)
+    b['records'].append(extra)
+    b['scope']['answerable_ids'].append(extra['id'])
+    b['scope']['domain_evidence'] = {
+        'contract': 'daq-reviewed-operating-scope/v1',
+        'field_aliases': {'resolution': ['extra_field']},
+        'scoped_field_aliases': {'entity:ego-1600': {'resolution': 'extra_field'}},
+        'veto_entities': deepcopy(PRO_VETO_ENTITIES),
+    }
+    rid = stage_release(tmp_path/'release', sign(b), verify_approval=verify, allow_local_dev=True)
+    view = ReviewedKnowledge.from_manifest(rid, releases._read_release(tmp_path/'release',rid)[0])
+    assert view.resolve_field('extra_field', 'entity:ego-1600') == 'extra_field'
+    assert view.resolve_field('resolution', 'entity:ego-1600') == 'extra_field'

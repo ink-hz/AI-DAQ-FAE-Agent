@@ -277,12 +277,18 @@ class ReviewedKnowledge:
         for alias, canonical in scoped.items():
             if self._identity_text(alias) == normalized:
                 return canonical
-        for canonical, aliases in evidence.get('field_aliases', {}).items():
-            if normalized in {self._identity_text(item) for item in [canonical, *aliases]}:
+        fields = {row['data']['field'] for row in self._records
+                  if row['kind'] == 'claim' and
+                  (entity_id is None or row['data']['entity_id'] == entity_id)}
+        # An added canonical field must not be captured by an older global alias.
+        # Explicit entity-scoped aliases above retain their reviewed precedence.
+        for canonical in sorted(fields):
+            if self._identity_text(canonical) == normalized:
                 return canonical
-        for row in self._records:
-            if row['kind'] == 'claim' and self._identity_text(row['data']['field']) == normalized:
-                return row['data']['field']
+        for canonical, aliases in evidence.get('field_aliases', {}).items():
+            if canonical in fields and normalized in {
+                    self._identity_text(item) for item in [canonical, *aliases]}:
+                return canonical
         return None
 
     def verified_variant_scopes(self, entity: str, field: str, *, role: str) -> dict[str, list[str]]:
