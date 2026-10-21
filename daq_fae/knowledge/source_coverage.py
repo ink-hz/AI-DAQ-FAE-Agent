@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from copy import deepcopy
+from datetime import date
 import hashlib
 import json
 from pathlib import Path
@@ -138,7 +139,8 @@ def build_field_matrix(candidate_records, published_records, sections, software,
                           'candidate_records': [], 'published_records': [], 'candidate_sections': [],
                           'source_refs': [], 'values': [], 'status': 'not_audited',
                           'source_review_status': 'not_audited', 'audit_scope': 'input_record_inventory_only',
-                          'legacy_coverage_ids': [], 'fact_review': None, 'permission_review': None}
+                          'legacy_coverage_ids': [], 'inventory_gaps': [],
+                          'fact_review': None, 'permission_review': None}
         return cells[key]
     for rows, published in ((candidate_records, False), (published_records, True)):
         _unique(rows, 'id', 'record identity')
@@ -183,9 +185,36 @@ def build_field_matrix(candidate_records, published_records, sections, software,
                         row.get('conditions', {}), 'claim' if row.get('coverage_kind') == 'entity_field'
                         else row.get('coverage_kind', 'relation'))
         cell['legacy_coverage_ids'].append(row['coverage_id'])
-        if cell['status'] == 'not_audited' and row['status'] == 'audited_no_source':
-            cell['status'] = 'audited_no_source'
-            cell['audit_scope'] = row.get('audit_scope', 'unspecified_legacy_inventory')
+        if row['status'] == 'audited_no_source':
+            audit = row.get('source_audit', {})
+            valid_audit = (audit.get('decision') == 'audited_no_source'
+                           and all(isinstance(audit.get(key), str) and audit[key].strip()
+                                   for key in ('reviewer', 'reviewed_at', 'audit_scope'))
+                           and audit.get('audit_scope') != 'supplied_record_inventory_only'
+                           and isinstance(audit.get('source_refs'), list)
+                           and bool(audit['source_refs'])
+                           and all(ref in row.get('source_refs', [])
+                                   and isinstance(ref.get('sha256'), str)
+                                   and len(ref['sha256']) == 64 and ref.get('path')
+                                   and ref.get('locator', {}).get('kind') in {'page', 'lines'}
+                                   for ref in audit['source_refs']))
+            try:
+                date.fromisoformat(audit.get('reviewed_at', ''))
+            except (TypeError, ValueError):
+                valid_audit = False
+            if valid_audit:
+                cell['source_audit'] = deepcopy(audit)
+                if cell['status'] == 'not_audited':
+                    cell.update(status='audited_no_source',
+                                source_review_status='bounded_source_audit_recorded',
+                                audit_scope=audit['audit_scope'])
+            else:
+                # No records in an inventory says nothing about uninspected originals.
+                cell['inventory_gaps'].append({
+                    'coverage_id': row['coverage_id'],
+                    'audit_scope': row.get('audit_scope', 'unspecified_legacy_inventory'),
+                    'record_ids': deepcopy(row.get('record_ids', [])),
+                    'legacy_status': row['status']})
         elif cell['status'] == 'not_audited':
             cell['status'] = 'candidate_pending' if row.get('source_refs') else 'not_audited'
         for ref in row.get('source_refs', []):

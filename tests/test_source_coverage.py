@@ -78,8 +78,10 @@ def test_inventory_absence_is_scoped_and_software_presence_is_not_support():
     software = {'id': 'package:one', 'evidence_level': 'package_present', 'status': 'candidate',
                 'conditions': {'entity': None}, 'source_refs': []}
     matrix = build_field_matrix([], [], [], [software], [gap])
-    assert matrix['cells'][0]['status'] == 'audited_no_source'
-    assert matrix['cells'][0]['audit_scope'] == 'supplied_record_inventory_only'
+    assert matrix['cells'][0]['status'] == 'not_audited'
+    assert matrix['cells'][0]['inventory_gaps'] == [{'coverage_id': 'old:gap',
+        'audit_scope': 'supplied_record_inventory_only', 'record_ids': [],
+        'legacy_status': 'audited_no_source'}]
     assert matrix['cells'][0]['source_review_status'] == 'not_audited'
     assert matrix['software'][0]['status'] == 'candidate_pending'
     assert matrix['software'][0]['device_support'] == 'unknown'
@@ -162,3 +164,29 @@ def test_candidate_conflict_remains_visible_beside_published_negative_evidence()
     assert cell['source_refs'] == published['source_refs']
     assert cell['values'][1] == {'record_id': 'claim:negative', 'source': 'published',
                                   'data': published['data'], 'record_status': 'unsupported'}
+
+
+def test_explicit_bounded_source_audit_can_record_no_source_without_support_claim():
+    _, _, _, record, _ = fixture()
+    gap = {'coverage_id': 'source:gap', 'coverage_kind': 'entity_field', 'entity_id': 'entity:one',
+           'field_id': 'firmware_version', 'scope': {}, 'status': 'audited_no_source',
+           'source_refs': record['source_refs'], 'record_ids': [],
+           'source_audit': {'decision': 'audited_no_source', 'reviewer': 'Independent source reviewer',
+                            'reviewed_at': '2026-10-21', 'audit_scope': 'spec.pdf physical page 1 only',
+                            'source_refs': record['source_refs']}}
+    matrix = build_field_matrix([], [], [], [], [gap])
+    cell = matrix['cells'][0]
+    assert cell['status'] == 'audited_no_source'
+    assert cell['source_review_status'] == 'bounded_source_audit_recorded'
+    assert cell['source_audit'] == gap['source_audit']
+    assert cell['published_records'] == []
+
+
+def test_incomplete_source_audit_does_not_upgrade_inventory_absence():
+    gap = {'coverage_id': 'old:gap', 'coverage_kind': 'entity_field', 'entity_id': 'entity:one',
+           'field_id': 'firmware_version', 'scope': {}, 'status': 'audited_no_source',
+           'audit_scope': 'supplied_record_inventory_only', 'source_refs': [], 'record_ids': [],
+           'source_audit': {'decision': 'audited_no_source', 'reviewer': 'name_only'}}
+    matrix = build_field_matrix([], [], [], [], [gap])
+    assert matrix['cells'][0]['status'] == 'not_audited'
+    assert matrix['cells'][0]['source_review_status'] == 'not_audited'
