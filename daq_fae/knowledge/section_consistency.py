@@ -1,8 +1,8 @@
 """Offline section/record/source consistency, independent of runtime publication.
 
-Assertions are complete typed projections, rendered deterministically. Arbitrary
-prose is never declared consistent by matching a few numbers or a body checksum.
-Unmapped prose remains a coverage gap until independently reconciled.
+Assertions are complete typed projections, rendered deterministically. Narrative
+units require exact source evidence and independent bound reviews. Arbitrary
+prose never becomes consistent through numeric matches or body checksums.
 """
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ import json
 
 from .candidate_sections import validate_section
 from .records import _valid_source_ref, validate_records
+from .narrative_units import audit_narrative_units
 
 _CORE = ('id', 'kind', 'status', 'scope', 'source_refs', 'data')
 
@@ -204,7 +205,13 @@ def audit_sections(sections, bodies, records, snapshot, *, historical_records=No
                     finding(sid, None, 'section_dependency_missing')
         else:
             finding(sid, None, 'section_dependencies_invalid')
-        asserted, assertion_rows, remainder = set(), [], body
+        spans, narrative_rows, narrative_findings = audit_narrative_units(section, body, normalized, snapshot)
+        findings.extend(narrative_findings)
+        remainder_chars = list(body)
+        for start, end in spans:
+            remainder_chars[start:end] = ' ' * (end - start)
+        narrative_rows = list({r['id']: r for r in narrative_rows}.values())
+        asserted, assertion_rows, remainder = {r['id'] for r in narrative_rows}, list(narrative_rows), ''.join(remainder_chars)
         for assertion in assertions:
             if not isinstance(assertion, dict) or not all(k in assertion for k in _CORE):
                 finding(sid, None, 'assertion_invalid')
@@ -261,6 +268,7 @@ def audit_sections(sections, bodies, records, snapshot, *, historical_records=No
         if remainder.strip():
             finding(sid, None, 'uncovered_body')
         coverage.append({'section_id': sid, 'assertions': len(asserted),
+                         'narrative_units': len(spans),
                          'context_dependencies': len(set(deps) - asserted),
                          'uncovered_body': bool(remainder.strip()), 'answerable': False})
     used = {d['record_id'] for d in dependencies}

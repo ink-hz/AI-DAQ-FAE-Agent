@@ -41,7 +41,7 @@ def _scope(row):
     result = {key: set(declared.get(key, [])) for key in _DIMENSIONS}
     for plural, singular in (('entity_ids', 'entity_id'), ('field_ids', 'field'),
                              ('topology_ids', 'topology_id'), ('capabilities', 'capability')):
-        for part in (row, data):
+        for part in (row, data, *row.get('narrative_units', [])):
             result[plural].update(part.get(plural, []))
             if part.get(singular): result[plural].add(part[singular])
     if row.get('field_id'): result['field_ids'].add(row['field_id'])
@@ -93,7 +93,23 @@ def _graph(bundle, historical_nodes=()):
             for dep in ids:
                 edge((dependency_kind, dep), node)
         if kind == 'section':
-            for assertion in row.get('record_assertions', []):
+            assertions = list(row.get('record_assertions', []))
+            units = row.get('narrative_units', [])
+            if not isinstance(units, list):
+                raise ValueError('invalid narrative dependency inventory')
+            for unit in units:
+                if not isinstance(unit, dict):
+                    raise ValueError('invalid narrative dependency')
+                deps = unit.get('dependency_record_ids', [])
+                if not isinstance(deps, list) or any(dep not in row.get('dependency_claim_ids', []) for dep in deps):
+                    raise ValueError('narrative dependency missing from section')
+                for evidence in unit.get('source_evidence', []):
+                    ref = evidence.get('source_ref')
+                    if ref not in row.get('source_refs', []):
+                        raise ValueError('narrative source dependency missing from section')
+                    edge(('source', ref['path']), node)
+                assertions.extend(unit.get('record_assertions', []))
+            for assertion in assertions:
                 rid = assertion['id']
                 if rid not in row.get('dependency_claim_ids', []):
                     raise ValueError('assertion dependency missing')

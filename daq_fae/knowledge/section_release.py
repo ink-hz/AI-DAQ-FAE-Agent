@@ -1,7 +1,7 @@
 """DAQ section compilation gates, shared by publication and immutable reads.
 
-The format stores arbitrary UTF-8 body text. The current B2 consistency gate
-only reconciles exact typed projections; human approval alone cannot waive it.
+The format stores UTF-8 body text. B2 reconciles exact typed projections and
+source-bound narrative evidence units; section approval cannot waive coverage.
 """
 from collections import Counter
 from copy import deepcopy
@@ -11,6 +11,7 @@ import json
 from .records import ROLES, _review_valid, record_fingerprint, access_fingerprint
 from .section_consistency import audit_sections
 from .source_paths import contains_source_path
+from .narrative_units import validate_unit_roles
 
 
 def section_fingerprint(section: dict, body: str, records: list[dict]) -> str:
@@ -55,12 +56,19 @@ def compile_sections(sections, bodies, records, snapshot, *, require_current_lin
         body = bodies.get(sid)
         if not isinstance(body, str) or not body.strip():
             raise ValueError('section body missing')
-        if _url_bearing_strings({k: v for k, v in section.items()
+        if not isinstance(section.get('narrative_units', []), list):
+            raise ValueError('narrative unit inventory invalid')
+        # Evidence excerpts and reviews are structured provenance, never answer prose.
+        content = {**section, 'narrative_units': [
+            {k: v for k, v in unit.items() if k not in {
+                'source_evidence', 'record_assertions', 'fact_review', 'permission_review'}}
+            if isinstance(unit, dict) else unit for unit in section.get('narrative_units', [])]}
+        if _url_bearing_strings({k: v for k, v in content.items()
                                  if k not in {'source_refs', 'record_assertions',
                                               'fact_review', 'permission_review'}}) \
                 or _url_bearing_strings(body):
             raise ValueError('section URL must use reviewed link IDs')
-        if contains_source_path({**section, 'body': body}):
+        if contains_source_path({**content, 'body': body}):
             raise ValueError('section local source path in content')
         if section.get('review_status') != 'verified':
             raise ValueError('section not reviewed')
@@ -71,6 +79,7 @@ def compile_sections(sections, bodies, records, snapshot, *, require_current_lin
         forwards = _ids(section.get('forward_roles'), 'forward roles')
         if not views or set(views + forwards) - ROLES or set(forwards) - set(views):
             raise ValueError('section roles invalid')
+        validate_unit_roles(section)
         deps = _ids(section.get('dependency_claim_ids'), 'record dependencies')
         _ids(section.get('dependency_section_ids', []), 'section dependencies')
         links = _ids(section.get('link_ids', []), 'link IDs')
