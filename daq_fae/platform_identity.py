@@ -1,4 +1,4 @@
-"""Explicit DAQ Platform identity assembly for an authorized internal pilot.
+"""Explicit DAQ Platform identity assembly for authorized enterprise members.
 
 This module does not register a Platform card or enable an application by itself.
 The caller must opt in before ASGI startup and provide DAQ-scoped configuration.
@@ -41,6 +41,7 @@ class DaqIdentityConfig:
     public_origin: str
     session_keyring_file: Path
     allowed_subject_ids: frozenset[UUID]
+    access_scope: str = "pilot"
 
     @classmethod
     def from_environment(cls, environ: Mapping[str, str]) -> DaqIdentityConfig | None:
@@ -49,31 +50,46 @@ class DaqIdentityConfig:
             raise ValueError("daq_platform_identity_enabled_invalid")
         if enabled == "false":
             return None
+        scope = environ.get("DAQ_PLATFORM_ACCESS_SCOPE", "pilot")
+        if scope not in {"pilot", "enterprise_members"}:
+            raise ValueError("daq_platform_access_scope_invalid")
         keys = (
             "DAQ_DATABASE_URL", "DAQ_PLATFORM_IDENTITY_BASE_URL", "DAQ_PLATFORM_PUBLIC_ORIGIN",
-            "DAQ_PLATFORM_SESSION_KEYRING_FILE", "DAQ_PLATFORM_ALLOWED_SUBJECT_IDS",
+            "DAQ_PLATFORM_SESSION_KEYRING_FILE",
         )
-        if any(not environ.get(key, "").strip() for key in keys):
+        if any(not environ.get(key, "").strip() for key in keys) or (
+            scope == "pilot" and not environ.get("DAQ_PLATFORM_ALLOWED_SUBJECT_IDS", "").strip()
+        ):
             raise ValueError("daq_platform_identity_configuration_missing")
         path = Path(environ[keys[3]])
         if not path.is_absolute():
             raise ValueError("daq_platform_identity_keyring_invalid")
         try:
-            allowed = frozenset(UUID(value.strip()) for value in environ[keys[4]].split(","))
+            raw_allowed = environ.get("DAQ_PLATFORM_ALLOWED_SUBJECT_IDS", "")
+            allowed = frozenset(UUID(value.strip()) for value in raw_allowed.split(",")) if raw_allowed else frozenset()
         except ValueError:
             raise ValueError("daq_platform_identity_allowlist_invalid") from None
-        return cls(environ[keys[0]], environ[keys[1]], environ[keys[2]], path, allowed)
+        return cls(environ[keys[0]], environ[keys[1]], environ[keys[2]], path, allowed, scope)
 
 
-class _InternalPilotClient:
-    def __init__(self, client, allowed_subject_ids: frozenset[UUID]):
+def _subject_authorized(subject, config: DaqIdentityConfig) -> bool:
+    return (
+        subject.agent_id == AGENT_ID and subject.active
+        and subject.subject_type == "enterprise_member"
+        and (config.access_scope == "enterprise_members"
+             or subject.subject_id in config.allowed_subject_ids)
+    )
+
+
+class _DaqEnterpriseClient:
+    def __init__(self, client, config: DaqIdentityConfig):
         self._client = client
-        self._allowed = allowed_subject_ids
+        self._config = config
 
     def _authorize(self, subject):
         if subject.agent_id != AGENT_ID or not subject.active:
             raise PlatformIdentityError("identity_binding_invalid", status_code=401)
-        if subject.subject_type != "enterprise_member" or subject.subject_id not in self._allowed:
+        if not _subject_authorized(subject, self._config):
             raise PlatformIdentityError("daq_subject_not_authorized", status_code=403)
         return subject
 
@@ -109,8 +125,8 @@ def configure_platform_identity(
 ) -> AuthenticatedSessionService | None:
     """Configure trusted DAQ sessions; missing enabled configuration fails startup.
 
-    The pilot allowlist grants entry only. Fine-grained knowledge entitlements
-    must still be applied before retrieval; this is not a document access policy.
+    The access scope grants entry only. Knowledge entitlements are applied
+    before retrieval; this is not a document access policy.
     Injected ports are for isolated contract tests, never browser-controlled.
     """
     config = DaqIdentityConfig.from_environment(os.environ if environ is None else environ)
@@ -125,7 +141,7 @@ def configure_platform_identity(
     )
     service = AuthenticatedSessionService(
         repository=repository if repository is not None else PostgresAuthenticatedSessionRepository(config.database_url),
-        platform_client=_InternalPilotClient(client, config.allowed_subject_ids),
+        platform_client=_DaqEnterpriseClient(client, config),
         token_keyring=token_keyring, agent_id=AGENT_ID,
         validation_cache_seconds=60, idle_ttl_seconds=8 * 60 * 60,
         absolute_ttl_seconds=24 * 60 * 60,
@@ -143,10 +159,7 @@ def configure_platform_identity(
             subject = getattr(request.state, "platform_identity", None)
             if subject is None:
                 return JSONResponse({"error": {"code": "enterprise_session_required"}}, status_code=401)
-            if (
-                subject.agent_id != AGENT_ID or subject.subject_type != "enterprise_member"
-                or subject.subject_id not in config.allowed_subject_ids
-            ):
+            if not _subject_authorized(subject, config):
                 return JSONResponse({"error": {"code": "daq_subject_not_authorized"}}, status_code=403)
         policy = getattr(app.state, "daq_knowledge_entitlements", None)
         if protected and not exchange and policy is not None:

@@ -3030,18 +3030,18 @@ class DaqRequestSchema:
                 raise SchemaExtractionError('schema_goal_normalization_collision')
             goals = scoped_by_peer
             ids = {goal.id for goal in goals}
-        # A family FOV question may leave its SKU unselected or explicitly
-        # compare several reviewed variants. Give each requested visible
-        # variant its own source-bound goal; an unqualified goal cannot match
-        # the scoped claims. A prior single-variant follow-up stays scoped to
-        # that prior selection rather than expanding to every family member.
+        # A family field or specification overview can ask about several
+        # reviewed variants without selecting one SKU. Give each visible
+        # variant a separate source-bound goal, preserving a prior selected
+        # variant on follow-up turns.
         if (knowledge is not None and hasattr(knowledge, 'verified_variant_scopes')
                 and ((not current_versions and not prior_versions)
                      or len(current_versions) >= 2)):
             expanded_goals = []
             for goal in goals:
                 if (goal.kind != 'product' or goal.capability != 'lookup_spec'
-                        or goal.field not in {'horizontal_fov', 'vertical_fov',
+                        or goal.field not in {'all_reviewed_specs',
+                                              'horizontal_fov', 'vertical_fov',
                                               'rgb_horizontal_fov', 'rgb_vertical_fov'}
                         or len(goal.entities) != 1 or goal.condition_map()
                         or goal.unmapped_condition_keys):

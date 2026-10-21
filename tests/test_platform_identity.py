@@ -163,6 +163,45 @@ def test_foreign_or_unapproved_launch_cannot_issue_session(tmp_path, updates):
     assert COOKIE not in client.cookies
 
 
+def test_enterprise_scope_accepts_other_active_member_but_rejects_partner_and_foreign_agent(tmp_path):
+    from daq_fae.platform_identity import configure_platform_identity
+    from daq_fae.knowledge.entitlements import KnowledgeEntitlements
+    settings = environment(tmp_path)
+    settings['DAQ_PLATFORM_ACCESS_SCOPE'] = 'enterprise_members'
+    settings.pop('DAQ_PLATFORM_ALLOWED_SUBJECT_IDS')
+    app = FastAPI()
+    platform = FakePlatform()
+    configure_platform_identity(app, environ=settings,
+                                repository=InMemoryAuthenticatedSessionRepository(),
+                                platform_client=platform)
+    entitlement_file = tmp_path / 'entitlements.json'
+    entitlement_file.write_text(json.dumps({
+        'agent_id': 'ai-daq-fae-agent', 'subjects': {},
+        'default_enterprise_role': 'internal_fae',
+    }))
+    entitlement_file.chmod(0o600)
+    app.state.daq_knowledge_entitlements = KnowledgeEntitlements(entitlement_file)
+
+    @app.get('/history')
+    def history(request: Request):
+        return {'subject_id': str(request.state.platform_identity.subject_id),
+                'role': request.state.daq_knowledge_role}
+
+    member = UUID('d46114bb-e01c-4f69-b67f-ef0d21f62e5e')
+    with TestClient(app, base_url=ORIGIN) as client:
+        platform.subject = replace(platform.subject, subject_id=member, internal_user_id=member)
+        response = client.post('/enterprise/session', json={'code': CODE}, headers={'Origin': ORIGIN})
+        assert response.status_code == 201
+        assert client.get('/history').json() == {
+            'subject_id': str(member), 'role': 'internal_fae'}
+    for mutation in ({'subject_type': 'partner_operator', 'internal_user_id': None},
+                     {'agent_id': 'ai-fae-agent'}, {'active': False}):
+        platform.subject = replace(FakePlatform().subject, **mutation)
+        with TestClient(app, base_url=ORIGIN) as client:
+            response = client.post('/enterprise/session', json={'code': CODE}, headers={'Origin': ORIGIN})
+            assert response.status_code in {401, 403}
+
+
 def test_foreign_cached_session_rejected_and_fae_cookie_not_accepted(tmp_path):
     client, _, repository, _ = application(tmp_path)
     client.cookies.set('__Host-fae_enterprise_session', 'foreign-token')
@@ -198,6 +237,7 @@ def test_production_assembly_passes_trusted_agent_to_platform_client(tmp_path, m
     {'DAQ_PLATFORM_ALLOWED_SUBJECT_IDS': ''},
     {'DAQ_PLATFORM_ALLOWED_SUBJECT_IDS': 'not-a-uuid'},
     {'DAQ_PLATFORM_SESSION_KEYRING_FILE': 'relative/keys.json'},
+    {'DAQ_PLATFORM_ACCESS_SCOPE': 'everyone'},
 ])
 def test_invalid_enabled_configuration_rejected_before_routes(tmp_path, settings):
     from daq_fae.platform_identity import configure_platform_identity

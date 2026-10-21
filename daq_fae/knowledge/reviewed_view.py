@@ -304,7 +304,8 @@ class ReviewedKnowledge:
         for row in rows:
             if row['kind'] != 'claim' or row['data']['entity_id'] not in entity_ids:
                 continue
-            if row['data']['field'] not in {field, self.resolve_field(field, row['data']['entity_id'])}:
+            if (field != 'all_reviewed_specs' and row['data']['field'] not in {
+                    field, self.resolve_field(field, row['data']['entity_id'])}):
                 continue
             scope = row['scope']
             for selector in scope.get('required_selectors', []):

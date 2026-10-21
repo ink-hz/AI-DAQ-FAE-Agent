@@ -45,6 +45,25 @@ def test_entitlement_file_rechecks_revocation_expansion_and_agent(tmp_path):
         policy.role_for(subject)
 
 
+def test_explicit_enterprise_default_grants_published_role_only_to_enterprise_member(tmp_path):
+    from daq_fae.knowledge.entitlements import KnowledgeEntitlements
+    path = tmp_path / 'entitlements.json'
+    path.write_text(json.dumps({'agent_id': 'ai-daq-fae-agent',
+                                'subjects': {}, 'default_enterprise_role': 'internal_fae'}))
+    path.chmod(0o600)
+    policy = KnowledgeEntitlements(path)
+    subject = FakePlatform().subject
+    assert policy.role_for(subject) == 'internal_fae'
+    with pytest.raises(PlatformIdentityError):
+        policy.role_for(replace(subject, subject_type='partner_operator'))
+    with pytest.raises(PlatformIdentityError):
+        policy.role_for(replace(subject, agent_id='ai-fae-agent'))
+    path.write_text(json.dumps({'agent_id': 'ai-daq-fae-agent',
+                                'subjects': {}, 'default_enterprise_role': 'unknown'}))
+    with pytest.raises(PlatformIdentityError):
+        policy.role_for(subject)
+
+
 def test_authenticated_release_roles_history_and_replay(tmp_path, monkeypatch, pg_database):
     root = tmp_path / 'release'
     view = make_view(root)

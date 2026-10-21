@@ -1,4 +1,4 @@
-"""Trusted, request-time DAQ document role mapping for the internal pilot."""
+"""Trusted, request-time DAQ document role mapping."""
 from __future__ import annotations
 
 import json
@@ -28,19 +28,27 @@ class KnowledgeEntitlements:
                 if not stat.S_ISREG(info.st_mode) or info.st_uid not in {0, os.geteuid()} or info.st_mode & 0o022:
                     raise ValueError
                 data = json.load(stream)
-            if set(data) != {'agent_id', 'subjects'} or data['agent_id'] != AGENT_ID or not isinstance(data['subjects'], dict):
+            if (set(data) not in ({'agent_id', 'subjects'},
+                                  {'agent_id', 'subjects', 'default_enterprise_role'})
+                    or data['agent_id'] != AGENT_ID or not isinstance(data['subjects'], dict)):
+                raise ValueError
+            default_role = data.get('default_enterprise_role')
+            if default_role is not None and default_role not in ROLES:
                 raise ValueError
             for subject_id, role in data['subjects'].items():
                 if str(UUID(subject_id)) != subject_id or not isinstance(role, str) or role not in ROLES:
                     raise ValueError
-            return data['subjects']
+            return data
         except (OSError, ValueError, TypeError, KeyError):
             raise PlatformIdentityError('daq_knowledge_role_contract_invalid', status_code=403) from None
 
     def role_for(self, subject):
         if subject is None or subject.agent_id != AGENT_ID or not subject.active:
             raise PlatformIdentityError('identity_binding_invalid', status_code=401)
-        role = self._read().get(str(subject.subject_id))
+        data = self._read()
+        role = data['subjects'].get(str(subject.subject_id))
+        if role is None and getattr(subject, 'subject_type', None) == 'enterprise_member':
+            role = data.get('default_enterprise_role')
         if role is None:
             raise PlatformIdentityError('daq_knowledge_role_required', status_code=403)
         return role

@@ -38,3 +38,27 @@ def test_production_env_reuses_camera_database_and_gateway_but_separates_daq_key
     assert json.loads((output / 'secrets/entitlements.json').read_text())['subjects'] == {
         subject: 'internal_fae'}
     assert 'synthetic-secret' not in result.stdout
+
+
+def test_enterprise_member_provision_requires_no_pilot_subject_list(tmp_path):
+    camera = tmp_path / 'camera.env'
+    camera.write_text('\n'.join([
+        'POSTGRES_DB=ai_fae', 'POSTGRES_USER=ai_fae', 'POSTGRES_PASSWORD=synthetic',
+        'ANTHROPIC_AUTH_TOKEN=synthetic-secret', 'ANTHROPIC_BASE_URL=https://gateway.example',
+    ]) + '\n')
+    output = tmp_path / 'daq'
+    result = subprocess.run([
+        str(Path(__file__).resolve().parents[1] / '.venv/bin/python'),
+        'deploy/provision_env.py', '--camera-env', str(camera),
+        '--output-root', str(output), '--access-scope', 'enterprise_members',
+        '--runtime-release', 'daq-release-1',
+    ], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    from dotenv import dotenv_values
+    env = dotenv_values(output / 'env.production')
+    assert env['DAQ_PLATFORM_ACCESS_SCOPE'] == 'enterprise_members'
+    assert 'DAQ_PLATFORM_ALLOWED_SUBJECT_IDS' not in env
+    assert json.loads((output / 'secrets/entitlements.json').read_text()) == {
+        'agent_id': 'ai-daq-fae-agent', 'subjects': {},
+        'default_enterprise_role': 'internal_fae',
+    }

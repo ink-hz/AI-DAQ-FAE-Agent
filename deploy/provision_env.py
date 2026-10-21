@@ -35,7 +35,8 @@ def _env_value(value: str) -> str:
     return "'" + value.replace('\\', '\\\\').replace("'", "\\'") + "'"
 
 
-def provision(camera_env: Path, output_root: Path, subject_ids: list[str], runtime_release: str) -> None:
+def provision(camera_env: Path, output_root: Path, subject_ids: list[str],
+              runtime_release: str, access_scope: str = 'pilot') -> None:
     camera = dotenv_values(camera_env, interpolate=False)
     required = ('POSTGRES_DB', 'POSTGRES_USER', 'POSTGRES_PASSWORD')
     if any(not camera.get(key) for key in required):
@@ -47,7 +48,9 @@ def provision(camera_env: Path, output_root: Path, subject_ids: list[str], runti
     if not runtime_release or runtime_release.endswith('-dev'):
         raise ValueError('production runtime release missing')
     subjects = [str(UUID(item)) for item in subject_ids]
-    if not subjects or len(set(subjects)) != len(subjects):
+    if access_scope not in {'pilot', 'enterprise_members'} or (
+        access_scope == 'pilot' and not subjects
+    ) or len(set(subjects)) != len(subjects):
         raise ValueError('pilot subject list invalid')
     if output_root.exists():
         raise FileExistsError(output_root)
@@ -56,10 +59,14 @@ def provision(camera_env: Path, output_root: Path, subject_ids: list[str], runti
     secret_dir.mkdir(mode=0o700)
     _private_write(secret_dir / 'session-keyring.json', _keyring())
     _private_write(secret_dir / 'content-keyring.json', _keyring())
-    _private_write(secret_dir / 'entitlements.json', json.dumps({
+    entitlement_data = {
         'agent_id': 'ai-daq-fae-agent',
         'subjects': {subject: 'internal_fae' for subject in subjects},
-    }, separators=(',', ':')) + '\n')
+    }
+    if access_scope == 'enterprise_members':
+        entitlement_data['default_enterprise_role'] = 'internal_fae'
+    _private_write(secret_dir / 'entitlements.json', json.dumps(
+        entitlement_data, separators=(',', ':')) + '\n')
     user = quote(str(camera['POSTGRES_USER']), safe='')
     password = quote(str(camera['POSTGRES_PASSWORD']), safe='')
     db = quote(str(camera['POSTGRES_DB']), safe='')
@@ -78,7 +85,7 @@ def provision(camera_env: Path, output_root: Path, subject_ids: list[str], runti
         'DAQ_PLATFORM_IDENTITY_ENABLED': 'true',
         'DAQ_PLATFORM_IDENTITY_BASE_URL': 'http://172.31.0.3:8080',
         'DAQ_PLATFORM_PUBLIC_ORIGIN': 'https://agent.orbbec.com.cn',
-        'DAQ_PLATFORM_ALLOWED_SUBJECT_IDS': ','.join(subjects),
+        'DAQ_PLATFORM_ACCESS_SCOPE': access_scope,
         'DAQ_PLATFORM_SESSION_KEYRING_FILE': '/run/daq-secrets/session-keyring.json',
         'DAQ_AUTHENTICATED_CONTENT_KEYRING_FILE': '/run/daq-secrets/content-keyring.json',
         'DAQ_KNOWLEDGE_ENTITLEMENTS_FILE': '/run/daq-secrets/entitlements.json',
@@ -89,6 +96,8 @@ def provision(camera_env: Path, output_root: Path, subject_ids: list[str], runti
         'DAQ_PLATFORM_TASK_ENABLED': 'false',
         'DAQ_ATTACHMENT_ARCHIVE_ENABLED': 'false',
     }
+    if access_scope == 'pilot':
+        values['DAQ_PLATFORM_ALLOWED_SUBJECT_IDS'] = ','.join(subjects)
     content = ''.join(f'{key}={_env_value(value)}\n' for key, value in values.items())
     _private_write(output_root / 'env.production', content)
 
@@ -97,10 +106,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--camera-env', type=Path, required=True)
     parser.add_argument('--output-root', type=Path, required=True)
-    parser.add_argument('--subject-id', action='append', required=True)
+    parser.add_argument('--subject-id', action='append', default=[])
+    parser.add_argument('--access-scope', choices=['pilot', 'enterprise_members'], default='pilot')
     parser.add_argument('--runtime-release', required=True)
     args = parser.parse_args()
-    provision(args.camera_env, args.output_root, args.subject_id, args.runtime_release)
+    provision(args.camera_env, args.output_root, args.subject_id,
+              args.runtime_release, args.access_scope)
     print('DAQ production environment and independent keyrings provisioned')
 
 
