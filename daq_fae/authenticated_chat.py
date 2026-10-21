@@ -178,6 +178,7 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
         plan = None
         prepared = None
         done = None
+        answer_policy = None
         calls = []
         stages = StageLedger(trace.trace_id)
         previous = checkpoint.state.task_context if checkpoint is not None else None
@@ -297,21 +298,22 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
                             toolbox, session=session, store=app.state.attachment_store,
                             vision=vision_adapter,
                         )
+                    answer_policy = DaqEvidencePolicy(
+                        allow_dev_source_check=(getattr(knowledge, 'sdk_catalog', None) is not None
+                                                and not getattr(knowledge.sdk_catalog, 'published', False)),
+                        service_contract=prepared.service_contract,
+                        question=prepared.schema.effective_question,
+                        answer_language=prepared.schema.answer_language,
+                        allowed_tools=allowed_tools,
+                        allowed_chinese_terms=tuple({entity for goal in prepared.schema.goals
+                                                     for entity in goal.entities
+                                                     if any('\u3400' <= char <= '\u9fff'
+                                                            for char in entity)}))
                     runtime = LoopRuntime(
                         adapter=adapter, toolbox=toolbox,
                         system_prompt_path=root / "prompts" / (
                             "reviewed_knowledge_system.md" if knowledge is not None else "empty_knowledge_system.md"),
-                        evidence_policy=DaqEvidencePolicy(
-                            allow_dev_source_check=(getattr(knowledge, 'sdk_catalog', None) is not None
-                                                    and not getattr(knowledge.sdk_catalog, 'published', False)),
-                            service_contract=prepared.service_contract,
-                            question=prepared.schema.effective_question,
-                            answer_language=prepared.schema.answer_language,
-                            allowed_tools=allowed_tools,
-                            allowed_chinese_terms=tuple({entity for goal in prepared.schema.goals
-                                                         for entity in goal.entities
-                                                         if any('\u3400' <= char <= '\u9fff'
-                                                                for char in entity)})),
+                        evidence_policy=answer_policy,
                     )
                     yield emit('stage', stages.start('loop'))
                     try:
@@ -395,7 +397,8 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
             answer_language = (prepared.schema.answer_language if prepared is not None
                                and prepared.schema is not None else
                                'en' if body.response_language == 'en-US' else 'zh')
-            localize_answer(done, answer_language)
+            localize_answer(done, answer_language,
+                            submission=answer_policy.last_submission if answer_policy else None)
             if prepared is not None and prepared.schema is not None:
                 done['request_kind'] = prepared.schema.request_kind
                 done['request_schema'] = asdict(prepared.schema)

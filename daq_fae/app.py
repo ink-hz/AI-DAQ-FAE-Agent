@@ -486,6 +486,7 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
             progress = []
             plan = None
             prepared = None
+            answer_policy = None
             stages = StageLedger(ctx.trace_id)
             try:
                 with install_trace_ctx(ctx):
@@ -566,6 +567,18 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                                 store=app.state.attachment_store, vision=vision_adapter,
                             ) if request.attachment_ids else base_toolbox
                         )
+                        answer_policy = DaqEvidencePolicy(
+                            allow_dev_source_check=candidate_mode or (sdk_catalog is not None
+                                and not getattr(sdk_catalog, 'published', False)),
+                            service_contract=prepared.service_contract if prepared else None,
+                            question=prepared.schema.effective_question if prepared else request.message,
+                            answer_language=prepared.schema.answer_language if prepared else 'zh',
+                            allowed_tools=base_toolbox.allowed_tools,
+                            allowed_chinese_terms=tuple({entity for goal in prepared.schema.goals
+                                                         for entity in goal.entities
+                                                         if any('\u3400' <= char <= '\u9fff'
+                                                                for char in entity)})
+                            if prepared else ())
                         runtime = LoopRuntime(
                             adapter=adapter,
                             toolbox=toolbox,
@@ -574,18 +587,7 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                                 "reviewed_knowledge_system.md" if knowledge is not None
                                 else "empty_knowledge_system.md"
                             ),
-                            evidence_policy=DaqEvidencePolicy(
-                                allow_dev_source_check=candidate_mode or (sdk_catalog is not None
-                                    and not getattr(sdk_catalog, 'published', False)),
-                                service_contract=prepared.service_contract if prepared else None,
-                                question=prepared.schema.effective_question if prepared else request.message,
-                                answer_language=prepared.schema.answer_language if prepared else 'zh',
-                                allowed_tools=base_toolbox.allowed_tools,
-                                allowed_chinese_terms=tuple({entity for goal in prepared.schema.goals
-                                                             for entity in goal.entities
-                                                             if any('\u3400' <= char <= '\u9fff'
-                                                                    for char in entity)})
-                                if prepared else ()),
+                            evidence_policy=answer_policy,
                         )
                         events = runtime.run(
                             prepared.loop_question if prepared else request.message,
@@ -720,7 +722,8 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
             )
             answer_language = (prepared.schema.answer_language if prepared is not None else
                                'en' if request.response_language == 'en-US' else 'zh')
-            localize_answer(done, answer_language)
+            localize_answer(done, answer_language,
+                            submission=answer_policy.last_submission if answer_policy else None)
             if prepared is not None:
                 done['request_kind'] = prepared.schema.request_kind
                 done['request_schema'] = asdict(prepared.schema)

@@ -139,6 +139,11 @@ class DaqEvidencePolicy:
         self.answer_language = answer_language
         self.allowed_chinese_terms = allowed_chinese_terms
         self.allowed_tools = allowed_tools
+        self._session: DaqEvidenceSession | None = None
+
+    @property
+    def last_submission(self) -> AnswerSubmission | None:
+        return self._session.last_submission if self._session is not None else None
 
     def begin(self, requirements: Mapping[str, object]) -> "DaqEvidenceSession":
         raw = requirements.get("requirements", [])
@@ -181,12 +186,13 @@ class DaqEvidencePolicy:
             ))
         if not parsed:
             raise ValueError("daq_requirements_empty")
-        return DaqEvidenceSession(tuple(parsed), allow_dev_source_check=self.allow_dev_source_check,
-                                  service_contract=self.service_contract,
-                                  question=self.question,
-                                  answer_language=self.answer_language,
-                                  allowed_chinese_terms=self.allowed_chinese_terms,
-                                  allowed_tools=self.allowed_tools)
+        self._session = DaqEvidenceSession(
+            tuple(parsed), allow_dev_source_check=self.allow_dev_source_check,
+            service_contract=self.service_contract, question=self.question,
+            answer_language=self.answer_language,
+            allowed_chinese_terms=self.allowed_chinese_terms,
+            allowed_tools=self.allowed_tools)
+        return self._session
 
 
 class DaqEvidenceSession:
@@ -198,6 +204,7 @@ class DaqEvidenceSession:
                  allowed_chinese_terms: tuple[str, ...] = (),
                  allowed_tools: frozenset[str] | None = None):
         self.requirements = requirements
+        self.last_submission: AnswerSubmission | None = None
         self.status = {
             item.id: ('satisfied' if item.evidence_class == 'service_contract'
                       and service_contract is not None
@@ -445,6 +452,7 @@ class DaqEvidenceSession:
                 self.status[item.id] = "missing"
 
     def evaluate(self, submission: AnswerSubmission) -> EvidenceDecision:
+        self.last_submission = submission
         fields = (submission.conclusion, submission.basis, submission.cautions,
                   submission.next_steps, submission.missing,
                   submission.pending_confirmation, submission.handoff_reason,

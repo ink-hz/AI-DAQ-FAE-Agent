@@ -103,6 +103,7 @@ class DaqTaskOrchestrator:
         stages = StageLedger(trace.trace_id if trace is not None else None)
         try:
             prepared = None
+            answer_policy = None
             yield StreamEvent('stage', stages.start('guardrail'))
             refusal = categorize_refusal(question)
             yield StreamEvent('stage', stages.finish('guardrail', refusal=bool(refusal)))
@@ -181,6 +182,18 @@ class DaqTaskOrchestrator:
                        if prepared else {})))
                 allowed_tools = (allowed_tools_for(prepared.schema)
                                  if prepared else None)
+                answer_policy = DaqEvidencePolicy(
+                    allow_dev_source_check=(getattr(self._knowledge, 'sdk_catalog', None) is not None
+                                            and not getattr(self._knowledge.sdk_catalog, 'published', False)),
+                    service_contract=prepared.service_contract if prepared else None,
+                    question=prepared.schema.effective_question if prepared else user_message,
+                    answer_language=prepared.schema.answer_language if prepared else 'zh',
+                    allowed_tools=allowed_tools,
+                    allowed_chinese_terms=tuple({entity for goal in prepared.schema.goals
+                                                 for entity in goal.entities
+                                                 if any('\u3400' <= char <= '\u9fff'
+                                                        for char in entity)})
+                    if prepared else ())
                 runtime = LoopRuntime(
                     adapter=self._adapter,
                     toolbox=DaqToolBox(context=plan.context.tool_context(),
@@ -190,18 +203,7 @@ class DaqTaskOrchestrator:
                                        requirements=plan.requirements, access_guard=guard,
                                        allowed_tools=allowed_tools),
                     system_prompt_path=self._prompt_path,
-                    evidence_policy=DaqEvidencePolicy(
-                        allow_dev_source_check=(getattr(self._knowledge, 'sdk_catalog', None) is not None
-                                                and not getattr(self._knowledge.sdk_catalog, 'published', False)),
-                        service_contract=prepared.service_contract if prepared else None,
-                        question=prepared.schema.effective_question if prepared else user_message,
-                        answer_language=prepared.schema.answer_language if prepared else 'zh',
-                        allowed_tools=allowed_tools,
-                        allowed_chinese_terms=tuple({entity for goal in prepared.schema.goals
-                                                     for entity in goal.entities
-                                                     if any('\u3400' <= char <= '\u9fff'
-                                                            for char in entity)})
-                        if prepared else ()),
+                    evidence_policy=answer_policy,
                 )
                 done = None
                 clarification = context_clarification_done(prepared)
@@ -268,7 +270,8 @@ class DaqTaskOrchestrator:
                     knowledge_release=EMPTY_KNOWLEDGE_RELEASE,
                 )
             if prepared is not None:
-                localize_answer(done, prepared.schema.answer_language)
+                localize_answer(done, prepared.schema.answer_language,
+                                submission=answer_policy.last_submission if answer_policy else None)
                 done['request_kind'] = prepared.schema.request_kind
                 done['request_schema'] = asdict(prepared.schema)
                 done['evidence_requirements'] = copy.deepcopy(plan.requirements)

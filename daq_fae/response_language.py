@@ -1,10 +1,12 @@
 """DAQ-only presentation localization after the shared answer contract renders."""
 from __future__ import annotations
 
+from src.agent.loop.answer_contract import AnswerSubmission, render_submission
+
 
 _EN_HEADINGS = {
     '结论': 'Conclusion', '依据': 'Basis', '注意': 'Cautions',
-    '验证与下一步': 'Next steps', '当前无法下结论': 'Unable to conclude yet',
+    '验证与下一步': 'Next steps', '尚待确认': 'To confirm',
     '已确认信息': 'Confirmed information', '核实结果': 'Verified results',
     '建议': 'Next steps',
     '已确认部分': 'Confirmed portion', '需研发确认': 'Needs R&D confirmation',
@@ -13,10 +15,34 @@ _EN_HEADINGS = {
 }
 
 
-def localize_answer(done: dict, language: str) -> None:
+def _present_safe_abstention(submission: AnswerSubmission, language: str) -> str:
+    """Render DAQ's validated facts and gap without parsing model prose."""
+    delivered = '\n'.join(unit.text for unit in submission.delivery_units)
+    confirmed = '\n'.join(part for part in (submission.basis, delivered) if part)
+    headings = (('Conclusion', 'To confirm', 'Cautions', 'Next steps')
+                if language == 'en' else ('结论', '尚待确认', '注意', '建议'))
+    conclusion, gap, cautions, next_steps = headings
+    sections = [(conclusion, confirmed or submission.missing)]
+    if confirmed:
+        sections.append((gap, submission.missing))
+    if submission.cautions:
+        sections.append((cautions, submission.cautions))
+    if submission.next_steps:
+        sections.append((next_steps, submission.next_steps))
+    return '\n\n'.join(f'**{title}**\n\n{body}' for title, body in sections)
+
+
+def localize_answer(done: dict, language: str, *,
+                    submission: AnswerSubmission | None = None) -> None:
     if language not in {'zh', 'en'}:
         raise ValueError('daq_answer_language_invalid')
     done['answer_language'] = language
+    if (done.get('outcome') == 'safe_abstained'
+            and submission is not None
+            and submission.outcome == 'safe_abstained'
+            and done.get('answer') == render_submission(submission)):
+        done['answer'] = _present_safe_abstention(submission, language)
+        return
     if language == 'zh' or not isinstance(done.get('answer'), str):
         return
     failure = {
