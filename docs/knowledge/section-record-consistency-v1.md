@@ -75,3 +75,13 @@ No fallback checkpoint is inferred.
 Invalid record data remains a finding rather than crashing downstream metadata
 or dependency inspection. These checks preserve every existing nonpublication
 and independent-review boundary.
+
+
+## 2026-10-21 narrative extension
+
+The legacy exact `daq-record` block mode remains unchanged. The optional
+[narrative unit contract](section-narrative-consistency-v1.md) adds independent
+source-bound paragraph, table-row and step coverage. Hard facts are exact typed
+renders; reviewed explanatory prose requires actual source excerpts and an
+independent semantic decision. A body checksum or `review_status=verified` alone
+continues to leave unmapped substantive prose as `uncovered_body`.

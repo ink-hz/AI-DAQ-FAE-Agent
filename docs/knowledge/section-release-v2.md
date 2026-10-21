@@ -15,7 +15,7 @@ release review (`reviewer`, ISO date, `dev_batch`) and previous release ID. It a
 - `sections`, with exact UTF-8 `body`, stable `section_id`, nonempty `title` and
   `knowledge_type`, body digest, scope, source references, record assertions,
   dependency IDs, reviewed link IDs, review status and two named reviews;
-- `source_locations`: exact hash/locator identities, with no extracted source text;
+- `source_locations`: exact hash/locator identities. Narrative-referenced chunks additionally retain exact `text` and `text_sha256` for immutable evidence verification; unrelated chunks retain location metadata only. These are private release metadata, never unfiltered model context;
 - `section_count`, `section_status_counts`, `record_kind_counts`, `role_summary`;
 - `source_index` from source identity to record/section IDs and `dependency_index`
   from section to record, section and link IDs.
@@ -48,13 +48,11 @@ projection; it does not edit stored status or manufacture review signatures.
 Caller-provided consistency flags or audit summaries cannot waive the gate.
 
 The body field can represent free prose; it has no generated-block-only schema.
-**Current gate limitation:** B2 v1 only reconciles exact typed assertion blocks.
+**Legacy typed-block mode:** B2 v1 reconciles exact typed assertion blocks.
 Free narrative outside those blocks remains `uncovered_body`, even with fresh
 human review envelopes. The synthetic positive tests establish immutable body
 transport and review/role contracts using reconciled blocks; they do not claim
-that arbitrary narrative is now reconciled or ready for customer answers. A later
-explicit B2 narrative reconciliation contract is required before such bodies can
-pass. No real A2/A3/A4 narrative becomes eligible in this change.
+that arbitrary narrative is now reconciled or ready for customer answers. The optional [source-bound narrative-unit extension](section-narrative-consistency-v1.md) now reconciles exact spans, source excerpts, independent unit reviews and deterministic hard-fact renders. It does not automatically approve A2/A3/A4 candidates. The first two real chapters and their exact Dev scope are recorded in the [KQ status report](../reviews/2026-10-21-daq-knowledge-quality-status.md).
 
 ## Roles and links
 
@@ -80,3 +78,26 @@ ID. Validation/storage failures preserve the old active pointer; temporary stage
 cleanup and rollback remain explicit. C1 changes publication/storage and the
 request-independent reviewed view only. Search/read_doc, authenticated role
 mapping, real source approval and real activation belong to later tasks.
+
+
+## Explicit local Dev custody
+
+The existing public writer, D3 readiness and active loader support an explicit
+`allow_local_dev=True` path for the owner-authorized, verified local archive.
+`scope.execution_scope` must be `loopback_dev_internal_fae_only`, custody must
+name the existing 2026-10-12 authorization and verify exact original bytes, and
+all answerable records/sections must retain internal FAE roles. Independent
+source/content and permission decisions remain required; no external signature
+or independently durable copy is invented. The approval verifier is still a
+trusted operator adapter checking exact recorded content decisions.
+
+Default `ReviewedKnowledge.load_active` rejects this mode, including when the
+caller supplies an approval verifier. Authenticated application startup has no
+opt-in. Local stage/activation/rollback uses the same immutable writer, compiler,
+indices and compensation logic; production owner modes remain unchanged.
+
+Reviewed field aliases and operating guards are retained in approval-bound
+`readiness.scope.domain_evidence`; the loader validates their target fields,
+entities and veto labels. Mixing this authority with `operator_release` is
+rejected. Runtime `sections_for` omits private narrative-unit reviews/excerpts,
+while retaining approved body, dependencies and structured source references.
