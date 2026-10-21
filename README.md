@@ -2,19 +2,19 @@
 
 数采 FAE 是独立版本、独立知识发布和回滚的内部服务，复用固定源码版本的通用 FAE 运行时。生产入口为 [数采 FAE](https://agent.orbbec.com.cn/daq/)。
 
-## 当前状态（2026-10-20，已部署）
+## 当前状态（2026-10-21，已部署）
 
-当前生产保留 27 条已审主知识，SDK 知识为 24 条包内用法及 17 条唯一变更日志记录。2026-10-20 的数采场景与证据范围升级已部署；代码和提示词的本机 Dev 静态回归为 **1618 passed**，聚焦真实问答和独立复审结果、未完成的全量回放范围见[本次发布记录](docs/reviews/2026-10-20-daq-scenario-production-release.md)。本轮没有改动共享 `src/`，没有对生产回答接口发送模型评测题。
+当前生产加载 **66 条已审记录、2 个章节**，SDK 知识为 **24 条包内用法、17 条版本说明**。已发布 EGO 1600 规格章节及 EGO Pro 单机录制章节，并修复真实问答发现的规格字段匹配问题。本次定向契约回归 **86 通过**；两道新增题执行了 3 次真实 Dev 问答，只重测失败题，已通过题未重跑，并完成独立 Codex 答案复审。共享 `src/` 和相机仓未改，生产没有运行模型评测题。详见[本次生产发布记录](docs/reviews/2026-10-21-kq-production-release.md)。
 
 | 对象 | 当前生产身份 |
 | --- | --- |
-| DAQ 源码与运行时 | `7d7232902cdd6cdea2baf4d61ccc0960ef1ab428`；`daq-ba50906bd98b` |
-| 27 条主知识 | `19d1a31b7606df155fda7d1ca8e336a845e3b78d19f15818af89e7127d2f18c0` |
-| 24 条 SDK 用法、17 条日志 | `2bfd0538e0fa1ba46e607d8a55b63a06f9b397141b2c0192b9a6a84e2bd66d44` |
+| DAQ 镜像源码与运行时 | `ab1fa4bd18ec1c3831466cde00fd3a32e63ff396`；`daq-5e86db35722f` |
+| 66 条主知识、2 个章节 | `8ab080a4fc404a2cb88b4c5f1f2ec4f660895b3525c39812f1d095f499300ea3` |
+| 24 条 SDK 用法、17 条版本说明 | `514fbb3cc29c17bbcaa6b7b8b12ee6791b255d29d198cd5a4ef65b7eeb50a041` |
 
-当前生产 DAQ 镜像为 `sha256:564a0e39eeb5402ae5e579276b1a6949a9f44b8d45b094ccd124b0889d6d6b0c`。数采与相机容器均健康、重启 0，相机镜像未切换。公网 `/daq/` 及前端资源返回 200，匿名会话与历史接口返回 401。代码推送、知识发布与生产切换分别核对，详见[2026-10-20 发布记录](docs/reviews/2026-10-20-daq-scenario-production-release.md)；前次知识发布见[2026-10-18 发布记录](docs/reviews/2026-10-18-daq-knowledge-production-release.md)。
+当前生产 DAQ 镜像为 `sha256:85ce9efaded21ab5bbc9f7c377af73ed31851763d34290c7e22494b6e27f0e60`。数采与相机容器均健康、重启 0，相机容器和镜像未切换。公网 `/daq/` 返回 200，匿名历史接口返回 401。实际容器默认签名加载器已确认主知识、章节及 SDK 身份；环境、旧双指针、源码、镜像及数据库备份均保留，支持整组回滚。用户真实登录和设备试点不由这些只读检查替代。
 
-原件覆盖审计为产品 **9 已支撑内部可答发布 / 42 仅候选 / 225 仅归档**，SDK 侧 **30 / 0 / 113**。这是文件数，不能替代 27/23/17 条知识记录数。主候选图另有 715 条未发布记录；图像候选、软件兼容、官网链接、复杂组合及设备实测仍须按来源和条件单独审核。参见[完整覆盖审计](docs/reviews/2026-10-16-daq-full-material-coverage.md)。
+本次发布引用的 10 份原件已按原始哈希独立归档、核对。**114 个原候选章节仍未审核通过，未随发布转正**；其他冲突、软件兼容、复杂组合及设备实测仍按来源和条件分别处理。历史文件覆盖数字见[2026-10-16 覆盖审计](docs/reviews/2026-10-16-daq-full-material-coverage.md)，不把文件数当成知识记录数或全量清洗完成证明。
 
 ## 架构和范围
 
@@ -46,4 +46,4 @@ npm --prefix webui run build
 
 原件保存在 Git 忽略的 `data/knowledge/local_archive/`，逐文件按 SHA-256 核验。高频更新先比较来源、实体、变体、字段含义、测量条件和依赖关系；改变或撤回的事实不能继承旧审核状态。新事实完成来源核对、Dev 真实问答及独立答案复核后，生成不可变主知识或 SDK 发布包，最后切换对应指针。知识发布不改变相机服务。
 
-清洗和增量设计见[知识专项任务书](docs/superpowers/plans/2026-10-10-daq-knowledge-workstream-task-brief.md)、[完整设计](docs/2026-10-08-数采FAE完整设计.md)、[SDK 目录说明](Knowledge_SDK/README.md)与[本次生产发布记录](docs/reviews/2026-10-18-daq-knowledge-production-release.md)。
+清洗和增量设计见[知识库设计与更新工作流](docs/knowledge-base/knowledge-base-design-and-update-workflow.md)、[知识质量任务书](docs/knowledge-base/2026-10-21-knowledge-base-quality-improvement-task-brief.md)、[完整设计](docs/2026-10-08-数采FAE完整设计.md)、[SDK 目录说明](Knowledge_SDK/README.md)与[本次生产发布记录](docs/reviews/2026-10-21-kq-production-release.md)。
