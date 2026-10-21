@@ -83,3 +83,7 @@
 4. 完整应用需基于实际 Dev 主知识另绑 SDK，并做变更范围内的应用/问答语义验收；生产发布采用现行生产合同及成组回滚，不直接复制本机模式。
 
 更新操作见 [维护示例](../knowledge-base/knowledge-quality-maintenance-example.md)。
+
+## 整体复审与最终补充
+
+独立工程整体复审及修复复审为 0 Critical / 0 Important。最终补充索引 `data/knowledge/curated/kq-acceptance-20261021-final/index.json` 的 SHA-256 为 `64e45fd9c1e7f7ddf6c5c3af48dae52caff945e78994edb6a6405be26c07effa`，绑定离线审核修复、冻结的整体复审和新运行时加载/结转文件，并引用原 197 文件验收索引。代码和 Dev 身份已分别记录；生产只读收尾仍为原 `cdd8df9…` / `fa15e496…` / `daq-ef2c4e87f0ef`，健康正常，未进行发布。
