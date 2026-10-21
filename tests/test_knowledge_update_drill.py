@@ -180,3 +180,14 @@ def test_dependency_closure_includes_system_but_protects_other_topology(tmp_path
         assert scenario['plan']['affected']['record_ids'] == ['claim:alpha', 'procedure:alpha']
         assert scenario['details']['old_roles'] != scenario['details']['new_roles']
     assert report['scenarios']['source_added']['plan']['affected']['coverage_ids'] == ['gap:alpha']
+
+
+def test_target_prefers_parameter_used_by_real_section(tmp_path):
+    module = drill_module()
+    bundle, _ = fixture_bundle(tmp_path)
+    bundle['sections'] = [s for s in bundle['sections'] if s['section_id'] != 'section:alpha']
+    bundle['bodies'].pop('section:alpha')
+    bundle['coverage'][0]['section_ids'] = []
+    claim, source = module._target(bundle)
+    assert claim['id'] == 'claim:beta'
+    assert source['path'] == 'beta.md'

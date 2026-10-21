@@ -50,7 +50,10 @@ def _guard(before, release_root):
 
 def _target(bundle):
     sources = {s['path']: s for s in bundle['snapshot']['sources']}
-    for row in bundle['records']:
+    chapter_dependencies = {rid for section in bundle['sections']
+                            for rid in section.get('dependency_claim_ids', [])}
+    ordered = sorted(bundle['records'], key=lambda r: r['id'] not in chapter_dependencies)
+    for row in ordered:
         if row.get('kind') == 'claim' and row.get('status') == 'verified' and row.get('source_refs'):
             source = sources.get(row['source_refs'][0]['path'])
             if source and source.get('kind') != 'asset' and 'value' in row.get('data', {}):
