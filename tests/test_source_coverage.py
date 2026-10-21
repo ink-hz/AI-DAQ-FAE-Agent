@@ -143,3 +143,22 @@ def test_system_inventory_uses_actual_source_candidate_topology_ids():
     from scripts.audit_daq_knowledge_quality import SYSTEMS
     assert 'ego-two-wristcam-hub-pc' in SYSTEMS
     assert len(SYSTEMS) == 5
+
+
+def test_candidate_conflict_remains_visible_beside_published_negative_evidence():
+    _, _, _, candidate, _ = fixture()
+    published = deepcopy(candidate)
+    published.update(id='claim:negative', status='unsupported', answerable=True,
+                     fact_review={'reviewer': 'prior negative source check'},
+                     access_review={'view_roles': ['internal_fae']})
+    published['data']['value'] = False
+    candidate.update(status='conflict')
+    matrix = build_field_matrix([candidate], [published], [], [], [])
+    assert len(matrix['cells']) == 1
+    cell = matrix['cells'][0]
+    assert cell['status'] == 'conflict_pending'
+    assert cell['candidate_records'] == ['claim:one']
+    assert cell['published_records'] == ['claim:negative']
+    assert cell['source_refs'] == published['source_refs']
+    assert cell['values'][1] == {'record_id': 'claim:negative', 'source': 'published',
+                                  'data': published['data'], 'record_status': 'unsupported'}

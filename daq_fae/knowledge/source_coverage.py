@@ -163,7 +163,8 @@ def build_field_matrix(candidate_records, published_records, sections, software,
                 if row.get('status') == 'unsupported':
                     if not row.get('source_refs') or not row.get('fact_review'):
                         raise ValueError('negative assertion lacks reviewed source evidence')
-                    cell['status'] = 'verified_unsupported'
+                    if cell['status'] != 'conflict_pending':
+                        cell['status'] = 'verified_unsupported'
                 elif (row.get('status') == 'verified' and row.get('answerable') is True
                       and row.get('fact_review') and row.get('access_review', {}).get('view_roles')):
                     if cell['status'] != 'conflict_pending':
