@@ -167,3 +167,47 @@ def test_runtime_section_projection_hides_private_unit_provenance_and_remains_re
         'read_doc', {'section_id': s['section_id']})
     assert result.status == 'ok' and result.content['matches'][0]['body'] == body
     assert 'narrative_units' not in json.dumps(result.content)
+
+
+def test_local_role_limit_uses_status_instead_of_caller_answerability(tmp_path):
+    from daq_fae.knowledge.release_readiness import audit_readiness
+    from daq_fae.knowledge.records import access_fingerprint
+    b = local_bundle(tmp_path)
+    b['sections'], b['bodies'] = [], {}
+    for row in b['records']:
+        row['answerable'] = False
+        row['access_review']['view_roles'] = ['channel']
+        row['access_review']['record_sha256'] = access_fingerprint(row)
+    report = audit_readiness(sign(b), verify_approval=verify, allow_local_dev=True)
+    assert not report['ready'] and 'local_dev_roles' in report['reasons']
+
+
+def test_readiness_release_keeps_reviewed_field_aliases_and_operating_guards(tmp_path):
+    from daq_fae.knowledge.operator_release import PRO_VETO_ENTITIES
+    b = local_bundle(tmp_path)
+    b['scope']['domain_evidence'] = {
+        'contract': 'daq-reviewed-operating-scope/v1',
+        'field_aliases': {'resolution': ['分辨率']},
+        'scoped_field_aliases': {'entity:ego-1600': {'像素': 'resolution'}},
+        'veto_entities': deepcopy(PRO_VETO_ENTITIES),
+    }
+    from daq_fae.knowledge.release_readiness import stage_release
+    rid = stage_release(tmp_path/'release', sign(b), verify_approval=verify, allow_local_dev=True)
+    view = ReviewedKnowledge.from_manifest(rid, releases._read_release(tmp_path/'release',rid)[0])
+    assert view.resolve_field('分辨率') == 'resolution'
+    assert view.resolve_field('像素', 'entity:ego-1600') == 'resolution'
+    assert view.is_operator_pro_v2
+    assert view.operating_veto_entity_records()
+    assert view.records_for('channel') == []
+
+
+def test_invalid_domain_alias_or_veto_cannot_enter_readiness_release(tmp_path):
+    b = local_bundle(tmp_path)
+    b['scope']['domain_evidence'] = {
+        'contract': 'daq-reviewed-operating-scope/v1',
+        'field_aliases': {'nonexistent_field': ['分辨率']},
+        'scoped_field_aliases': {}, 'veto_entities': [],
+    }
+    from daq_fae.knowledge.release_readiness import audit_readiness
+    report = audit_readiness(sign(b), verify_approval=verify, allow_local_dev=True)
+    assert not report['ready'] and 'content_contract' in report['reasons']

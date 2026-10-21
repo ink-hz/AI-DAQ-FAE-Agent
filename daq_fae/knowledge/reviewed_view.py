@@ -112,7 +112,11 @@ class ReviewedKnowledge:
         self.manifest = deepcopy(manifest)
         self._records = tuple(deepcopy(manifest["records"]))
         self._sections = tuple(deepcopy(manifest.get("sections", [])))
-        self.is_operator_pro_v2 = (manifest.get('review', {}).get('operator_release', {}).get('mode')
+        operator = manifest.get('review', {}).get('operator_release', {})
+        domain = manifest.get('review', {}).get('readiness', {}).get('scope', {}).get('domain_evidence')
+        self._domain_evidence = deepcopy(domain if domain is not None else operator)
+        self.is_operator_pro_v2 = (self._domain_evidence.get('contract') == 'daq-reviewed-operating-scope/v1' or
+                                  operator.get('mode')
                                    in {'owner_directed_source_checked_v2',
                                        'owner_directed_source_checked_specs_v4'})
 
@@ -122,7 +126,7 @@ class ReviewedKnowledge:
             return []
         return [{'id': item['id'], 'scope': {},
                  'data': {'name': item['name'], 'aliases': item['aliases']}}
-                for item in self.manifest['review']['operator_release']['veto_entities']]
+                for item in self._domain_evidence['veto_entities']]
 
     @staticmethod
     def _identity_text(value: str) -> str:
@@ -267,7 +271,7 @@ class ReviewedKnowledge:
             key: row['scope'][key] for key in row['scope'].get('required_selectors', [])}}
 
     def resolve_field(self, field: str, entity_id: str | None = None) -> str | None:
-        evidence = self.manifest.get('review', {}).get('operator_release', {})
+        evidence = self._domain_evidence
         normalized = self._identity_text(field)
         scoped = evidence.get('scoped_field_aliases', {}).get(entity_id, {})
         for alias, canonical in scoped.items():
@@ -453,6 +457,10 @@ class ReviewedKnowledge:
                 raise ValueError('knowledge entity alias collision')
         if manifest.get("answerable_count") != answerable:
             raise ValueError("knowledge release answerable count invalid")
+        domain = manifest.get('review', {}).get('readiness', {}).get('scope', {}).get('domain_evidence')
+        if domain is not None:
+            from .domain_metadata import validate_domain_metadata
+            validate_domain_metadata(domain, manifest['records'])
         if manifest["format_version"] == 2:
             from .section_release import validate_section_manifest
             validate_section_manifest(manifest)

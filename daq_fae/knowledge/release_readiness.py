@@ -55,7 +55,7 @@ def _local_archive_findings(bundle):
     # The local waiver only covers the already authorized internal Dev role.
     rows = bundle.get('records', [])
     sections = bundle.get('sections', [])
-    if any(r.get('answerable', r.get('status') in {'verified', 'unsupported'}) and
+    if any(r.get('status') in {'verified', 'unsupported'} and
            (r.get('access_review', {}).get('view_roles') != ['internal_fae'] or
             set(r.get('access_review', {}).get('forward_roles', [])) - {'internal_fae'})
            for r in rows) or any(s.get('view_roles') != ['internal_fae'] or
