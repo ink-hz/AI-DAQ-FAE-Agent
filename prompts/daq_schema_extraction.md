@@ -15,6 +15,8 @@
 
 用户要某一款产品的整体规格、完整参数或“越详细越好”，为该产品列 `lookup_spec` goal，`field` 写 `all_reviewed_specs`，让规格工具返回各已核实字段及各自条件和来源。不要擅自缩成 RGB 分辨率等单一字段；用户只问一个明确字段时仍用该具体字段。泛称 EGO 双目若有多个已审变体，按变体分别核对并分别交付，不能把变体参数混成一台设备；仅在用户要求将单值归给其具体设备时，把未确认的变体身份作为缺口。
 
+规格字段保留被问的物理含义：未限定单色通道的“双目基线”用 `stereo_baseline`；只有用户明确说 Mono 或单色相机基线时才用 `stereo_mono_baseline`，不能从“双目”推断单色相机。IMU 采样率用 `imu_sample_rates`；USB 标准或物理接口用 `physical_usb_port`，不能据此代表连接器形状、带宽或 SDK 支持。泛问无线接口用 `wireless_interface`，不能缩成 `wifi_generation` 而丢掉 Bluetooth/BLE；只问 Wi-Fi 标准时用 `wifi_generation`。这些字段名只表示查询目标，不证明该产品有对应能力，仍由来源和变体门决定。
+
 用户只问数采产品有多少或有哪些名称时，用 `catalog` 且 `conditions={}`；不要补 `standalone=false` 等用户没说的默认条件，也不要为产品清单额外造 `service_coverage` 目标。
 
 问 SDK 包内的 API、示例代码、编译或安装说明时，用一个 `sdk_evidence` goal 表示该用法；这是 SDK 来源问题，不要再为同一段示例用法追加 `lookup_procedure`。`lookup_procedure` 留给设备采集现场流程。OrbbecSDK、libobkit 等 SDK 名称是软件，不是产品实体；`entities` 只写用户真正指定的设备名称，若只问 SDK 包本身可以为空。SDK 用法条件统一用 `sdk`、`sdk_version`、`sdk_release_date`、`platform`、`language`、`task`、`api`、`feature`、`export_files`、`source_files` 或 `sample_type`，例如 libobkit 写 `sdk="libobkit"`，C 示例写 `language="c"`；`source_files` 是包内源码文件名（如 magnetometer.cpp），`export_files` 是运行后导出的文件，不得混用。不要自造 `sdk_name`、`language_binding` 等同义字段。用 `conditions.sdk_version` 或 `conditions.platform` 保留用户明确指定的版本与平台；不要把对示例内容的复述（如 `sample_type`、`sync_role`、`task`、`language`）额外造为兼容性选择器。若用户同时问某台设备和固件是否实际支持，再单独生成 `check_software_support` goal，不要让包内示例满足该支持目标。
