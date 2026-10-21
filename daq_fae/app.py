@@ -171,6 +171,16 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
     release_root = knowledge_release_root or Path(os.getenv(
         "DAQ_KNOWLEDGE_RELEASE_ROOT", str(_ROOT / "data" / "knowledge" / "published"),
     ))
+    if knowledge_approval_verifier is None:
+        approval_keys_file = os.getenv("DAQ_KNOWLEDGE_APPROVAL_KEYS_FILE")
+        approval_keys_sha256 = os.getenv("DAQ_KNOWLEDGE_APPROVAL_KEYS_SHA256")
+        if approval_keys_file is not None or approval_keys_sha256 is not None:
+            if not approval_keys_file or not approval_keys_sha256:
+                raise ValueError("daq_knowledge_approval_configuration_missing")
+            from daq_fae.knowledge.approval_verifier import load_approval_verifier
+            knowledge_approval_verifier = load_approval_verifier(
+                Path(approval_keys_file), approval_keys_sha256,
+            )
     candidate_flag = os.getenv("DAQ_DEV_CANDIDATE_MODE", "false")
     if candidate_flag not in {"true", "false"}:
         raise ValueError("daq_dev_candidate_mode_invalid")
