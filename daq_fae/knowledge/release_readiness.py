@@ -10,6 +10,7 @@ from contextlib import contextmanager
 import fcntl
 import os
 import re
+from pathlib import Path
 
 from .adjudication import digest
 from . import releases
@@ -27,6 +28,40 @@ def _hash(value):
 def _text(value):
     return isinstance(value, str) and bool(value.strip())
 
+
+
+def is_local_dev_bundle(bundle):
+    return bundle.get('scope', {}).get('execution_scope') == 'loopback_dev_internal_fae_only'
+
+
+def _local_archive_findings(bundle):
+    """Verify the existing local archive without claiming independent custody."""
+    reasons = []
+    a = bundle.get('archive', {})
+    if a.get('custody_mode') != 'local_verified' or a.get('authorization_ref') != \
+            'project-owner-direction-2026-10-12' or a.get('independent_durable') is not False:
+        return ['local_archive_authorization']
+    try:
+        from scripts.archive_candidate_snapshot import verify_archive
+        root = Path(a['custody_ref'])
+        verify_archive(root, bundle['snapshot']['archive_manifest_sha256'])
+        import json
+        original = json.loads((root / 'manifest.json').read_text())['files']
+        inventory = lambda rows: sorted((r['path'], r['sha256'], r['size']) for r in rows)
+        if inventory(original) != inventory(bundle['snapshot']['sources']):
+            reasons.append('local_archive_inventory')
+    except (OSError, ValueError, KeyError, TypeError):
+        reasons.append('local_archive_inventory')
+    # The local waiver only covers the already authorized internal Dev role.
+    rows = bundle.get('records', [])
+    sections = bundle.get('sections', [])
+    if any(r.get('answerable', r.get('status') in {'verified', 'unsupported'}) and
+           (r.get('access_review', {}).get('view_roles') != ['internal_fae'] or
+            set(r.get('access_review', {}).get('forward_roles', [])) - {'internal_fae'})
+           for r in rows) or any(s.get('view_roles') != ['internal_fae'] or
+           set(s.get('forward_roles', [])) - {'internal_fae'} for s in sections):
+        reasons.append('local_dev_roles')
+    return reasons
 
 def _manifest(bundle, *, require_current_links=True):
     snapshot = bundle['snapshot']
@@ -47,15 +82,14 @@ def _manifest(bundle, *, require_current_links=True):
         'previous_release': bundle['previous_release'],
         'review': {**bundle['review'], 'readiness': deepcopy(bundle)},
         'sections': sections, 'runtime_contract': 'daq-reviewed-sections-v2',
-        'source_locations': sorted([{k: c[k] for k in ('source_path', 'source_sha256', 'locator')}
-                                    for c in snapshot.get('chunks', [])], key=releases._json_bytes),
+        'source_locations': releases.source_locations(snapshot, bundle['sections']),
         **section_indices(sections, records),
     }
     ReviewedKnowledge.from_manifest('0'*64, manifest)
     return manifest
 
 
-def audit_readiness(bundle, *, verify_approval=None, _require_current_links=True):
+def audit_readiness(bundle, *, verify_approval=None, _require_current_links=True, allow_local_dev=False):
     """Read-only enumerated rejection; signatures bind every input and exclusion.
 
     verify_approval(reviewer, canonical_payload_sha256, signature) must be supplied
@@ -71,8 +105,15 @@ def audit_readiness(bundle, *, verify_approval=None, _require_current_links=True
         a, r, s = b.get('archive', {}), b.get('runtime', {}), b.get('scope', {})
         review, impact, batch = b.get('reviews', {}), b.get('impact', {}), b.get('dev_batch', {})
         snapshot = b.get('snapshot', {})
-        check(a.get('independent_durable') is True and all(_text(a.get(k)) for k in
-              ('custody_ref', 'permissions_ref', 'retrieval_ref')), 'archive_custody')
+        local = is_local_dev_bundle(b)
+        check((a.get('independent_durable') is True or (local and allow_local_dev))
+              and all(_text(a.get(k)) for k in ('custody_ref', 'permissions_ref', 'retrieval_ref')),
+              'archive_custody')
+        if local:
+            check(allow_local_dev, 'local_dev_explicit_opt_in')
+            reasons.extend(code for code in _local_archive_findings(b) if code not in reasons)
+        elif a.get('custody_mode') == 'local_verified':
+            check(False, 'local_dev_scope')
         check(_hash(a.get('manifest_sha256')) and a.get('manifest_sha256') ==
               snapshot.get('archive_manifest_sha256'), 'archive_manifest')
         check(bool(snapshot.get('sources')) and a.get('sources_sha256') == digest(snapshot.get('sources'))
@@ -134,15 +175,16 @@ def audit_readiness(bundle, *, verify_approval=None, _require_current_links=True
             'gate': 'daq-dev-readiness/v1', 'answer_quality': 'pending_D4'}
 
 
-def _require(bundle, verify, *, require_current_links=True):
-    report = audit_readiness(bundle, verify_approval=verify, _require_current_links=require_current_links)
+def _require(bundle, verify, *, require_current_links=True, allow_local_dev=False):
+    report = audit_readiness(bundle, verify_approval=verify, _require_current_links=require_current_links,
+                             allow_local_dev=allow_local_dev)
     if not report['ready']:
         raise ValueError('release readiness rejected: ' + ', '.join(report['reasons']))
 
 
-def stage_release(root, bundle, *, verify_approval):
+def stage_release(root, bundle, *, verify_approval, allow_local_dev=False):
     b = deepcopy(bundle)
-    _require(b, verify_approval)
+    _require(b, verify_approval, allow_local_dev=allow_local_dev)
     return releases._publish_release(root, b['snapshot'], b['records'], b['previous_release'],
                                     {**b['review'], 'readiness': b},
                                     sections=b['sections'], bodies=b['bodies'])
@@ -160,10 +202,11 @@ def _lock(root):
         os.close(fd)
 
 
-def _checked(root, rid, verify, *, require_current_links=True):
+def _checked(root, rid, verify, *, require_current_links=True, allow_local_dev=False):
     manifest, _ = releases._read_release(root, rid)
     bundle = manifest['review'].get('readiness')
-    _require(bundle, verify, require_current_links=require_current_links)
+    _require(bundle, verify, require_current_links=require_current_links,
+             allow_local_dev=allow_local_dev)
     if releases._digest(releases._json_bytes(_manifest(bundle, require_current_links=require_current_links))) != rid:
         raise ValueError('release readiness content binding mismatch')
     return manifest
@@ -207,28 +250,29 @@ def _switch(root, rid, manifest, previous, observe):
         raise ValueError(f'Dev {phase} failed; previous pointer restored') from failure
 
 
-def activate_checked(root, release_id, *, verify_approval, observe):
+def activate_checked(root, release_id, *, verify_approval, observe, allow_local_dev=False):
     with _lock(root):
-        manifest = _checked(root, release_id, verify_approval)
+        manifest = _checked(root, release_id, verify_approval, allow_local_dev=allow_local_dev)
         active = releases.read_active_release(root)
         if manifest['previous_release'] != (active['release_id'] if active else None):
             raise ValueError('previous release does not match active pointer')
         return _switch(root, release_id, manifest, active, observe)
 
 
-def rollback_checked(root, *, verify_approval, observe):
+def rollback_checked(root, *, verify_approval, observe, allow_local_dev=False):
     with _lock(root):
         active = releases.read_active_release(root)
         if not active or not active['manifest'].get('previous_release'):
             raise ValueError('previous release unavailable')
         # The current approval authorizes this exact prior ID. Validate it even
         # when the target is empty; an empty package has no standalone D3 grant.
-        current = _checked(root, active['release_id'], verify_approval, require_current_links=False)
+        current = _checked(root, active['release_id'], verify_approval, require_current_links=False,
+                           allow_local_dev=allow_local_dev)
         target = current['previous_release']
         manifest, _ = releases._read_release(root, target)
         if not any(manifest.get(key) for key in ('sources', 'records', 'sections', 'source_locations')):
             # Knowledge-only rollback retains the reviewed current runtime.
             # _switch observes the exact empty target ID and compensates failures.
             return _switch(root, target, current, active, observe)
-        manifest = _checked(root, target, verify_approval)
+        manifest = _checked(root, target, verify_approval, allow_local_dev=allow_local_dev)
         return _switch(root, target, manifest, active, observe)

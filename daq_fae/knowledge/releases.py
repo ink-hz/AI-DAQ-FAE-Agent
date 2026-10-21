@@ -70,6 +70,21 @@ def _read_release(root: Path, release_id: str) -> tuple[dict, str]:
     return manifest, release_id
 
 
+
+def source_locations(snapshot, sections):
+    """Keep narrative evidence text only where the immutable unit gate needs it."""
+    from .narrative_units import narrative_source_keys
+    selected = narrative_source_keys(sections)
+    rows = []
+    for chunk in snapshot.get('chunks', []):
+        row = {k: chunk[k] for k in ('source_path', 'source_sha256', 'locator')}
+        key = (chunk['source_path'], chunk['source_sha256'],
+               json.dumps(chunk['locator'], ensure_ascii=False, sort_keys=True, separators=(',', ':')))
+        if key in selected:
+            row.update({k: chunk[k] for k in ('text', 'text_sha256') if k in chunk})
+        rows.append(row)
+    return sorted(rows, key=_json_bytes)
+
 def _publish_release(root: Path, snapshot: dict, records: list[dict],
                     previous_release: str | None, review: dict, *,
                     sections: list[dict] | None = None, bodies: dict[str, str] | None = None,
@@ -112,9 +127,7 @@ def _publish_release(root: Path, snapshot: dict, records: list[dict],
         compiled = compile_sections(sections, bodies, normalized, snapshot)
         manifest.update(format_version=2, sections=compiled,
                         runtime_contract="daq-reviewed-sections-v2",
-                        source_locations=sorted([
-                            {k: chunk[k] for k in ("source_path", "source_sha256", "locator")}
-                            for chunk in snapshot.get("chunks", [])], key=lambda c: _json_bytes(c)))
+                        source_locations=source_locations(snapshot, sections))
         manifest.update(section_indices(compiled, normalized))
     elif bodies is not None:
         raise ValueError("section bodies require sections")
@@ -212,7 +225,7 @@ def read_active_release(root: Path) -> dict | None:
 
 
 def publish_release(root, snapshot, records, previous_release, review, *,
-                    sections=None, bodies=None, verify_approval=None):
+                    sections=None, bodies=None, verify_approval=None, allow_local_dev=False):
     """Governed public publisher. Only a genuinely empty bootstrap needs no D3."""
     if not records and not sections and not bodies and not snapshot.get('sources') and not snapshot.get('chunks'):
         return _publish_release(root, snapshot, records, previous_release, review,
@@ -226,10 +239,11 @@ def publish_release(root, snapshot, records, previous_release, review, *,
             'snapshot': snapshot, 'records': records, 'previous_release': previous_release,
             'review': expected, 'sections': sections, 'bodies': bodies}.items()):
         raise ValueError('release readiness input binding mismatch')
-    return stage_release(root, bundle, verify_approval=verify_approval)
+    return stage_release(root, bundle, verify_approval=verify_approval,
+                         allow_local_dev=allow_local_dev)
 
 
-def activate_release(root, release_id, *, verify_approval=None, observe=None):
+def activate_release(root, release_id, *, verify_approval=None, observe=None, allow_local_dev=False):
     """Governed public activation; callbacks are trusted server-owned dependencies."""
     manifest, _ = _read_release(root, release_id)
     if not any(manifest.get(key) for key in ('sources', 'records', 'sections')):
@@ -244,4 +258,5 @@ def activate_release(root, release_id, *, verify_approval=None, observe=None):
     if not callable(verify_approval) or not callable(observe):
         raise ValueError('release readiness approval and Dev observation adapters required')
     from .release_readiness import activate_checked
-    return activate_checked(root, release_id, verify_approval=verify_approval, observe=observe)
+    return activate_checked(root, release_id, verify_approval=verify_approval, observe=observe,
+                            allow_local_dev=allow_local_dev)

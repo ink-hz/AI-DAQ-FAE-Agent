@@ -315,12 +315,17 @@ class ReviewedKnowledge:
         return {key: sorted(values) for key, values in sorted(scopes.items())}
 
     @classmethod
-    def load_active(cls, root: Path, *, verify_approval=None, runtime_release=None, upstream_sha=None) -> "ReviewedKnowledge | None":
+    def load_active(cls, root: Path, *, verify_approval=None, runtime_release=None, upstream_sha=None,
+                    allow_local_dev=False) -> "ReviewedKnowledge | None":
         if root.is_symlink():
             raise ValueError("knowledge release root must not be a symlink")
         active = read_active_release(root)
         if active is None:
             return None
+        from .release_readiness import is_local_dev_bundle
+        readiness = active['manifest'].get('review', {}).get('readiness', {})
+        if is_local_dev_bundle(readiness) and not allow_local_dev:
+            raise ValueError('local Dev knowledge requires explicit opt-in')
         if any(active['manifest'].get(key) for key in ('sources', 'records', 'sections')):
             if active['manifest'].get('review', {}).get('operator_release', {}).get('mode') in {\
                     'owner_directed_source_checked_v1', 'owner_directed_source_checked_v2',
@@ -331,7 +336,8 @@ class ReviewedKnowledge:
                                   upstream_sha=upstream_sha)
             else:
                 from .release_readiness import _checked
-                manifest = _checked(root, active['release_id'], verify_approval, require_current_links=False)
+                manifest = _checked(root, active['release_id'], verify_approval, require_current_links=False,
+                                    allow_local_dev=allow_local_dev)
                 runtime = manifest['review']['readiness']['runtime']
                 if runtime_release is None or upstream_sha is None or runtime['release'] != runtime_release \
                         or runtime['upstream_sha'] != upstream_sha:
@@ -488,6 +494,7 @@ class ReviewedKnowledge:
         """Filter whole sections before retrieval; never expose a mixed paragraph."""
         if role not in ROLES:
             raise ValueError("knowledge role invalid")
-        return [deepcopy(section) for section in self._sections
+        return [{key: deepcopy(value) for key, value in section.items()
+                 if key != 'narrative_units'} for section in self._sections
                 if role in section["view_roles"]
                 and (not for_delivery or role in section["forward_roles"])]
