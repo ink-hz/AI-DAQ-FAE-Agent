@@ -7,6 +7,7 @@ from datetime import date
 import hashlib
 import json
 from pathlib import Path
+import re
 
 COVERAGE_STATUSES = frozenset({'reviewed_published', 'candidate_pending', 'conflict_pending',
                                'audited_no_source', 'not_audited', 'verified_unsupported'})
@@ -14,6 +15,39 @@ COVERAGE_STATUSES = frozenset({'reviewed_published', 'candidate_pending', 'confl
 
 def _canonical(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+
+
+def source_audit_fingerprint(row):
+    """Bind a bounded absence audit to exact coverage and audit evidence identity."""
+    audit = row.get('source_audit', {})
+    basis = {
+        'format_version': 'daq-source-audit/v1',
+        'coverage': {key: deepcopy(row.get(key, {} if key in {'scope', 'conditions'} else None))
+                     for key in ('coverage_id', 'coverage_kind', 'entity_id', 'topology_id',
+                                 'field_id', 'scope', 'conditions', 'source_refs')},
+        'audit': {key: deepcopy(value) for key, value in audit.items() if key != 'audit_sha256'},
+    }
+    return hashlib.sha256(_canonical(basis).encode()).hexdigest()
+
+
+def _valid_audit_ref(ref):
+    if not isinstance(ref, dict) or set(ref) != {'path', 'sha256', 'locator'}:
+        return False
+    path, digest, locator = ref['path'], ref['sha256'], ref['locator']
+    if (not isinstance(path, str) or not path or '\\' in path or ':' in path
+            or any(ord(char) < 32 or ord(char) == 127 for char in path)
+            or any(part in {'', '.', '..'} for part in path.split('/'))
+            or not isinstance(digest, str) or re.fullmatch(r'[0-9a-f]{64}', digest) is None
+            or not isinstance(locator, dict)):
+        return False
+    if locator.get('kind') == 'page':
+        return (set(locator) == {'kind', 'page'} and type(locator['page']) is int
+                and locator['page'] > 0)
+    if locator.get('kind') == 'lines':
+        return (set(locator) == {'kind', 'start', 'end'}
+                and type(locator['start']) is int and type(locator['end']) is int
+                and 0 < locator['start'] <= locator['end'])
+    return False
 
 
 def _unique(rows, key, label):
@@ -187,17 +221,21 @@ def build_field_matrix(candidate_records, published_records, sections, software,
         cell['legacy_coverage_ids'].append(row['coverage_id'])
         if row['status'] == 'audited_no_source':
             audit = row.get('source_audit', {})
+            if not isinstance(audit, dict):
+                audit = {}
             valid_audit = (audit.get('decision') == 'audited_no_source'
                            and all(isinstance(audit.get(key), str) and audit[key].strip()
                                    for key in ('reviewer', 'reviewed_at', 'audit_scope'))
                            and audit.get('audit_scope') != 'supplied_record_inventory_only'
+                           and isinstance(row.get('scope', {}), dict)
+                           and isinstance(row.get('conditions', {}), dict)
                            and isinstance(audit.get('source_refs'), list)
                            and bool(audit['source_refs'])
-                           and all(ref in row.get('source_refs', [])
-                                   and isinstance(ref.get('sha256'), str)
-                                   and len(ref['sha256']) == 64 and ref.get('path')
-                                   and ref.get('locator', {}).get('kind') in {'page', 'lines'}
-                                   for ref in audit['source_refs']))
+                           and audit['source_refs'] == row.get('source_refs')
+                           and all(_valid_audit_ref(ref) for ref in audit['source_refs'])
+                           and isinstance(audit.get('audit_sha256'), str)
+                           and re.fullmatch(r'[0-9a-f]{64}', audit['audit_sha256']) is not None
+                           and audit['audit_sha256'] == source_audit_fingerprint(row))
             try:
                 date.fromisoformat(audit.get('reviewed_at', ''))
             except (TypeError, ValueError):

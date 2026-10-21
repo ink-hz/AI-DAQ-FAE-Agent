@@ -3,7 +3,7 @@ from copy import deepcopy
 
 import pytest
 
-from daq_fae.knowledge.source_coverage import build_source_coverage, build_field_matrix, write_quality_batch
+from daq_fae.knowledge.source_coverage import build_source_coverage, build_field_matrix, write_quality_batch, source_audit_fingerprint
 
 
 def fixture():
@@ -174,6 +174,7 @@ def test_explicit_bounded_source_audit_can_record_no_source_without_support_clai
            'source_audit': {'decision': 'audited_no_source', 'reviewer': 'Independent source reviewer',
                             'reviewed_at': '2026-10-21', 'audit_scope': 'spec.pdf physical page 1 only',
                             'source_refs': record['source_refs']}}
+    gap['source_audit']['audit_sha256'] = source_audit_fingerprint(gap)
     matrix = build_field_matrix([], [], [], [], [gap])
     cell = matrix['cells'][0]
     assert cell['status'] == 'audited_no_source'
@@ -190,3 +191,59 @@ def test_incomplete_source_audit_does_not_upgrade_inventory_absence():
     matrix = build_field_matrix([], [], [], [], [gap])
     assert matrix['cells'][0]['status'] == 'not_audited'
     assert matrix['cells'][0]['source_review_status'] == 'not_audited'
+
+
+def _source_audit_gap():
+    ref = {'path': 'spec.pdf', 'sha256': 'a' * 64, 'locator': {'kind': 'page', 'page': 1}}
+    gap = {'coverage_id': 'source:gap', 'coverage_kind': 'entity_field', 'entity_id': 'entity:one',
+            'field_id': 'firmware_version', 'scope': {'product': 'one'}, 'conditions': {'mode': 'one'},
+            'status': 'audited_no_source', 'record_ids': [], 'source_refs': [ref],
+            'source_audit': {'decision': 'audited_no_source', 'reviewer': 'Independent source reviewer',
+                             'reviewed_at': '2026-10-21', 'audit_scope': 'spec.pdf physical page 1 only',
+                             'source_refs': [deepcopy(ref)]}}
+    gap['source_audit']['audit_sha256'] = source_audit_fingerprint(gap)
+    return gap
+
+
+@pytest.mark.parametrize('changed', ['coverage_id', 'entity_id', 'field_id', 'scope', 'conditions', 'reference', 'audit_scope'])
+def test_source_audit_cannot_be_reused_for_changed_coverage(changed):
+    gap = _source_audit_gap()
+    if changed in {'coverage_id', 'entity_id', 'field_id'}:
+        gap[changed] += '-changed'
+    elif changed in {'scope', 'conditions'}:
+        gap[changed]['new_selector'] = 'different'
+    elif changed == 'reference':
+        gap['source_refs'][0]['locator']['page'] = 2
+        gap['source_audit']['source_refs'][0]['locator']['page'] = 2
+    else:
+        gap['source_audit']['audit_scope'] = 'other page scope'
+    cell = build_field_matrix([], [], [], [], [gap])['cells'][0]
+    assert cell['status'] == 'not_audited'
+    assert cell['source_review_status'] == 'not_audited'
+
+
+def test_legacy_source_audit_without_fingerprint_stays_not_audited():
+    gap = _source_audit_gap()
+    del gap['source_audit']['audit_sha256']
+    assert build_field_matrix([], [], [], [], [gap])['cells'][0]['status'] == 'not_audited'
+
+
+@pytest.mark.parametrize('bad_ref', [
+    {'path': '../spec.pdf'}, {'path': '/spec.pdf'}, {'path': 'sub/../spec.pdf'},
+    {'path': 'sub//spec.pdf'}, {'path': 'sub\\spec.pdf'}, {'path': 'C:/spec.pdf'},
+    {'path': 'spec\x00.pdf'}, {'sha256': 'g' * 64}, {'sha256': 'a' * 63},
+    {'locator': {'kind': 'page', 'page': 0}}, {'locator': {'kind': 'page', 'page': True}},
+    {'locator': {'kind': 'page', 'page': 1, 'extra': 2}}, {'locator': {'kind': 'page'}},
+    {'locator': {'kind': 'lines', 'start': 0, 'end': 2}},
+    {'locator': {'kind': 'lines', 'start': 5, 'end': 3}},
+    {'locator': {'kind': 'lines', 'start': 1, 'end': True}},
+    {'extra': 'unrecognized source attribute'},
+])
+def test_source_audit_rejects_malformed_references_even_when_bound(bad_ref):
+    gap = _source_audit_gap()
+    ref = deepcopy(gap['source_refs'][0])
+    ref.update(bad_ref)
+    gap['source_refs'] = [ref]
+    gap['source_audit']['source_refs'] = [deepcopy(ref)]
+    gap['source_audit']['audit_sha256'] = source_audit_fingerprint(gap)
+    assert build_field_matrix([], [], [], [], [gap])['cells'][0]['status'] == 'not_audited'
