@@ -210,3 +210,17 @@ def test_cli_accepts_new_ignored_curated_batch(tmp_path, monkeypatch):
     assert module.main(['--bundle', str(bundle_path), '--source-root', str(originals),
                         '--output', str(curated / 'drill')]) == 0
     assert (curated / 'drill/report.json').is_file()
+
+
+def test_added_source_accepts_plural_governed_gap_scope(tmp_path):
+    module = drill_module()
+    bundle, _ = fixture_bundle(tmp_path)
+    gap = bundle['coverage'][2]
+    gap['entity_ids'] = [gap.pop('entity_id')]
+    gap['field_ids'] = [gap.pop('field_id')]
+    scenario, payload, path = module._added_source_scenario(bundle)
+    assert scenario['details']['impact_scope'] == {
+        'entity_ids': ['entity:alpha'], 'field_ids': ['latency'], 'topology_ids': ['topology:alpha']}
+    assert scenario['plan']['affected']['coverage_ids'] == ['gap:alpha']
+    assert hashlib.sha256(payload).hexdigest() == scenario['details']['new_sha256']
+    assert path == scenario['details']['source_path']

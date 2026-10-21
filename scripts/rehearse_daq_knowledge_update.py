@@ -154,6 +154,38 @@ def _scenario(previous, current, details):
             'unrelated_entities': entities, 'candidate': candidate}
 
 
+def _added_source_scenario(bundle):
+    def dimensions(row):
+        scope = deepcopy(row.get('impact_scope', {}))
+        for plural, singular in (('entity_ids', 'entity_id'), ('field_ids', 'field_id'),
+                                 ('topology_ids', 'topology_id'), ('capabilities', 'capability')):
+            values = list(scope.get(plural, [])) + list(row.get(plural, []))
+            if row.get(singular):
+                values.append(row[singular])
+            scope[plural] = sorted(set(values))
+        if row.get('field'):
+            scope['field_ids'] = sorted(set(scope['field_ids'] + [row['field']]))
+        return {key: values for key, values in scope.items() if values}
+
+    gaps = [(c, dimensions(c)) for c in bundle['coverage'] if c.get('status') == 'audited_no_source']
+    gaps = [(c, scope) for c, scope in gaps if scope.get('entity_ids') and scope.get('field_ids')]
+    if not gaps:
+        raise ValueError('bundle needs typed audited_no_source coverage for added-source rehearsal')
+    gap, scope = gaps[0]
+    payload = b'KQ-07 SIMULATION ONLY: new relevant source, no authoritative claims\n'
+    added_path = 'kq-07-simulated-added-source.md'
+    if any(s['path'] == added_path for s in bundle['snapshot']['sources']):
+        raise ValueError('simulated source identity already exists')
+    changed = deepcopy(bundle)
+    changed['snapshot']['sources'].append({'path': added_path, 'sha256': _sha(payload),
+        'kind': 'markdown', 'impact_scope': scope, 'extraction_status': 'not_extracted_simulation'})
+    scenario = _scenario(bundle, changed, {
+        'source_path': added_path, 'old_sha256': None, 'new_sha256': _sha(payload),
+        'impact_scope': scope, 'target_coverage_id': gap['coverage_id'],
+        'positive_claim_created': False, 'absence_judgment_requires_independent_recheck': True})
+    return scenario, payload, added_path
+
+
 def rehearse(bundle, source_root, output, *, release_root=None, private_root=None):
     """Write one new private audit batch, preserving caller inputs and originals."""
     private = Path(private_root or ROOT / 'tmp').resolve(strict=True)
@@ -195,6 +227,8 @@ def rehearse(bundle, source_root, output, *, release_root=None, private_root=Non
             'original_bytes_verified': True, 'simulation_file': 'simulated-source.bin',
             'extraction_status': 'requires_reextraction_not_a_new_approved_source'})
 
+        write_private_report(resolved / 'source_bytes_changed-impact.json', scenarios['source_bytes_changed'], private)
+
         changed = deepcopy(bundle)
         changed_claim = next(r for r in changed['records'] if r['id'] == claim['id'])
         value = changed_claim['data']['value']
@@ -205,6 +239,8 @@ def rehearse(bundle, source_root, output, *, release_root=None, private_root=Non
             'source_path': source['path'], 'locator': claim['source_refs'][0]['locator'],
             'source_value_recheck_required': True})
 
+        write_private_report(resolved / 'table_value_changed-impact.json', scenarios['table_value_changed'], private)
+
         changed = deepcopy(bundle)
         changed['snapshot']['sources'] = [s for s in changed['snapshot']['sources'] if s['path'] != source['path']]
         changed['snapshot']['chunks'] = [c for c in changed['snapshot'].get('chunks', [])
@@ -213,6 +249,8 @@ def rehearse(bundle, source_root, output, *, release_root=None, private_root=Non
             'source_path': source['path'], 'old_sha256': old_hash, 'new_sha256': None,
             'historical_tombstones_retained_in_audit': True,
             'next_compiler_must_remove_all_proposed_withdrawals': True})
+
+        write_private_report(resolved / 'source_removed-impact.json', scenarios['source_removed'], private)
 
         for name, expand in (('permission_expanded', True), ('permission_contracted', False)):
             changed = deepcopy(bundle)
@@ -241,29 +279,12 @@ def rehearse(bundle, source_root, output, *, release_root=None, private_root=Non
             scenarios[name] = _scenario(bundle, changed, {
                 'record_id': claim['id'], 'source_path': source['path'], 'acl_field': field,
                 'old_roles': before, 'new_roles': after, 'permission_grant_performed': False})
+            write_private_report(resolved / (name + '-impact.json'), scenarios[name], private)
 
-        gaps = [c for c in bundle['coverage'] if c.get('status') == 'audited_no_source'
-                and c.get('entity_id') and (c.get('field_id') or c.get('field'))]
-        if not gaps:
-            raise ValueError('bundle needs typed audited_no_source coverage for added-source rehearsal')
-        gap = gaps[0]
-        scope = {'entity_ids': [gap['entity_id']], 'field_ids': [gap.get('field_id', gap.get('field'))]}
-        for dimension in ('topology_ids', 'capabilities'):
-            if gap.get(dimension):
-                scope[dimension] = list(gap[dimension])
-        payload = b'KQ-07 SIMULATION ONLY: new relevant source, no authoritative claims\n'
-        added_path = 'kq-07-simulated-added-source.md'
-        if any(s['path'] == added_path for s in bundle['snapshot']['sources']):
-            raise ValueError('simulated source identity already exists')
-        changed = deepcopy(bundle)
-        changed['snapshot']['sources'].append({'path': added_path, 'sha256': _sha(payload),
-            'kind': 'markdown', 'impact_scope': scope, 'extraction_status': 'not_extracted_simulation'})
+        scenarios['source_added'], payload, added_path = _added_source_scenario(bundle)
         (resolved / added_path).write_bytes(payload)
         (resolved / added_path).chmod(0o600)
-        scenarios['source_added'] = _scenario(bundle, changed, {
-            'source_path': added_path, 'old_sha256': None, 'new_sha256': _sha(payload),
-            'impact_scope': scope, 'target_coverage_id': gap['coverage_id'],
-            'positive_claim_created': False, 'absence_judgment_requires_independent_recheck': True})
+        write_private_report(resolved / 'source_added-impact.json', scenarios['source_added'], private)
 
         if _sha(_source_bytes(source_root, source)) != old_hash or _digest(bundle) != original_digest:
             raise ValueError('drill input changed during rehearsal')
