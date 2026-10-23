@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import re
 import unicodedata
+from daq_fae.knowledge.identity_selectors import composite_identity
 
 
 def support_id(parent_id: str, source_id: str) -> str:
@@ -54,8 +55,16 @@ def supporting_specs(matches: list[dict], requirements: list[dict],
                              or parent.get('capability') in {'resolve_entity', 'catalog'}):
                 continue
             wanted = parent.get('entities') or []
+            def matches_identity(value):
+                if not isinstance(value, str):return False
+                if _label(value) in labels:return True
+                selected = composite_identity(value, list(entities.values()))
+                return bool(selected and parent.get('conditions', {}).get('resolution_variant') ==
+                            selected['scope']['resolution_variant'] and
+                            (selected['id'] == entity['id'] or (
+                    family_document and selected['data'].get('family_entity_id') == entity['id'])))
             if not isinstance(wanted, list) or not any(
-                    isinstance(value, str) and _label(value) in labels for value in wanted):
+                    matches_identity(value) for value in wanted):
                 continue
             conditions = parent.get('conditions') or {}
             if not isinstance(conditions, dict) or (not family_document and any(

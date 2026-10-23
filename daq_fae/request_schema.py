@@ -1101,7 +1101,7 @@ def _normalize_spec_conditions(capability: str, conditions: dict[str, Any],
 
 
 _RESOLUTION_PAIR = re.compile(r'(?<!\d)(\d{3,4}x\d{3,4})(?!\d)')
-_RESOLUTION_VERSION = re.compile(r'(?<!\d)(\d{3,4}x\d{3,4})(?:版本|变体|版)')
+_RESOLUTION_VERSION = re.compile(r'(?<!\d)(\d{3,4}x\d{3,4})(?:版本|变体|版|version|variant)')
 
 
 def _explicit_resolution_versions(text: str) -> set[str]:
@@ -1140,7 +1140,8 @@ def _reviewed_short_resolution_versions(text: str, knowledge, role: str) -> set[
                 or not re.fullmatch(r'\d{3,4}x\d{3,4}', _normalized(variant))):
             continue
         families.setdefault(product, []).append(row)
-    selected: set[str] = set()
+    from daq_fae.knowledge.identity_selectors import composite_versions_in_text
+    selected: set[str] = composite_versions_in_text(text, knowledge.records_for(role))
     for clause in re.split(r'[。？！?；;\n]+', text):
         widths = set(re.findall(r'(?<!\d)(\d{3,4})\s*(?:版|版本|变体)',
                                 clause))
@@ -1662,6 +1663,33 @@ class DaqRequestSchema:
                 raw_signature = json.dumps(raw, ensure_ascii=False, sort_keys=True)
             except (TypeError, ValueError) as exc:
                 raise SchemaExtractionError('schema_goal_invalid') from exc
+            if kind == 'product' and len(entities) == 1 and knowledge is not None:
+                from daq_fae.knowledge.identity_selectors import composite_identity, composite_name_present
+                identity = composite_identity(entities[0], knowledge.records_for(role), allow_full=True)
+                if identity is not None:
+                    named_now = composite_name_present(entities[0], question)
+                    if candidate.get('topic_switch') is True and not named_now:
+                        raise SchemaExtractionError('entity_not_grounded')
+                    if not named_now and not composite_name_present(entities[0], prior_user_context):
+                        raise SchemaExtractionError('entity_not_grounded')
+                    identity_context = (question if named_now else
+                                        prior_user_context + '\n' + question)
+                    if composite_identity(entities[0], knowledge.records_for(role), allow_full=True,
+                                          context_text=identity_context) is None:
+                        raise SchemaExtractionError('resolution_variant_not_user_variant')
+                    selector = identity['scope']['resolution_variant']
+                    if (_normalized(selector) in _normalized(entities[0])
+                            and selector not in explicit_versions):
+                        raise SchemaExtractionError('resolution_variant_not_user_variant')
+                    if ((conditions.get('resolution_variant') is not None and
+                         _normalized(str(conditions['resolution_variant'])) != selector)
+                            or _normalized(str(conditions.get('variant', selector))) not in {
+                                selector, selector.split('x')[0]}):
+                        raise SchemaExtractionError('schema_variant_alias_conflict')
+                    entities = [identity['data']['name']]
+                    conditions = {k: v for k, v in conditions.items() if k != 'variant'}
+                    conditions['resolution_variant'] = selector
+                    explicit_versions.add(selector)
             if kind == 'product' and 'variant' in conditions:
                 reviewed_variant = _reviewed_width_variant_for_goal(
                     conditions['variant'], entities, short_current, knowledge, role)

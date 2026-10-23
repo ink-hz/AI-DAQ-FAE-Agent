@@ -875,6 +875,14 @@ class DaqToolBox:
                         "source_id": row["kb_id"], "source_refs": row["source_refs"],
                     } for row in matches])
         scope_normalized = False
+        if name == 'resolve_entity' and not getattr(self.knowledge, 'is_candidate_preview', False):
+            from daq_fae.knowledge.identity_selectors import composite_identity
+            identity = composite_identity(str(arguments.get('text') or ''),
+                                          self.knowledge.records_for(self.role), allow_full=True,
+                                          context_text=self.question or None)
+            if identity is not None:
+                arguments = {**arguments, 'text': identity['id']}
+                scope_normalized = True
         completed_claim_conditions = {}
         question_targets = {}
         if name == "lookup_spec" and hasattr(self.knowledge, "ground_question"):
