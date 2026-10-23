@@ -1,5 +1,7 @@
 # 2026-10-23 DAQ 真实反馈修复
 
+> 修复阶段证据保持原身份。用户随后授权的实际生产发布已完成，见[生产发布记录](2026-10-23-daq-real-feedback-production-release.md)。下文“生产未改变”等表述限定为本次修复/Dev 阶段。
+
 ## 范围和发布状态
 
 基于 [5 个线上会话、8 轮调查](2026-10-23-daq-real-feedback-root-cause.md)，在 `fix/real-feedback-20261023` 实施 DAQ 领域修复。基线 `9331d7d6d1e0dbfb6af65de9c52fa25c5cab5e9e`。相机仓和共享 `src/` 没有写入，上游仍为 `6bad94591dc4c40c29ad054b526c0ec526478607`。
