@@ -299,6 +299,7 @@ def authenticated_chat(app, body, subject, *, adapter, vision_adapter,
                             vision=vision_adapter,
                         )
                     answer_policy = DaqEvidencePolicy(
+                        knowledge=knowledge, role=binding['role'] if binding else None,
                         allow_dev_source_check=(getattr(knowledge, 'sdk_catalog', None) is not None
                                                 and not getattr(knowledge.sdk_catalog, 'published', False)),
                         service_contract=prepared.service_contract,

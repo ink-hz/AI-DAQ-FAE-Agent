@@ -796,6 +796,8 @@ def prepare_turn(message: str, *, previous=None, updates=None, topic_switch=None
                 }
                 if question_constraints:
                     requirement['question_constraints'] = question_constraints
+                if goal.capability in {'inspect_topology', 'lookup_procedure'} and 'task' in goal_conditions:
+                    requirement['condition_provenance'] = {'task': 'model_proposed_query_intent'}
                 if goal.unmapped_condition_keys and (
                         goal.capability != 'lookup_spec' or
                         bool(set(goal.unmapped_condition_keys) & _IDENTITY_SELECTOR_KEYS)):

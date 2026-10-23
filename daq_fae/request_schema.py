@@ -2042,6 +2042,13 @@ class DaqRequestSchema:
                 elif conditions['scope'] not in explicit_scopes:
                     raise SchemaExtractionError('condition_scope_ambiguous')
             for key, value in conditions.items():
+                if (key == 'task' and capability in {'inspect_topology', 'lookup_procedure'}
+                        and isinstance(value, str) and _SAFE_CODE.fullmatch(value)):
+                    # This is the model's query intent, not a physical user
+                    # parameter. Actual published task_intents must still
+                    # match it; a label alone never establishes a capability.
+                    unmapped.discard(key)
+                    continue
                 if (key == 'resolution_variant'
                         and isinstance(value, str)
                         and _normalized(value) in explicit_versions):
@@ -3700,7 +3707,21 @@ def extract_request_schema(question: str, *, adapter, prior_user_context: str = 
                       '上一次结构化结果未通过校验（' + str(exc) + '）。请仅重新调用 '
                       '`submit_daq_request_schema` 一次。产品实体只能逐字来自本轮问题或'
                       '提供的用户历史；无法接地的实体请省略。不要补产品事实。')
-        retry = [{**messages[0], 'content': messages[0]['content'] + '\n' + correction},
+        # A single correction must recheck the full structural contract. Fixing
+        # only the first reported key can otherwise introduce a second invalid
+        # scope on the one permitted retry. These are planning instructions,
+        # never an automatic conversion of an invalid goal into a product fact.
+        retry_contract = {
+            'revalidate_all_goals': True,
+            'single_entity_capabilities': ['lookup_spec', 'resolve_entity'],
+            'input_facts': 'Separate each necessary input by its actual entity; do not guess values.',
+            'combined_result_is_not_per_device_fact': True,
+            'combined_conditions': 'Keep external/system conditions on the combined goal, not every input.',
+            'unmapped_conditions': 'Preserve as evidence gaps; do not invent aliases, selectors or defaults.',
+            'instruction': 'Recheck all goals and submit exactly once; no product answer.',
+        }
+        retry = [{**messages[0], 'content': messages[0]['content'] + '\n' + correction
+                  + '\nSCHEMA_RETRY_CONTRACT\n' + json.dumps(retry_contract, ensure_ascii=False)},
                  messages[1]]
         retry_calls = [event for event in adapter.chat(
             retry, tools=[_SCHEMA_TOOL], required_tool='submit_daq_request_schema')

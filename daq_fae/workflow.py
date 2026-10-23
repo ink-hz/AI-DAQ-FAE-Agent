@@ -33,8 +33,8 @@ def context_clarification_done(prepared: PreparedWorkflow | None) -> dict | None
     if (not any(goal.kind == 'unknown' and goal.capability == 'clarify'
                 for goal in goals)
             or any(goal.kind not in {'unknown', 'product'} for goal in goals)
-            or any(goal.kind == 'product' and goal.capability not in {
-                'resolve_entity', 'catalog', 'inspect_topology'} for goal in goals)):
+            or any(goal.kind == 'product' and goal.capability != 'resolve_entity'
+                   for goal in goals)):
         return None
     status = {requirement['id']: 'unknown'
               for requirement in prepared.plan.requirements}
@@ -89,7 +89,11 @@ def allowed_tools_for(schema: DaqRequestSchema) -> frozenset[str] | None:
     # tool budget remains available until its subgoals are planned separately.
     if any(goal.capability == 'selection' for goal in schema.goals):
         return None
-    allowed = {'session_state', 'resolve_entity', 'catalog'}
+    # A product task may reveal necessary input facts only after evidence is
+    # read. Initial goals constrain certification, not access to basic governed
+    # research. Identity/setup-only turns keep their narrow surface above.
+    allowed = {'session_state', 'resolve_entity', 'catalog',
+               'lookup_spec', 'search_knowledge', 'read_doc'}
     for goal in schema.goals:
         if goal.kind == 'product':
             selected = goal_tools.get(goal.capability)

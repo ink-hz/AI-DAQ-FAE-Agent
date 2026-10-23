@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from copy import deepcopy
 import json
 import re
 
@@ -12,6 +13,7 @@ from src.agent.loop.evidence_policy import EvidenceDecision, EvidenceSnapshot
 from src.agent.loop.tools import ToolResult
 
 from daq_fae.service_contract import ServiceContract
+from daq_fae.supporting_evidence import observed_support
 
 
 def question_requirements(_question: str) -> dict[str, object]:
@@ -130,7 +132,8 @@ class DaqEvidencePolicy:
                  question: str = '',
                  answer_language: str = 'zh',
                  allowed_chinese_terms: tuple[str, ...] = (),
-                 allowed_tools: frozenset[str] | None = None):
+                 allowed_tools: frozenset[str] | None = None,
+                 knowledge=None, role: str | None = None):
         if answer_language not in {'zh', 'en'}:
             raise ValueError('daq_answer_language_invalid')
         self.allow_dev_source_check = allow_dev_source_check
@@ -139,6 +142,10 @@ class DaqEvidencePolicy:
         self.answer_language = answer_language
         self.allowed_chinese_terms = allowed_chinese_terms
         self.allowed_tools = allowed_tools
+        if knowledge is not None and not role:
+            raise ValueError('daq_policy_knowledge_role_required')
+        self.evidence_entities = ({row['id']: row for row in knowledge.records_for(role)
+                                   if row['kind'] == 'entity'} if knowledge is not None else {})
         self._session: DaqEvidenceSession | None = None
 
     @property
@@ -191,7 +198,8 @@ class DaqEvidencePolicy:
             service_contract=self.service_contract, question=self.question,
             answer_language=self.answer_language,
             allowed_chinese_terms=self.allowed_chinese_terms,
-            allowed_tools=self.allowed_tools)
+            allowed_tools=self.allowed_tools,
+            raw_requirements=deepcopy(raw), evidence_entities=self.evidence_entities)
         return self._session
 
 
@@ -202,7 +210,9 @@ class DaqEvidenceSession:
                  question: str = '',
                  answer_language: str = 'zh',
                  allowed_chinese_terms: tuple[str, ...] = (),
-                 allowed_tools: frozenset[str] | None = None):
+                 allowed_tools: frozenset[str] | None = None,
+                 raw_requirements: list[dict] | None = None,
+                 evidence_entities: dict[str, dict] | None = None):
         self.requirements = requirements
         self.last_submission: AnswerSubmission | None = None
         self.status = {
@@ -225,6 +235,10 @@ class DaqEvidenceSession:
         self._resolved_entities_by_label: dict[str, set[str]] = {}
         self._deliverable_sources: dict[str, set[str]] = {
             item.id: set() for item in requirements}
+        self._required_delivery_sources: dict[str, set[str]] = {}
+        self._supporting_sources: dict[str, set[str]] = {}
+        self._raw_requirements = deepcopy(raw_requirements or [])
+        self._evidence_entities = deepcopy(evidence_entities or {})
         self.question = question
         self.allow_dev_source_check = allow_dev_source_check
         self.answer_language = answer_language
@@ -398,6 +412,10 @@ class DaqEvidenceSession:
                 result, allow_dev_source_check=self.allow_dev_source_check):
             visible_source_ids = _governed_source_ids(
                 result, allow_dev_source_check=self.allow_dev_source_check)
+            if tool_name == 'lookup_spec':
+                self._supporting_sources.update(observed_support(
+                    content, visible_source_ids, self._raw_requirements, self._evidence_entities,
+                    allow_dev_source_check=self.allow_dev_source_check))
             exact = content.get('requirement_source_ids')
             if isinstance(exact, dict):
                 for requirement_id, source_ids in exact.items():
@@ -406,6 +424,17 @@ class DaqEvidenceSession:
                             and all(isinstance(value, str) for value in source_ids)):
                         self._deliverable_sources[requirement_id].update(
                             set(source_ids) & visible_source_ids)
+                        required = content.get('required_delivery_source_ids', {})
+                        members = (required.get(requirement_id)
+                                   if isinstance(required, dict) else None)
+                        if isinstance(members, list) and all(
+                                isinstance(member, str) for member in members):
+                            # An exhaustive collection is a stronger delivery
+                            # contract than merely citing an arbitrary subset.
+                            # Only actual, verified sources of this goal count.
+                            self._required_delivery_sources.setdefault(
+                                requirement_id, set()).update(
+                                    set(members) & set(source_ids) & visible_source_ids)
             elif (len(matched_ids) == len(visible_source_ids) == 1
                   and next(iter(matched_ids)) in self._deliverable_sources):
                 self._deliverable_sources[next(iter(matched_ids))].update(
@@ -563,18 +592,41 @@ class DaqEvidenceSession:
         if self.attachment_failed and submission.outcome == "resolved":
             return EvidenceDecision("reject", "daq_attachment_evidence_failed")
         delivered_ids: set[str] = set()
+        delivered_sources: dict[str, set[str]] = {}
         by_id = {item.id: item for item in self.requirements}
         for unit in submission.delivery_units:
             item = by_id.get(unit.requirement_id)
-            if item is None or self.status[item.id] != 'satisfied':
+            supporting = self._supporting_sources.get(unit.requirement_id)
+            if ((item is None and supporting is None)
+                    or (item is not None and self.status[item.id] != 'satisfied')):
                 return EvidenceDecision('request_evidence',
                                         'daq_delivery_requirement_unverified',
                                         '删除没有本轮已审目标支持的交付单元。')
-            if not set(unit.source_ids) <= self._deliverable_sources[item.id]:
+            allowed_sources = (self._deliverable_sources[item.id]
+                               if item is not None else supporting)
+            if not set(unit.source_ids) <= allowed_sources:
                 return EvidenceDecision('request_evidence',
                                         'daq_delivery_source_mismatch',
                                         '交付单元必须引用该目标在本轮实际匹配的来源。')
-            delivered_ids.add(item.id)
+            if item is not None:
+                delivered_ids.add(item.id)
+            delivered_sources.setdefault(unit.requirement_id, set()).update(unit.source_ids)
+        missing_members = {
+            requirement_id: sorted(required - delivered_sources.get(requirement_id, set()))
+            for requirement_id, required in self._required_delivery_sources.items()
+            if required - delivered_sources.get(requirement_id, set())
+        }
+        if missing_members:
+            return EvidenceDecision(
+                'request_evidence', 'daq_collection_delivery_incomplete',
+                ('The requested collection is incomplete. Deliver every returned member '
+                 'with its own scope; variants may be grouped under one product, '
+                 'but retain all their sources. Missing source IDs: '
+                 if self.answer_language == 'en' else
+                 '所请求集合尚未完整交付。请覆盖工具返回的每个成员；'
+                 '同一产品的变体可合并说明，但必须保留各变体来源。缺少来源 ID：')
+                + json.dumps(missing_members, ensure_ascii=False, sort_keys=True),
+            )
         missing_deliveries = [item.id for item in self.requirements
                               if item.delivery_required
                               and self.status[item.id] == 'satisfied'
@@ -730,7 +782,9 @@ class DaqEvidenceSession:
                         )
             if submission.basis and not any(
                     value == "satisfied" for value in self.status.values()) and \
-                    not self._observed_numeric_specs:
+                    not self._observed_numeric_specs and not any(
+                        requirement_id in self._supporting_sources
+                        for requirement_id in delivered_sources):
                 return EvidenceDecision(
                     "request_evidence", "daq_partial_basis_without_current_source",
                     ("No planned evidence goal was verified in this turn. Re-query the "
@@ -796,7 +850,8 @@ class DaqEvidenceSession:
             planned_capabilities=planned,
             actual_capabilities=tuple(self.actual),
             capability_coverage=coverage,
-            requirement_status=self.status,
+            requirement_status={**self.status, **{
+                key: 'satisfied' for key in self._supporting_sources}},
         )
 
 

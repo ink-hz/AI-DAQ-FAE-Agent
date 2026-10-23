@@ -22,10 +22,11 @@ def test_preloop_goal_limits_tools_for_service_and_context_only_turns():
              'field': 'horizontal_fov'}],
     })
     assert allowed_tools_for(spec) == frozenset({
-        'resolve_entity', 'catalog', 'session_state', 'lookup_spec'})
+        'resolve_entity', 'catalog', 'session_state', 'lookup_spec',
+        'search_knowledge', 'read_doc'})
 
 
-def test_preloop_only_exposes_tools_for_the_product_goals():
+def test_product_goals_can_research_inputs_without_opening_unrelated_software_or_attachments():
     schema = DaqRequestSchema.from_candidate(
         '一台 EGO 和两台 WristCam 通过 HUB 连接 PC 后，如何开流、采集并检查保存结果？', {
             'confidence': 'high', 'goals': [
@@ -37,7 +38,8 @@ def test_preloop_only_exposes_tools_for_the_product_goals():
         })
     assert allowed_tools_for(schema) == frozenset({
         'resolve_entity', 'catalog', 'session_state',
-        'inspect_topology', 'lookup_procedure'})
+        'inspect_topology', 'lookup_procedure', 'lookup_spec',
+        'search_knowledge', 'read_doc'})
 
     visual = DaqRequestSchema.from_candidate('这张图片里能看到什么？', {
         'confidence': 'high', 'goals': [
@@ -56,7 +58,8 @@ def test_standalone_procedure_does_not_open_unasked_topology_goal():
             ],
         })
     assert allowed_tools_for(schema) == frozenset({
-        'resolve_entity', 'catalog', 'session_state', 'lookup_procedure'})
+        'resolve_entity', 'catalog', 'session_state', 'lookup_procedure',
+        'lookup_spec', 'search_knowledge', 'read_doc'})
 
 
 @pytest.mark.parametrize('capability', ['sdk_evidence', 'check_software_support'])

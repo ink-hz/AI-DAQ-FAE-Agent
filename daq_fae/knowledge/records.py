@@ -420,6 +420,8 @@ def validate_records(records: list[dict], snapshot: dict, *, require_current_lin
                 row["data"]["topology_id"] not in topologies:
             row["answerable"] = False
             findings.append(_finding(row["id"], "topology_reference_missing"))
+    from .entity_families import family_findings
+    findings.extend(family_findings(normalized))
     return normalized, findings
 
 

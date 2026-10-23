@@ -27,6 +27,8 @@ from daq_fae.knowledge.software_evidence import missing_conditions, support_gap,
 from daq_fae.knowledge.section_search import (
     EXCERPT_CHARS, MAX_BODY_CHARS, MAX_QUERY_CHARS, body_text, rank_sections,
 )
+from daq_fae.supporting_evidence import supporting_specs
+from daq_fae.knowledge.entity_families import mentions_variant
 
 
 _TOOLS: dict[str, tuple[str, dict[str, dict], tuple[str, ...]]] = {
@@ -163,6 +165,13 @@ def _entity_identity_labels(row: dict) -> set[str]:
     return labels
 
 
+def _with_identity_vetoes(entities: dict[str, dict], vetoes: list[dict]) -> dict[str, dict]:
+    """Keep outside-identity vetoes without shadowing now-published entities."""
+    labels = {label for row in entities.values() for label in _entity_identity_labels(row)}
+    return {**{row['id']: row for row in vetoes if row['id'] not in entities
+               and _identity_text(row['data']['name']) not in labels}, **entities}
+
+
 def _catalog_summary(rows: list[dict], *, candidate_preview: bool,
                      category_counts_requested: bool = False) -> dict:
     """Count the whole role-visible directory and label its publication state."""
@@ -272,25 +281,30 @@ def _candidate_alias_match(row: dict, query: str) -> bool:
     aliases = row['data'].get('retrieval_aliases', [])
     normalized = _identity_text(query)
     return isinstance(aliases, list) and any(
-        isinstance(alias, str) and len(_identity_text(alias)) >= 3 and
+        isinstance(alias, str) and len(_identity_text(alias)) >= (
+            2 if re.search(r'[\u3400-\u9fff]', alias) else 3) and
         _identity_text(alias) in normalized for alias in aliases)
 
 
-def _candidate_topology_entities_match(row: dict, query: str,
-                                       entity_records: dict[str, dict]) -> bool:
+def _topology_entity_mentions(row: dict, query: str,
+                              entity_records: dict[str, dict]) -> tuple[set[str], set[str]]:
     hits = []
     normalized = _identity_text(query)
     negated = set()
     for entity_id, entity in entity_records.items():
         scope = entity.get('scope', {})
-        if any(_identity_text(str(scope[key])) not in normalized
-               for key in scope.get('required_selectors', [])):
+        family_id = entity['data'].get('family_entity_id')
+        family_member = family_id in row['data']['members']
+        if not family_member and any(_identity_text(str(scope[key])) not in normalized
+                                     for key in scope.get('required_selectors', [])):
             continue
+        target_id = (family_id if family_member and not mentions_variant(entity, query)
+                     else entity_id)
         for label in [entity['data']['name'], scope.get('product', ''),
                       *entity['data'].get('aliases', [])]:
             if _candidate_name_in_query(label, query):
                 compact_label = _identity_text(label)
-                hits.append((entity_id, compact_label))
+                hits.append((target_id, compact_label))
                 if (re.search(
                         r'(?:不(?:接|连接|带|要|用|使用|含|包含|需要|配)'
                         r'|未(?:接入|连接|配)|无(?:需)?|没有|排除|去掉|without)'
@@ -298,20 +312,39 @@ def _candidate_topology_entities_match(row: dict, query: str,
                         normalized, re.I)
                         or re.search(re.escape(compact_label) +
                                      r'(?:不参与|不使用|已移除|被排除)', normalized)):
-                    negated.add(entity_id)
+                    negated.add(target_id)
     longest_hits = {entity_id for entity_id, label in hits if not any(
         label != other and label in other for _, other in hits)}
+    return longest_hits, negated
+
+
+def _candidate_topology_entities_match(row: dict, query: str,
+                                       entity_records: dict[str, dict]) -> bool:
+    longest_hits, negated = _topology_entity_mentions(row, query, entity_records)
     members = set(row['data']['members'])
-    # A loose discovery alias cannot stand in for a required device. Future
-    # group aliases need their own reviewed identity, not a partial name hit.
-    return bool(members) and longest_hits == members and not (negated & members)
+    # A documented configuration may add prerequisite components the user has
+    # not yet specified. Discovery is conditional on retaining those explicit
+    # prerequisites; a negated or foreign member still vetoes the configuration.
+    query_members = set(row['data'].get('query_members', members))
+    return (bool(members) and query_members <= longest_hits <= members
+            and not (negated & members))
 
 
 def _formal_user_operating_scope_matches(row: dict, topology: dict,
                                          question: str,
                                          entity_records: dict[str, dict]) -> bool:
     """Keep independent user clauses separate when judging operating scope."""
-    for clause in re.split(r'[?？。；;\n]+', question):
+    clauses = re.split(r'[?？。；;\n]+', question)
+    members = set(topology['data']['members'])
+    for clause in clauses:
+        mentioned, excluded = _topology_entity_mentions(topology, clause, entity_records)
+        if excluded & members and not mentioned - members:
+            # A global setup statement can follow the question in another
+            # sentence. A shortened model probe must not drop it. A clause
+            # explicitly naming a different product belongs to that other
+            # goal, not automatically to this configuration.
+            return False
+    for clause in clauses:
         if not clause.strip():
             continue
         if (_candidate_query_scope_safe(row, clause)
@@ -1125,7 +1158,14 @@ class DaqToolBox:
                        and isinstance(item.get('entities'), list)
                        and len(item['entities']) == 1
                        and _identity_text(item['entities'][0]) in {
-                           wanted, _identity_text(str(original_query_entity or ''))}]
+                           wanted, _identity_text(str(original_query_entity or ''))}
+                       and all(self._requirement_matches(
+                           {**item, 'field': row['data']['field']}, row,
+                           entities, topologies, entity_records)
+                           and self._positive_spec_covers_requirement(
+                               {**item, 'field': row['data']['field']}, row,
+                               arguments, rows, entity_records, conflict_notices)
+                           for row in overview)]
             return ToolResult(status='ok', content={
                 'release_id': self.knowledge.release_id,
                 'query_entity': str(original_query_entity or ''),
@@ -1134,6 +1174,11 @@ class DaqToolBox:
                 'matched_requirement_ids': sorted(matched),
                 'requirement_source_ids': {rid: [row['id'] for row in overview]
                                            for rid in matched},
+                'required_delivery_source_ids': {rid: [row['id'] for row in overview]
+                                                for rid in matched},
+                'supporting_evidence': supporting_specs(
+                    overview, self.requirements, entity_records,
+                    {row['id'] for row in overview} if matched else set()),
                 'matches': [{key: row[key] for key in
                              ('id', 'kind', 'status', 'scope', 'data')}
                             for row in overview],
@@ -1189,8 +1234,8 @@ class DaqToolBox:
                 topology_identity_records = {**entity_records, **{
                     row['id']: row for row in self.knowledge.candidate_entity_records()}}
             elif getattr(self.knowledge, 'is_operator_pro_v2', False):
-                topology_identity_records = {**entity_records, **{
-                    row['id']: row for row in self.knowledge.operating_veto_entity_records()}}
+                topology_identity_records = _with_identity_vetoes(
+                    entity_records, self.knowledge.operating_veto_entity_records())
         def formal_question_safe(row):
             if not getattr(self.knowledge, 'is_operator_pro_v2', False) or row['kind'] not in {
                     'topology', 'procedure'}:
@@ -1400,6 +1445,11 @@ class DaqToolBox:
             **({'query_entity': str(original_query_entity or '')}
                if name == 'lookup_spec' else {}),
             **({'catalog_summary': catalog_summary} if catalog_summary is not None else {}),
+            **({'catalog_by_requirement': {
+                rid: _catalog_summary([row for row in matches if row['id'] in ids],
+                                      candidate_preview=candidate_preview)
+                for rid, ids in requirement_source_ids.items()}}
+               if name == 'catalog' else {}),
             **({'available_spec_fields': field_coverage,
                 'available_spec_fields_are_values': False}
                if name == 'resolve_entity' else {}),
@@ -1417,6 +1467,12 @@ class DaqToolBox:
                                else "reviewed"),
             "matched_requirement_ids": matched_requirements,
             "requirement_source_ids": requirement_source_ids,
+            **({'required_delivery_source_ids': requirement_source_ids}
+               if name == 'catalog' else {}),
+            **({'supporting_evidence': supporting_specs(
+                matches, self.requirements, entity_records,
+                {source_id for ids in requirement_source_ids.values() for source_id in ids})}
+               if name == 'lookup_spec' else {}),
             "matches": [{**{key: row[key] for key in ("id", "kind", "status", "scope", "data")},
                          **({"status": "source_checked"} if
                             getattr(self.knowledge, "is_candidate_preview", False) else {})}
@@ -1453,8 +1509,8 @@ class DaqToolBox:
         topologies = {row['id']: row for row in rows if row['kind'] == 'topology'}
         identity_records = {row['id']: row for row in rows if row['kind'] == 'entity'}
         if getattr(self.knowledge, 'is_operator_pro_v2', False):
-            identity_records.update({row['id']: row for row in
-                                     self.knowledge.operating_veto_entity_records()})
+            identity_records = _with_identity_vetoes(
+                identity_records, self.knowledge.operating_veto_entity_records())
         query = str(arguments.get('query') or '')
         def operating_search_safe(row):
             if not getattr(self.knowledge, 'is_operator_pro_v2', False) or row['kind'] not in {
@@ -2003,7 +2059,10 @@ class DaqToolBox:
         if name == "catalog":
             # The catalog is a directory scan. Natural-language overview
             # questions are not literal substrings of individual records.
-            return kind == "entity"
+            return kind == 'entity' and not (
+                data.get('entity_type') == 'family' and any(
+                    entity['data'].get('family_entity_id') == row['id']
+                    for entity in (entity_records or {}).values()))
         if name == "resolve_entity":
             if kind != "entity" or not query:
                 return False
@@ -2141,6 +2200,14 @@ class DaqToolBox:
             return False
         names = cls._entity_names(row, entities, topologies)
         required_entities = requirement.get("entities") or []
+        if (requirement.get('capability') == 'catalog' and required_entities and any(
+                not isinstance(name, str) or not any(
+                    _identity_text(name) in _entity_identity_labels(entity)
+                    for entity in (entity_records or {}).values())
+                for name in required_entities)):
+            # An OR over directory rows must not certify an unresolved member
+            # of the user's requested set merely because another member exists.
+            return False
         if not required_entities and row["kind"] not in {"entity", "link"}:
             return False
         if requirement.get("capability") in {
@@ -2153,7 +2220,7 @@ class DaqToolBox:
                 return True
             candidates = []
             for entity in (entity_records or {}).values():
-                labels = [str(entity['data']['name']),
+                labels = [entity['id'], str(entity['data']['name']),
                           *entity['data'].get('aliases', []),
                           str(entity['scope'].get('product', ''))]
                 hits = [_identity_text(label) for label in labels if label and (
@@ -2164,18 +2231,33 @@ class DaqToolBox:
             if not candidates:
                 return False
             longest = max(length for _, length in candidates)
-            return any(entity['id'].casefold() in names
+            def generic_family_label(entity):
+                peers = [peer for peer in (entity_records or {}).values()
+                         if peer['data'].get('family_entity_id')
+                         and peer['data'].get('family_entity_id') ==
+                         entity['data'].get('family_entity_id')]
+                return len(peers) >= 2 and all(
+                    _identity_text(item) in _entity_identity_labels(peer) for peer in peers)
+            return any((entity['id'].casefold() in names or (
+                           requirement.get('capability') == 'catalog'
+                           and row['kind'] == 'entity'
+                           and row['data'].get('family_entity_id') == entity['id']) or (
+                           row['kind'] in {'topology', 'procedure'}
+                           and generic_family_label(entity)
+                           and str(entity['data'].get('family_entity_id', '')).casefold() in names))
                        for entity, length in candidates if length == longest)
 
-        if required_entities and (not isinstance(required_entities, list) or not all(
-            isinstance(item, str) and reviewed_entity_matches(item)
-            for item in required_entities
-        )):
+        entity_matches = [isinstance(item, str) and reviewed_entity_matches(item)
+                          for item in required_entities]
+        if required_entities and (not isinstance(required_entities, list) or not (
+                any(entity_matches) if requirement.get('capability') == 'catalog'
+                else all(entity_matches))):
             return False
         conditions = requirement.get("conditions") or {}
         if not isinstance(conditions, dict) or (
-            not (requirement.get('capability') == 'resolve_entity'
-                 and row['kind'] == 'entity' and not conditions)
+            not (row['kind'] == 'entity' and (
+                requirement.get('capability') == 'catalog'
+                or (requirement.get('capability') == 'resolve_entity' and not conditions)))
             and not cls._scope_selectors_match(row["scope"], conditions)
         ):
             return False
@@ -2213,6 +2295,8 @@ class DaqToolBox:
             known.update({"platform": topology["data"]["platform"],
                           "task": row["data"]["task"]})
         def condition_matches(key, value):
+            if key == 'task' and isinstance(value, str) and row['kind'] in {'topology', 'procedure'}:
+                return value == known.get(key) or value in row['data'].get('task_intents', [])
             if candidate_preview and key == 'topology_aspects':
                 available = known.get(key)
                 return (isinstance(value, list) and isinstance(available, list)

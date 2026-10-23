@@ -183,6 +183,7 @@ class DaqTaskOrchestrator:
                 allowed_tools = (allowed_tools_for(prepared.schema)
                                  if prepared else None)
                 answer_policy = DaqEvidencePolicy(
+                    knowledge=self._knowledge, role=knowledge_role,
                     allow_dev_source_check=(getattr(self._knowledge, 'sdk_catalog', None) is not None
                                             and not getattr(self._knowledge.sdk_catalog, 'published', False)),
                     service_contract=prepared.service_contract if prepared else None,

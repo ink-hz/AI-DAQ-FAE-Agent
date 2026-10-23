@@ -1,0 +1,446 @@
+{
+  "base_commit": "9331d7d6d1e0dbfb6af65de9c52fa25c5cab5e9e",
+  "compiled_by": "Codex root; aggregation of actual independent decisions, not an answering-model self-grade",
+  "deployment": {
+    "camera_repository_writes": 0,
+    "production_fixed": false,
+    "production_model_evals": 0,
+    "production_writes": 0,
+    "shared_src_changes": 0
+  },
+  "final_candidate": {
+    "daq_code_sha256": "dc16f42d8cbe4136efacf2e33d8e78fbb20dc8f9269f6f5623432d887f54ce9c",
+    "main": "a6a3c6f14e2cdbe7a72c896abd14a94e7a854c195bc6a82ad298a17d7a54f118",
+    "narrative_units_in_this_batch": 11,
+    "narrative_units_total": 19,
+    "online_eligible": false,
+    "records": 78,
+    "runtime_release": "daq-dc16f42d8cbe",
+    "scope": "loopback_dev_internal_fae_only",
+    "sdk": "75e04138b5f8dbd03dbd906965b07a1d0211373f7d860acd3d75a12c01126255",
+    "sections": 8,
+    "upstream": "6bad94591dc4c40c29ad054b526c0ec526478607"
+  },
+  "final_identity_audit": {
+    "actual_signed_main_and_sdk_reloaded": true,
+    "artifact_hashes_checked": true,
+    "current_code_matches_final_candidate": true,
+    "independent_review_hashes_checked": true,
+    "model_configuration_equal_across_candidates": true,
+    "new_model_calls_in_this_audit": 0,
+    "provider_echo_consistency": "conflict_retained; exact weights unknown"
+  },
+  "format": "daq-real-feedback-repair-evidence/v1",
+  "model_identity": {
+    "actual_model_weights_independently_verified": false,
+    "configured_model": "claude-opus-5-5",
+    "limit": "Same configured model and gateway; inconsistent nominal echo is neither suppressed nor treated as proof of a model downgrade.",
+    "model_echo_conflict_preserved": true,
+    "observed_names": [
+      "anthropic/claude-opus-5.5",
+      "claude-opus-5-5"
+    ]
+  },
+  "remaining_source_gaps": [
+    "dual EGO 63mm main SoC",
+    "EGO Pro plus WristCam exact combination and timing precision",
+    "combined runtime/average power/losses; user 20hr not confirmed by the checked datasheets",
+    "all other unreviewed candidate chapters remain non-authoritative"
+  ],
+  "selected_answer_evidence": [
+    {
+      "answer_sha256": "11a9ece16d17741d7944ab4602235f4bd0113da82a12fcd02b156a82aaf46896",
+      "artifact_path": "/Users/neo/Developer/work/AI-DAQ-FAE-Agent/tmp/daq-real-feedback-repair-20261023/v2-turns/NEIGHBOR-EN-CATALOG-T1.private.json",
+      "artifact_sha256": "60cd34ea6a79e8bc3045213fa544b2435fbad3a49ded693f0ae3bfe0b7e68509",
+      "current_candidate_execution": false,
+      "id": "NEIGHBOR-EN-CATALOG-T1",
+      "knowledge_release": "f99ae4e6d4773b32543b7371d8ee500010ba48e8c4ece43ef54af4a75229407b",
+      "outcome": "resolved",
+      "review_path": "tmp/daq-real-feedback-repair-20261023/independent-v2-answer-review.private.json",
+      "review_sha256": "e35522badb64d533bec36e2fef7794bdcd2e30e7dc21311b2a69658d520fd3da",
+      "runtime_release": "daq-77b7fa0f7b8d",
+      "sdk_release": "d9d7d791bc90014bddbe40e5b32b3204e03df621679685445df51088159f149f",
+      "trace_id": "cc1dcb61a9fe5c2328bc0c3b8f4930a0",
+      "verdict": "accepted_by_independent_codex"
+    },
+    {
+      "answer_sha256": "5c94f41b7a6ea61fe71ea303f01f969f1327c0844e66defd7e0774ce8939346e",
+      "artifact_path": "/Users/neo/Developer/work/AI-DAQ-FAE-Agent/tmp/daq-real-feedback-repair-20261023/v3-turns/NEIGHBOR-NO-HUB-T1.private.json",
+      "artifact_sha256": "f91224fdb31cf0682b4c1ca943facb151ea12fa8d12de6ef145caf646bf49f3e",
+      "current_candidate_execution": true,
+      "id": "NEIGHBOR-NO-HUB-T1",
+      "knowledge_release": "a6a3c6f14e2cdbe7a72c896abd14a94e7a854c195bc6a82ad298a17d7a54f118",
+      "outcome": "safe_abstained",
+      "review_path": "tmp/daq-real-feedback-repair-20261023/independent-v3-no-hub-answer-review.private.json",
+      "review_sha256": "75fd311128d570881048fd04fa7f053ad0ccfd0853b100900752bd8773ce2ad6",
+      "runtime_release": "daq-dc16f42d8cbe",
+      "sdk_release": "75e04138b5f8dbd03dbd906965b07a1d0211373f7d860acd3d75a12c01126255",
+      "trace_id": "fa833a9b4b1943e052b979cdb0039b3b",
+      "verdict": "accepted_by_independent_codex"
+    },
+    {
+      "answer_sha256": "89c363abb465e02d06d4b56245196e6b521b89683e9617d41d0514382c094ff7",
+      "artifact_path": "/Users/neo/Developer/work/AI-DAQ-FAE-Agent/tmp/daq-real-feedback-repair-20261023/v2-turns/NEIGHBOR-QUANTIFIED-SYNC-T1.private.json",
+      "artifact_sha256": "e27ee383d928441b9c4d2f72f3d4f64d402e989c673308941cc74a22436f091f",
+      "current_candidate_execution": false,
+      "id": "NEIGHBOR-QUANTIFIED-SYNC-T1",
+      "knowledge_release": "f99ae4e6d4773b32543b7371d8ee500010ba48e8c4ece43ef54af4a75229407b",
+      "outcome": "safe_abstained",
+      "review_path": "tmp/daq-real-feedback-repair-20261023/independent-v2-answer-review.private.json",
+      "review_sha256": "e35522badb64d533bec36e2fef7794bdcd2e30e7dc21311b2a69658d520fd3da",
+      "runtime_release": "daq-77b7fa0f7b8d",
+      "sdk_release": "d9d7d791bc90014bddbe40e5b32b3204e03df621679685445df51088159f149f",
+      "trace_id": "bda52ebc00df45fe467cd09db1e272fd",
+      "verdict": "accepted_by_independent_codex"
+    },
+    {
+      "answer_sha256": "c3b34da8045fbcf1e0b255efef88638781005b2e9573da5abf8eefcda3a7df0e",
+      "artifact_path": "/Users/neo/Developer/work/AI-DAQ-FAE-Agent/tmp/daq-real-feedback-repair-20261023/v2-turns/REAL-8a3b8bc7-T1.private.json",
+      "artifact_sha256": "c2af3190274ce641fcd912e401eeca4ffa27587a68cf3f55eb1f593cd15f4484",
+      "current_candidate_execution": false,
+      "id": "REAL-8a3b8bc7-T1",
+      "knowledge_release": "f99ae4e6d4773b32543b7371d8ee500010ba48e8c4ece43ef54af4a75229407b",
+      "outcome": "resolved",
+      "review_path": "tmp/daq-real-feedback-repair-20261023/independent-v2-answer-review.private.json",
+      "review_sha256": "e35522badb64d533bec36e2fef7794bdcd2e30e7dc21311b2a69658d520fd3da",
+      "runtime_release": "daq-77b7fa0f7b8d",
+      "sdk_release": "d9d7d791bc90014bddbe40e5b32b3204e03df621679685445df51088159f149f",
+      "trace_id": "c5cc2d50e1f9fafff7b4f8041fb1e182",
+      "verdict": "accepted_by_independent_codex"
+    },
+    {
+      "answer_sha256": "1d4794860939906d494ee4c5f2ca7738f718729c60ec098dcc5cde8e6b63cdd9",
+      "artifact_path": "/Users/neo/Developer/work/AI-DAQ-FAE-Agent/tmp/daq-real-feedback-repair-20261023/v2-turns/REAL-8b6c60d6-T1.private.json",
+      "artifact_sha256": "66677d0d067039f3633eb90b83a9cd70bf3bee960db2b6c732efe75ed995d4ee",
+      "current_candidate_execution": false,
+      "id": "REAL-8b6c60d6-T1",
+      "knowledge_release": "f99ae4e6d4773b32543b7371d8ee500010ba48e8c4ece43ef54af4a75229407b",
+      "outcome": "safe_abstained",
+      "review_path": "tmp/daq-real-feedback-repair-20261023/independent-v2-answer-review.private.json",
+      "review_sha256": "e35522badb64d533bec36e2fef7794bdcd2e30e7dc21311b2a69658d520fd3da",
+      "runtime_release": "daq-77b7fa0f7b8d",
+      "sdk_release": "d9d7d791bc90014bddbe40e5b32b3204e03df621679685445df51088159f149f",
+      "trace_id": "d0399054842cf38c6e3d0f9b15da6922",
+      "verdict": "accepted_by_independent_codex"
+    },
+    {
+      "answer_sha256": "acdd082f359770aef25d489dc64f974187fb7f8e06594d28ec403920a57f568e",
+      "artifact_path": "/Users/neo/Developer/work/AI-DAQ-FAE-Agent/tmp/daq-real-feedback-repair-20261023/v2-turns/REAL-acebd1c1-T1.private.json",
+      "artifact_sha256": "63c23a070e708b533479af5b4e6c32295a2f9b72e61b3e293dc56ff876bdcd0c",
+      "current_candidate_execution": false,
+      "id": "REAL-acebd1c1-T1",
+      "knowledge_release": "f99ae4e6d4773b32543b7371d8ee500010ba48e8c4ece43ef54af4a75229407b",
+      "outcome": "safe_abstained",
+      "review_path": "tmp/daq-real-feedback-repair-20261023/independent-v2-answer-review.private.json",
+      "review_sha256": "e35522badb64d533bec36e2fef7794bdcd2e30e7dc21311b2a69658d520fd3da",
+      "runtime_release": "daq-77b7fa0f7b8d",
+      "sdk_release": "d9d7d791bc90014bddbe40e5b32b3204e03df621679685445df51088159f149f",
+      "trace_id": "89c98a0684d48152a29ef259931972b2",
+      "verdict": "accepted_by_independent_codex"
+    },
+    {
+      "answer_sha256": "6b5bbed87f67d47bad5f10ae916f59c61961e9d8e116add822c00a9a53d6a593",
+      "artifact_path": "/Users/neo/Developer/work/AI-DAQ-FAE-Agent/tmp/daq-real-feedback-repair-20261023/v2-turns/REAL-acebd1c1-T2.private.json",
+      "artifact_sha256": "3323d02927ccf7f013c0100ee5b3de11e04c5ed1df632ab2bc8f818772ee8840",
+      "current_candidate_execution": false,
+      "id": "REAL-acebd1c1-T2",
+      "knowledge_release": "f99ae4e6d4773b32543b7371d8ee500010ba48e8c4ece43ef54af4a75229407b",
+      "outcome": "safe_abstained",
+      "review_path": "tmp/daq-real-feedback-repair-20261023/independent-v2-answer-review.private.json",
+      "review_sha256": "e35522badb64d533bec36e2fef7794bdcd2e30e7dc21311b2a69658d520fd3da",
+      "runtime_release": "daq-77b7fa0f7b8d",
+      "sdk_release": "d9d7d791bc90014bddbe40e5b32b3204e03df621679685445df51088159f149f",
+      "trace_id": "b884d337cc86b7c29a0b0660b9e4100f",
+      "verdict": "accepted_by_independent_codex"
+    },
+    {
+      "answer_sha256": "9f2bce7e1684155f83e6670bbf73b70dedb71beeaaf530f6cda431bce9280ef4",
+      "artifact_path": "/Users/neo/Developer/work/AI-DAQ-FAE-Agent/tmp/daq-real-feedback-repair-20261023/v2-turns/REAL-acebd1c1-T3.private.json",
+      "artifact_sha256": "151aa3d2df258fe75740b72c2733ebf9da16c389cafe90e195846f08c4091346",
+      "current_candidate_execution": false,
+      "id": "REAL-acebd1c1-T3",
+      "knowledge_release": "f99ae4e6d4773b32543b7371d8ee500010ba48e8c4ece43ef54af4a75229407b",
+      "outcome": "safe_abstained",
+      "review_path": "tmp/daq-real-feedback-repair-20261023/independent-v2-answer-review.private.json",
+      "review_sha256": "e35522badb64d533bec36e2fef7794bdcd2e30e7dc21311b2a69658d520fd3da",
+      "runtime_release": "daq-77b7fa0f7b8d",
+      "sdk_release": "d9d7d791bc90014bddbe40e5b32b3204e03df621679685445df51088159f149f",
+      "trace_id": "90f814bef0954b874054ec4c29dd3baa",
+      "verdict": "accepted_by_independent_codex"
+    },
+    {
+      "answer_sha256": "b2b75a71bd9c776d6fadb95e341f210ec8559897e7b2b66b920545f6986d0377",
+      "artifact_path": "tmp/daq-real-feedback-repair-20261023/v3-turns/REAL-addc985c-T1.private.json",
+      "artifact_sha256": "720ae4cb5647b009b9ef3eb4c9f2a224b85a21fa6fc8a3b0978162d97b5bba10",
+      "current_candidate_execution": true,
+      "id": "REAL-addc985c-T1",
+      "knowledge_release": "a6a3c6f14e2cdbe7a72c896abd14a94e7a854c195bc6a82ad298a17d7a54f118",
+      "outcome": "safe_abstained",
+      "review_path": "tmp/daq-real-feedback-repair-20261023/answer-review-v3-t1.private.json",
+      "review_sha256": "dcac540f8fca18b14f9194625967f557335b975911d35283eaab9822a56ef100",
+      "runtime_release": "daq-dc16f42d8cbe",
+      "sdk_release": "75e04138b5f8dbd03dbd906965b07a1d0211373f7d860acd3d75a12c01126255",
+      "trace_id": "8163ecb75302dc55e0c2244ee6b459a7",
+      "verdict": "accepted_by_independent_codex"
+    },
+    {
+      "answer_sha256": "4bd42205ecfddc2b3f6223b9a4fa28516635c0b49460715621f42539d2faa007",
+      "artifact_path": "tmp/daq-real-feedback-repair-20261023/REAL-addc985c-T2.private.json",
+      "artifact_sha256": "58b97583ffb1f1e772d651bc5c17d0fad5746d7b95de344b4983d85ce0ad8162",
+      "current_candidate_execution": false,
+      "id": "REAL-addc985c-T2",
+      "knowledge_release": "74b48bf0f15a98ee3cfe64e34bc0ddf0bcb23f01350a63ff6ee310fc4e4f1695",
+      "outcome": "resolved",
+      "review_path": "tmp/daq-real-feedback-repair-20261023/answer-review-progress.v1.private.json",
+      "review_sha256": "7d65b762508bf62ed8340e5789f6a96445e4c27845bac40c8d3a06b4b962c94c",
+      "runtime_release": "daq-f9c2d44bd33c",
+      "sdk_release": "1c1e2060803dd75a60f52f8443545e0ca945b19650572898c0b8fa8789680750",
+      "trace_id": "95fb7c38f22e4d158fab64c928a73070",
+      "verdict": "accepted_by_independent_codex"
+    },
+    {
+      "answer_sha256": "0db52c7532efa65a4f473b84cc5c8ee76931378508b6175b3e64db9dd8f77a69",
+      "artifact_path": "/Users/neo/Developer/work/AI-DAQ-FAE-Agent/tmp/daq-real-feedback-repair-20261023/v2-turns/REAL-f7ae1027-T1.private.json",
+      "artifact_sha256": "1fd44d996f7158e34d619af2c4123840cbe2fb6f0281c896cfcb09fef9280911",
+      "current_candidate_execution": false,
+      "id": "REAL-f7ae1027-T1",
+      "knowledge_release": "f99ae4e6d4773b32543b7371d8ee500010ba48e8c4ece43ef54af4a75229407b",
+      "outcome": "resolved",
+      "review_path": "tmp/daq-real-feedback-repair-20261023/independent-v2-answer-review.private.json",
+      "review_sha256": "e35522badb64d533bec36e2fef7794bdcd2e30e7dc21311b2a69658d520fd3da",
+      "runtime_release": "daq-77b7fa0f7b8d",
+      "sdk_release": "d9d7d791bc90014bddbe40e5b32b3204e03df621679685445df51088159f149f",
+      "trace_id": "be990422cacefb7fc9046255d415ae2a",
+      "verdict": "accepted_by_independent_codex"
+    }
+  ],
+  "semantic_review": {
+    "accepted": 11,
+    "accepted_prior_identity_reused_without_rerun": 9,
+    "all_eleven_replayed_on_same_identity": false,
+    "coverage": "5 original sessions / 8 original turns + 3 affected neighbors",
+    "executed_on_final_candidate": 2,
+    "open_Important_in_reviewed_scope": 0,
+    "policy": "Do not rerun passed cases. Review scope and original execution identity retained.",
+    "unique_turns": 11
+  },
+  "status": "local_dev_semantic_scope_accepted",
+  "supporting_evidence": [
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/final-contract-gates-v3.private.json",
+      "sha256": "414cd75d198d6e392f646934ea26ea7d89ad10d20f0681404480119614a23ed2"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/final-candidate-code-review.private.json",
+      "sha256": "3a4310cb945d1568311686a00cf94bea39c9dec4fdab1873577303fed0be6f7e"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/schema-retry-and-known-scope-delta-review.private.json",
+      "sha256": "31df08ed679db2b91b2905b4abbc8b7d6ae50aa44d1ae10611e00f3ff346c898"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/clarification-shortcut-delta-independent-review.private.json",
+      "sha256": "b5b0990dd1c64386ca6417344ce7d0323c0ba36cf3b65fdd63ac806dc42b6e48"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/independent-final-knowledge-approval.private.json",
+      "sha256": "b21e0a89da46864836fccdd4adc6947a3897900758ba1bf1f18423793bf72275"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/independent-delta-knowledge-approval.private.json",
+      "sha256": "903f0bb5d7094d2cfb82d9e97f81c80c55f1fe9d1f3e087ad4ebcb593ba561d7"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/independent-topic-split-source-decisions.private.json",
+      "sha256": "f691f734f972a303d76f764fdd6fa99f46bc8d10c7d74baf415013938c5ea0b4"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/independent-topic-split-final-knowledge-approval.private.json",
+      "sha256": "d6a465e16a8befd40257fe228da21c8b95902c123b66254e25653c00b359b566"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/candidate-topic-split-signed.private.json",
+      "sha256": "cfc1eb84bbca27165865634bf8333d8e8f4cdc2f46be5449eb28d0c03130141a"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/approval-config-topic-split.private.json",
+      "sha256": "87eda2deeeef9334347df5541badf90b44c6575124c86eeab6da1195cedd38f0"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/dev-staging-receipt-v3.private.json",
+      "sha256": "df1f609528719f8fd7c4ec54b6a6d65101968162d0f85a32d64d13a7ae081567"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/dev-identity-v3.private.json",
+      "sha256": "b243bf8faa36d97174b5fb1025e2c74b8ea269d4d1284f1a3ca8eba7196a4994"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/dev-results.private.jsonl",
+      "sha256": "9d7efbbc33d8b9a7a94894089fb3eec9110f1fb42886171099afeea5739e3179"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/dev-results-v2.private.jsonl",
+      "sha256": "f74dbcf7c180aedc34fd597b9c04b1d74244eec5193969f2792ede77adf4ddd2"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/dev-results-v3.private.jsonl",
+      "sha256": "681f617f17ef10708e6b5c094581df9c33d6b44f879537d915ecb893cfeb2b8b"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/dev-initial-schema-error.private.json",
+      "sha256": "e0689844ce09783a93e8a8a0995d8149c2333a8f1cc15f2ab6bda0bd43725288"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/schema-failed-path-repro.private.json",
+      "sha256": "c8431c61e77c884447028ae539969ff8ceef99371f7e4eec0de89dea16cfa8dd"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/shared-pin-final.txt",
+      "sha256": "7f930c39dd81a46e374c5c505794c44a31de29d25909ad81e5aaddcd3e7df0c1"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/implementation-plan-frozen.md",
+      "sha256": "6233ddd574bc3c54cc4ddf632d815eec92d10b4fab7bbb71a07643d3ddb64f0b"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/knowledge-proposal.private.json",
+      "sha256": "bc08a2766111ef91ee6a13eab6bd5913f3e2b486350c454071222acceab2dd09"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/independent-knowledge-decisions.private.json",
+      "sha256": "917824160af28237b9bdc6a02bb92f3f677a030b963b235c4ff0d234831bca9f"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/candidate-v1/candidate-signed.private.json",
+      "sha256": "750a11cc4826720a64859083b586a2895c26f77cb3188a2839bcc4a881cae6cf"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/candidate-v1/approval-config.private.json",
+      "sha256": "89b84f8c022e7f999776cb61e1cb5117d75441512cd2513f42098982b36a9520"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/candidate-v2/candidate-signed.private.json",
+      "sha256": "432b86b79f3cf8b8febca131401d77293699a12f6c51512adbc74e1b1d3a41fd"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/candidate-v2/approval-config.private.json",
+      "sha256": "d02aa980f39256133e86feb2bd4e01830c35243fa5485a1022669d999639ed62"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/actual-release-tool-probes.private.json",
+      "sha256": "313d4c873c199de3be68bfe20dc7871557864ed9e6958685ad54c259e42d962c"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/r4-final-code-probes.private.json",
+      "sha256": "71227810cdf3beb71cc4322d390e2f7f658faf3711922ba65d5d5d017ede4ab6"
+    },
+    {
+      "path": "tmp/daq-quality-feedback-20261023/production-cases.private.json",
+      "sha256": "c06718db10741f82cbf7af3b15ebd623637ef8e3c83e61b156adf55fd6dd6734"
+    },
+    {
+      "path": "tmp/daq-quality-feedback-20261023/current-release.private.json",
+      "sha256": "6486cbe218e76e403b2f1b4461fb77f82694ba3dbfa00f1ecd20e1ddd98ea2f1"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/catalog-red.txt",
+      "sha256": "047ef211835f77dbe77f1354f1ba8353475fdc318c0cf8d7f1a336cb7678f27b"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/catalog-union-red.txt",
+      "sha256": "8174048d427e599827c3db01f790b897428c8d2dff29d64eb514ea717264dbf8"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/clarification-priority-red.txt",
+      "sha256": "9b6fe881977c561669069f9bd496cf8565cf12eca8918280f821ad5742c08a07"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/exclusion-red.txt",
+      "sha256": "daea2607f6de918556b0af9a0300aff26435f977d259cc692927db7e0332c095"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/family-red.txt",
+      "sha256": "d2a7d7dc92489a0029e9221a0f2aa3819019c9c2df8b27037d3605d5ca1e0b47"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/graph-red.txt",
+      "sha256": "143445bc6d06bb267b8a6caf2769d140f6f8cc5eac1c2900b0f0474f46a568ad"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/overview-red.txt",
+      "sha256": "217dca6f42a0aeccfbde9ffdd4949b3355b99164d11956b5c242ddc9ce501499"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/schema-retry-red.txt",
+      "sha256": "c2845aa27af835290c37960f0a58a1fdc11d9b6ee71dcc5809ace43d28300029"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/scope-overview-family-red.txt",
+      "sha256": "b05dd465fb61ee6cc315af8dc754207462f4d03c90a6dad7cb06651be0105721"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/short-sku-red.txt",
+      "sha256": "4c8cfdbcf2842322a9916dae6c30cc2c8893755b0867e0f602dafce2401f05fe"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/support-red.txt",
+      "sha256": "34bff3ca31a4e57fc46215ad1d03b6f928736d7679b482cabe950f7135464474"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/veto-red.txt",
+      "sha256": "9d001c0e9461606ed47c6fdf9eb2ef78bbb96ec09c40187fea2dbbafa770edf8"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/catalog-green.txt",
+      "sha256": "acb30aa6e4aea617d3d6ec065df4d666cbc2624d89090ecaa3c96ab00a2170e9"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/clarification-priority-green.txt",
+      "sha256": "e83187b5c441229356e3ba68fcdc5dfa881dffae0e8e9cac3035ced482f21cc9"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/family-exclusion-green.txt",
+      "sha256": "c2fef441f9b7f732fa97186e9871cdfd6c3734cf62c0ff91ba13a33fb532e421"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/family-final-green.txt",
+      "sha256": "ed7ad43f64c7e2ae5f7ac99f81a749edcb9b40f8876c0fb57920164ac591b831"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/family-green.txt",
+      "sha256": "b0d143703482b9e75541dc9f99523b84f97324b44c91dfcaedb22431af089f07"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/mechanism-final-green.txt",
+      "sha256": "00d7dc75c2c9a20bcb6593218474fd94dc2fd25e812dc48cbf95ff8dd73370b6"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/mechanism-green.txt",
+      "sha256": "3f581a3192c59a5b247aa72f0de36a0465cf64e40dfc1d3c4ca29d9aef1fb1d1"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/schema-retry-green.txt",
+      "sha256": "86288ee89a493b657a4f02c2118272c4f6a9a7afa049f10741e60f3a564db934"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/schema-targeted-green.txt",
+      "sha256": "a1c61e7d51e74a79f2eb2f682f215dcca5753c6e74493b2898f0c78f91badb2b"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/scope-overview-family-green.txt",
+      "sha256": "baa74d6a99dc44f6043c9bd7fdaaeb2c84e4050ad94c5d5d0fe92bb2cf5908d8"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/short-sku-green.txt",
+      "sha256": "130f8f9971a2cf08477e04dff31747fa2634042566581ae035a9929f0a0ebac1"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/support-graph-green.txt",
+      "sha256": "be49edbc59215b825d3ab31fb9fac0afe76d7e19748d32e5c9356cadcf107598"
+    },
+    {
+      "path": "tmp/daq-real-feedback-repair-20261023/support-green.txt",
+      "sha256": "22c6730bb7a71c8db53f6f1a481fc3a8e6eca8927605a693e96f299d76f5cd0a"
+    }
+  ]
+}

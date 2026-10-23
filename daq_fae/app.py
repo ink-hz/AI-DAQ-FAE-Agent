@@ -578,6 +578,7 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                             ) if request.attachment_ids else base_toolbox
                         )
                         answer_policy = DaqEvidencePolicy(
+                            knowledge=knowledge, role=base_toolbox.role,
                             allow_dev_source_check=candidate_mode or (sdk_catalog is not None
                                 and not getattr(sdk_catalog, 'published', False)),
                             service_contract=prepared.service_contract if prepared else None,

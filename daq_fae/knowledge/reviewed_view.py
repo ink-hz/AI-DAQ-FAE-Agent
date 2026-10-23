@@ -463,6 +463,9 @@ class ReviewedKnowledge:
                 raise ValueError('knowledge entity alias collision')
         if manifest.get("answerable_count") != answerable:
             raise ValueError("knowledge release answerable count invalid")
+        from .entity_families import family_findings
+        if family_findings(manifest['records']):
+            raise ValueError('knowledge entity family/prerequisite graph invalid')
         domain = manifest.get('review', {}).get('readiness', {}).get('scope', {}).get('domain_evidence')
         if domain is not None:
             if manifest.get('review', {}).get('operator_release'):

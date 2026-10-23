@@ -4554,7 +4554,8 @@ def test_context_statement_can_keep_unmapped_device_counts_without_schema_failur
                  'entities': ['EGO', 'WristCam', 'HUB'], 'field': 'user_intent'},
             ],
         })
-    assert schema.goals[0].unmapped_condition_keys == ('device_counts', 'host', 'task')
+    assert schema.goals[0].unmapped_condition_keys == ('device_counts', 'host')
+    assert schema.goals[0].condition_map()['task'] == 'capture'
     assert schema.goals[1].entities == ()
 
 
