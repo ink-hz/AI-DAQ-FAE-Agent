@@ -4,18 +4,18 @@
 
 ## 当前生产状态（2026-10-23，已部署）
 
-生产实际加载 **78 条已审记录、8 个章节、19 个逐段证据单元**，SDK 为 **24 条包内用法、17 条版本说明**。已发布目录集合、已知输入交付、组合范围及澄清误吞的通用机制修复，补入功耗/续航条件和双目＋WristCam 指南。11 个场景取得独立 Codex 答案接受：9 轮结转、2 个失败定向重测，通过题未重跑。
+生产实际加载 **388 条记录、318 个章节、329 个逐段证据单元**：保留原有已核实规格和流程，新增 **20 份 PDF/Markdown 的 310 段资料记载参考**；SDK 保留 **24 条用法、17 条更新说明**。现有内容可以附版本、条件和冲突交付，不等待全部候选章节成为确定参数。
 
 | 对象 | 实际生产身份 |
 | --- | --- |
-| 回答源码 / runtime | `b6e5afe27a4eb206436392fa0bdad4ca604d1a4b` / `daq-dc16f42d8cbe` |
-| 主知识 | `c604e5b52db4fbd4cc933d560836de6938d3da2ab9e4d9c0a49084f18be55593` |
-| SDK | `c06c19298b896d9f530ad4d9e8f5d1ccfc9f5dd0ab1942eeaaa9e46a6e41e637` |
-| 镜像 | `sha256:8a323bec3ca136fc81353b66e7171e4fb55183393a1622996ab983f1679c1de2` |
+| 回答源码 / runtime | `5a55dffa1a44cf4021d56b3a7a3a42de265ec60b` / `daq-772ca8f76d07` |
+| 主知识 | `64a484100fda4e38d519450745700cf978017cb73816019f23f47dd6b57c833c` |
+| SDK | `3c00fa1c798aa90894391583b97368125e2e7c1ce2740a77b28485484fb679a9` |
+| 镜像 | `sha256:aa7cff939e9e45af7dc47d7c575016e2d004c076680a45b017906c47ba35163a` |
 
-实际容器健康、重启 0，默认生产签名加载通过，没有启用 Dev 放行；公网 `/daq/` 返回 200 且保持该路径，未登录历史返回 401。共享源码和相机未改，生产没有发送模型测试题；源码、镜像、环境、双指针及数据库备份支持整组回滚。同期 Platform API 另有镜像变更，已单列观察，不声称全平台无变化或全健康。
+实际容器健康、重启 0，默认生产签名加载通过，未启用 Dev 放行；公网 `/daq/` 返回 200 且保持路径。新增 4 题经独立 Codex 答案复审接受：3 题继承原候选，UMI 英文实体别名问题修复后仅重测此题；共 5 次尝试，未重跑历史通过题。保留 iOS 已发布文字的帮助性遗漏，不宣称所有回答已完美。共享源码及相机仓未改；生产只做只读观察，没有模型评测。
 
-63mm SoC、四目精确组合/同步精度、整套实测续航及其余未审候选保持准确缺口。详见[实际生产发布记录](docs/reviews/2026-10-23-daq-real-feedback-production-release.md)、[机制修复与 Dev 复审](docs/reviews/2026-10-23-daq-real-feedback-repair.md)和[原 Dev 证据索引](docs/reviews/2026-10-23-daq-real-feedback-evidence.json)。[前一版生产记录](docs/reviews/2026-10-21-kq-production-release.md)作为历史保留。
+资料记载不等于设备实测，精确 SoC/BOM、具体组合验证、整套实测续航及图片/表格歧义仍按实际依据限定；这些局部缺项不阻挡其他内容上线。原件、来源权限、发布身份与整组回滚均已保留。详见[本次生产发布记录](docs/reviews/2026-10-23-document-reference-production-release.md)；[此前机制修复发布](docs/reviews/2026-10-23-daq-real-feedback-production-release.md)与[此前 Dev 复审](docs/reviews/2026-10-23-daq-real-feedback-repair.md)作为历史保留。
 
 ## 架构和范围
 
@@ -49,4 +49,4 @@ npm --prefix webui run build
 
 原件保存在 Git 忽略的 `data/knowledge/local_archive/`，逐文件按 SHA-256 核验。高频更新先比较来源、实体、变体、字段含义、测量条件和依赖关系；改变或撤回的事实不能继承旧审核状态。新事实完成来源核对、Dev 真实问答及独立答案复核后，生成不可变主知识或 SDK 发布包，最后切换对应指针。知识发布不改变相机服务。
 
-清洗和增量设计见[知识库设计与更新工作流](docs/knowledge-base/knowledge-base-design-and-update-workflow.md)、[知识质量任务书](docs/knowledge-base/2026-10-21-knowledge-base-quality-improvement-task-brief.md)、[完整设计](docs/2026-10-08-数采FAE完整设计.md)、[SDK 目录说明](Knowledge_SDK/README.md)与[本次生产发布记录](docs/reviews/2026-10-21-kq-production-release.md)。
+清洗和增量设计见[知识库设计与更新工作流](docs/knowledge-base/knowledge-base-design-and-update-workflow.md)、[知识质量任务书](docs/knowledge-base/2026-10-21-knowledge-base-quality-improvement-task-brief.md)、[完整设计](docs/2026-10-08-数采FAE完整设计.md)、[SDK 目录说明](Knowledge_SDK/README.md)与[本次生产发布记录](docs/reviews/2026-10-23-document-reference-production-release.md)。

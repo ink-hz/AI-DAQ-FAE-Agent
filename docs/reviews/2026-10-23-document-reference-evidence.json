@@ -1,0 +1,48 @@
+{
+  "backup": "/opt/ai-daq-fae-agent/backups/documents-20261023-20261023T111425Z",
+  "camera_unchanged": true,
+  "counts": {
+    "narrative_units": 329,
+    "new_reference_documents": 20,
+    "new_reference_passages": 310,
+    "records": 388,
+    "release_notes": 17,
+    "sdk_use_records": 24,
+    "sections": 318
+  },
+  "daq_code_sha256": "772ca8f76d079e42aeadbfcac09ce1a0c41f6e00d390686dab90ca1cd009604b",
+  "image_id": "sha256:aa7cff939e9e45af7dc47d7c575016e2d004c076680a45b017906c47ba35163a",
+  "main": "64a484100fda4e38d519450745700cf978017cb73816019f23f47dd6b57c833c",
+  "only_allowed_env_lines_touched": true,
+  "preserved_limitations": [
+    "iOS P3: known published text omitted, not absent sources",
+    "source statement scope is not device validation",
+    "six archived changelogs are not full history coverage",
+    "one pre-existing random container disappeared without attribution"
+  ],
+  "private_evidence_files": 123,
+  "private_evidence_index": "data/knowledge/curated/document-reference-production-20261023/index.json",
+  "private_evidence_index_sha256": "7be03905159c4e9f2aaaf45d5434e85bc3f7f0d99671e6e50616c20d4934608f",
+  "production_models_evaluated": 0,
+  "qa": {
+    "actual_M2_accepted": 1,
+    "attempts": 5,
+    "distinct_cases": 4,
+    "inherited_M1_accepted": 3,
+    "nonblocking_ios_p3_retained": true,
+    "old_passed_model_replays": 0,
+    "production_model_evals": 0
+  },
+  "review_sha256": {
+    "independent-alias-final-knowledge-approval.private.json": "e32012b4af071ad9ea8639a228ff46436c774afb878c867d65c635b7b74005d3",
+    "independent-answer-review.v2.private.json": "adcc204d108d746e74c6c87ecd721e150e696ab56366c6791f88682019990823",
+    "independent-code-review.private.json": "90e35bbd6dbf4c459806a0f9a1ef60c69de537f953965ae11030cd425be877ba",
+    "independent-deployment-review.private.json": "a1efe4cf0b60734bbf78d7d4fc74fcf97b5342856fe0d0c9154b36a542c7de94",
+    "independent-production-observation-review.private.json": "6b2f5f66ffc5c09c1b64c426380e7d48d410d4051fd5f628a399593b915ed5a4"
+  },
+  "rollback_production_drill": false,
+  "runtime": "daq-772ca8f76d07",
+  "scope": "actual_production_release; model QA isolated Dev only",
+  "sdk": "3c00fa1c798aa90894391583b97368125e2e7c1ce2740a77b28485484fb679a9",
+  "source_commit": "5a55dffa1a44cf4021d56b3a7a3a42de265ec60b"
+}
