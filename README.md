@@ -8,14 +8,14 @@
 
 | 对象 | 实际生产身份 |
 | --- | --- |
-| 回答源码 / runtime | `5a55dffa1a44cf4021d56b3a7a3a42de265ec60b` / `daq-772ca8f76d07` |
-| 主知识 | `64a484100fda4e38d519450745700cf978017cb73816019f23f47dd6b57c833c` |
-| SDK | `3c00fa1c798aa90894391583b97368125e2e7c1ce2740a77b28485484fb679a9` |
-| 镜像 | `sha256:aa7cff939e9e45af7dc47d7c575016e2d004c076680a45b017906c47ba35163a` |
+| 回答源码 / runtime | `2988e11051f398f7d35cb50075c32cb58836fb38` / `daq-8e87f90c8751` |
+| 主知识 | `f6730aa125b334b8f7b978d15f4c68736767ba543dbaed18b35ee7c40b3ab69b` |
+| SDK | `52b297a577cb2883738e246e9694e760a35ce3a32514cb8895457df45d13a398` |
+| 镜像 | `sha256:25928d849409bb02b5117fe81ce101bbd289d6ef351ce06ed551eb84a5c8adee` |
 
-实际容器健康、重启 0，默认生产签名加载通过，未启用 Dev 放行；公网 `/daq/` 返回 200 且保持路径。新增 4 题经独立 Codex 答案复审接受：3 题继承原候选，UMI 英文实体别名问题修复后仅重测此题；共 5 次尝试，未重跑历史通过题。保留 iOS 已发布文字的帮助性遗漏，不宣称所有回答已完美。共享源码及相机仓未改；生产只做只读观察，没有模型评测。
+实际容器健康、重启 0，默认生产签名加载通过，未启用 Dev 放行；公网 `/daq/` 返回 200 且保持路径。本批修复章节导航、实质目标绑定、资料任务被扩成兼容验收、产品简称未统一及已知内容展示顺序。隔离 Dev 共 4 个不同问答轮次、6 次尝试：只重测两条失败，两条已通过 UMI 多轮保留首候选身份；独立 Codex 复审接受，仍保留谨慎措辞重复的小问题。共享源码及相机仓未改；生产只做只读观察，没有模型评测。
 
-资料记载不等于设备实测，精确 SoC/BOM、具体组合验证、整套实测续航及图片/表格歧义仍按实际依据限定；这些局部缺项不阻挡其他内容上线。原件、来源权限、发布身份与整组回滚均已保留。详见[本次生产发布记录](docs/reviews/2026-10-23-document-reference-production-release.md)；[此前机制修复发布](docs/reviews/2026-10-23-daq-real-feedback-production-release.md)与[此前 Dev 复审](docs/reviews/2026-10-23-daq-real-feedback-repair.md)作为历史保留。
+资料记载不等于设备实测，精确 SoC/BOM、具体组合验证、整套实测续航及图片/表格歧义仍按实际依据限定；这些局部缺项不阻挡其他内容上线。原件、来源权限、发布身份与整组回滚均已保留。详见[本次完整性生产发布记录](docs/reviews/2026-10-23-answer-completeness-production-release.md)；[此前资料参考发布](docs/reviews/2026-10-23-document-reference-production-release.md)、[此前机制修复发布](docs/reviews/2026-10-23-daq-real-feedback-production-release.md)与[此前 Dev 复审](docs/reviews/2026-10-23-daq-real-feedback-repair.md)作为历史保留。
 
 ## 架构和范围
 

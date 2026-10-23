@@ -1,0 +1,116 @@
+{
+  "format": "daq-answer-completeness-release-evidence/v1",
+  "date": "2026-10-23",
+  "release_state": "actual_single_DAQ_production_cutover_and_read_only_observation_completed",
+  "source_commit": "2988e11051f398f7d35cb50075c32cb58836fb38",
+  "runtime_release": "daq-8e87f90c8751",
+  "code_sha256": "8e87f90c8751e7e6dc264e3c6cbb5efce0f050c829ff8571522ce724bb3ec2df",
+  "main_release": "f6730aa125b334b8f7b978d15f4c68736767ba543dbaed18b35ee7c40b3ab69b",
+  "sdk_release": "52b297a577cb2883738e246e9694e760a35ce3a32514cb8895457df45d13a398",
+  "image": "sha256:25928d849409bb02b5117fe81ce101bbd289d6ef351ce06ed551eb84a5c8adee",
+  "container": "8a0b512071acffc4b5c809b086aeaaef7f8b8774a1894b9bdaa65568bd3056a4",
+  "upstream_sha": "6bad94591dc4c40c29ad054b526c0ec526478607",
+  "knowledge_counts": {
+    "records": 388,
+    "sections": 318,
+    "narrative_units": 329,
+    "sdk": 24,
+    "release_notes": 17
+  },
+  "verification": {
+    "final_changed_contracts": 37,
+    "independent_composite_contracts": 13,
+    "independent_contracts_overlap_changed_set": true,
+    "earlier_contract_receipts_preserved_not_relabelled_final": true,
+    "distinct_turns": 4,
+    "attempts": 6,
+    "final_candidate_replayed_failed_turns": [
+      "COMPLETENESS-IOS-T1",
+      "NEIGHBOUR-ANDROID-EN-T1"
+    ],
+    "inherited_C1_accepted_turns": [
+      "DOCUMENT-VS-VALIDATION-T1",
+      "DOCUMENT-VS-VALIDATION-T2"
+    ],
+    "inherited_C1_runtime": "daq-420f849d76d2",
+    "inherited_C1_main": "cff91e096cf22c4086d6373fe99a6a9a3e64e794988edd0e6f2df27aead0810f",
+    "inherited_C1_sdk": "787c904f64f2ad246039a0267ce2b00b9d9c1e909c11a3c5588cb62a809b84e6",
+    "accepted_with_minor_repetition": 4,
+    "passed_model_scenario_replays": 0,
+    "production_model_evals": 0,
+    "answer_grading": "independent Codex; not answering model",
+    "dev_boundary": "in-process real schema/tool/Loop/policy/render; not authenticated HTTP/persistence acceptance"
+  },
+  "production": {
+    "health": "healthy",
+    "restarts": 0,
+    "default_signed_loader": true,
+    "local_dev_opt_in": false,
+    "anonymous_public_checks": [
+      {
+        "url": "https://agent.orbbec.com.cn/daq/",
+        "status": 200,
+        "final_url": "https://agent.orbbec.com.cn/daq/"
+      },
+      {
+        "url": "https://agent.orbbec.com.cn/",
+        "status": 200,
+        "final_url": "https://agent.orbbec.com.cn/login"
+      },
+      {
+        "url": "https://agent.orbbec.com.cn/api/health",
+        "status": 200,
+        "final_url": "https://agent.orbbec.com.cn/api/health"
+      },
+      {
+        "url": "https://agent.orbbec.com.cn/admin",
+        "status": 401,
+        "final_url": "https://agent.orbbec.com.cn/admin"
+      },
+      {
+        "url": "https://agent.orbbec.com.cn/daq/api/authenticated/conversations",
+        "status": 401,
+        "final_url": "https://agent.orbbec.com.cn/daq/api/authenticated/conversations"
+      }
+    ],
+    "nonidentity_environment_lines_byte_identical": true,
+    "legacy_knowledge_pointers_unchanged": true,
+    "non_DAQ_containers_equal_from_fresh_cutover_baseline": 28,
+    "earlier_camera_and_platform_API_changes": "observed between initial and fresh baseline; actor/cause unassigned",
+    "camera_worktree_observation": "git status output equal; no uncommitted-content full-tree digest claim"
+  },
+  "rollback": {
+    "backup": "/opt/ai-daq-fae-agent/backups/completeness-20261023-v2-20261023T125747Z",
+    "source_commit": "5a55dffa1a44cf4021d56b3a7a3a42de265ec60b",
+    "image": "sha256:aa7cff939e9e45af7dc47d7c575016e2d004c076680a45b017906c47ba35163a",
+    "runtime": "daq-772ca8f76d07",
+    "main": "64a484100fda4e38d519450745700cf978017cb73816019f23f47dd6b57c833c",
+    "sdk": "3c00fa1c798aa90894391583b97368125e2e7c1ce2740a77b28485484fb679a9",
+    "backup_hashes_validated": true,
+    "database_restore": false,
+    "production_rollback_exercised": false
+  },
+  "private_evidence": {
+    "root": "data/knowledge/curated/answer-completeness-production-20261023",
+    "files": 126,
+    "index_sha256": "5d887fdb498f24c8fd6f7b5608682bbad0bc534c07b40ca6ad230711fe128d2b",
+    "source_archive_manifest_sha256": "ab0ff931e9f3325685edd8cbfc24c08815ffbd9b1e70b19de413cbcac97370a4"
+  },
+  "review_receipts": {
+    "independent-code-review.private.json": "5c6e805dabf2a2d01c8ed39f36687a7ec15cc1517304f66a379b577fafafce63",
+    "independent-composite-identity-review.private.json": "60e3cd6e9fa047b0cdf69337c6cd8d2b84e815920221e60796383b26c5c9b325",
+    "independent-answer-review.v1.private.json": "07a40c8993c729e2c82dd6cf9741fcb511b03ef8ddd1471540b5ea1ad26cffb3",
+    "independent-answer-review.v2.private.json": "6d1324aaaec7c50d64a1e2c1ebcf1c84de97a3cc67efce67ae841ff8f9d0c544",
+    "independent-v2-runtime-rebind-knowledge-approval.private.json": "b28d1de18d2eefb353042776ac118581de82c2f2d797cd969946c530c1997462",
+    "independent-c2-deploy-review.private.json": "b3fb438465bc4523a1d89a26809076a41e909f803219771804052df91a456259",
+    "independent-production-observation-review.private.json": "e8234c8ec7903e944edb25f7c7bd0f1e9709625f0fdcfe180a985b18ae7b9448"
+  },
+  "remaining": [
+    "P3 repeated documentary/version caution wording",
+    "exact missing stop/result-check or success-indicator source steps",
+    "previous SoC/BOM, exact combination compatibility, actual system-runtime and image/table/changelog source gaps retained"
+  ],
+  "shared_src_changed": false,
+  "camera_repo_edited_by_this_task": false,
+  "model_config_or_output_budget_changed": false
+}
