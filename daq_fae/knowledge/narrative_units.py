@@ -47,7 +47,10 @@ def render_narrative_record(row):
     No value, qualifier, scope, step, checkpoint or failure branch is omitted.
     """
     return '\n'.join(['scope: ' + _json(row['scope'])] + [
-        key + ': ' + _json(_without_source_refs(value))
+        key + ': ' + (value if key == 'value' and isinstance(value, str)
+                     and row['data'].get('field') == 'source_text'
+                     and row['data'].get('evidence_scope') == 'document_statement_only'
+                     else _json(_without_source_refs(value)))
         for key, value in sorted(row['data'].items()) if key != 'source_refs'])
 
 

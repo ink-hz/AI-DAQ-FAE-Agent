@@ -73,6 +73,12 @@ def _data_valid(kind: str, status: str, data: dict) -> bool:
                 _entity_label(alias) for alias in aliases}
     if kind == "claim":
         value = data.get("value")
+        if data.get('evidence_scope') == 'document_statement_only' and (
+                data.get('field') != 'source_text' or not _nonempty(value)
+                or not data.get('source_limits')):
+            return False
+        if data.get('field') == 'source_text' and not _nonempty(value):
+            return False
         return (isinstance(data.get("entity_id"), str) and
                 bool(_ID.fullmatch(data["entity_id"])) and
                 isinstance(data.get("field"), str) and bool(_ID.fullmatch(data["field"])) and

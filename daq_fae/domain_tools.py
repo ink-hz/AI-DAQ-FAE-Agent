@@ -28,6 +28,7 @@ from daq_fae.knowledge.section_search import (
     EXCERPT_CHARS, MAX_BODY_CHARS, MAX_QUERY_CHARS, body_text, rank_sections,
 )
 from daq_fae.supporting_evidence import supporting_specs
+from daq_fae.document_references import is_document_statement, section_documents
 from daq_fae.knowledge.entity_families import mentions_variant
 
 
@@ -1089,6 +1090,9 @@ class DaqToolBox:
         if name == "read_doc":
             return self._section_result(name, arguments)
         rows = self.knowledge.records_for(self.role)
+        if name == 'lookup_spec':
+            # Source passages are consumed through read_doc, not typed spec values.
+            rows = [row for row in rows if not is_document_statement(row)]
         conflict_notices = (self.knowledge.conflict_notices_for(self.role)
                             if name == 'lookup_spec' else [])
         entities = {row["id"]: row["data"]["name"] for row in rows
@@ -1419,6 +1423,7 @@ class DaqToolBox:
                 fields = sorted({str(row['data']['field']) for row in rows
                                  if row['kind'] == 'claim'
                                  and row['status'] == 'verified'
+                                 and not is_document_statement(row)
                                  and row['data'].get('entity_id') == entity_row['id']})
                 field_coverage[entity_row['id']] = fields
         requirement_source_ids = {}
@@ -1572,6 +1577,11 @@ class DaqToolBox:
                 "matches": [], "matched_requirement_ids": [],
             })
         projected = []
+        records = {r['id']: r for r in self.knowledge.records_for(self.role)}
+        document_rows = ([r for s in matches for r in section_documents(s, records)]
+                         if name == 'read_doc' and not getattr(
+                             self.knowledge, 'is_candidate_preview', False) else [])
+        entities = {key: row for key, row in records.items() if row['kind'] == 'entity'}
         candidate_preview = bool(getattr(self.knowledge, "is_candidate_preview", False))
         for section in matches:
             item = {key: section[key] for key in (
@@ -1579,13 +1589,16 @@ class DaqToolBox:
             item.update(evidence_layer=("source_candidate" if candidate_preview else "reviewed_section"),
                         status=("candidate" if candidate_preview else "verified"))
             for key in ("entity_id", "entity_ids", "topology_id", "conditions",
-                        "hardware_revision", "software_versions", "link_ids"):
+                        "hardware_revision", "software_versions", "link_ids",
+                        "evidence_scope", "source_limits"):
                 if key in section:
                     item[key] = section[key]
             if name == "read_doc":
                 item["body"] = section["body"]
             else:
-                text = body_text(section["body"])
+                passages = section_documents(section, records)
+                text = ('\n\n'.join(row['data']['value'] for row in passages)
+                        if passages else body_text(section["body"]))
                 item.update(excerpt=text[:EXCERPT_CHARS],
                             excerpt_truncated=len(text) > EXCERPT_CHARS)
             projected.append(item)
@@ -1593,6 +1606,9 @@ class DaqToolBox:
             "release_id": self.knowledge.release_id, "matches": projected,
             # Retrieval relevance cannot certify typed facts or exact conditions.
             "matched_requirement_ids": [],
+            **({'supporting_evidence': supporting_specs(
+                document_rows, self.requirements, entities, set())}
+               if document_rows else {}),
         }, sources=[{
             "type": "daq_source_candidate" if candidate_preview else "daq_governed_section",
             "verification_status": "candidate" if candidate_preview else "verified",
@@ -1601,7 +1617,13 @@ class DaqToolBox:
                 "source_id": "source:" + ref["sha256"], "sha256": ref["sha256"],
                 "locator": ref["locator"],
             } for ref in s["source_refs"]],
-        } for s in matches])
+        } for s in matches] + [{
+            'type': 'daq_governed_claim', 'verification_status': 'verified',
+            'evidence_scope': 'document_statement_only',
+            'scope': row['scope'],
+            'release_id': self.knowledge.release_id, 'source_id': row['id'],
+            'source_refs': row['source_refs'],
+        } for row in document_rows])
 
     @staticmethod
     def _record_text(row: dict) -> str:
@@ -2183,6 +2205,8 @@ class DaqToolBox:
                              entities: dict[str, str], topologies: dict[str, dict],
                              entity_records: dict[str, dict] | None = None,
                              *, candidate_preview: bool = False) -> bool:
+        if is_document_statement(row):
+            return False
         if requirement.get("reason") in {"intent_or_entity_not_grounded",
                                           "unmapped_condition_unverified"} or \
                 requirement.get("conditions_authority") == "platform_context_unverified":

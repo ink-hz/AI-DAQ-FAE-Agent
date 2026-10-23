@@ -14,6 +14,7 @@ from src.agent.loop.tools import ToolResult
 
 from daq_fae.service_contract import ServiceContract
 from daq_fae.supporting_evidence import observed_support
+from daq_fae.document_references import observed_documents, is_document_statement
 
 
 def question_requirements(_question: str) -> dict[str, object]:
@@ -146,6 +147,12 @@ class DaqEvidencePolicy:
             raise ValueError('daq_policy_knowledge_role_required')
         self.evidence_entities = ({row['id']: row for row in knowledge.records_for(role)
                                    if row['kind'] == 'entity'} if knowledge is not None else {})
+        self.evidence_records = ({row['id']: row for row in knowledge.records_for(role)}
+                                 if knowledge is not None else {})
+        self.evidence_release = knowledge.release_id if knowledge is not None else None
+        self.evidence_sections = ({s['section_id']: s for s in knowledge.sections_for(role)}
+                                  if knowledge is not None and not getattr(
+                                      knowledge, 'is_candidate_preview', False) else {})
         self._session: DaqEvidenceSession | None = None
 
     @property
@@ -199,7 +206,9 @@ class DaqEvidencePolicy:
             answer_language=self.answer_language,
             allowed_chinese_terms=self.allowed_chinese_terms,
             allowed_tools=self.allowed_tools,
-            raw_requirements=deepcopy(raw), evidence_entities=self.evidence_entities)
+            raw_requirements=deepcopy(raw), evidence_entities=self.evidence_entities,
+            evidence_records=self.evidence_records, evidence_sections=self.evidence_sections,
+            evidence_release=self.evidence_release)
         return self._session
 
 
@@ -212,7 +221,10 @@ class DaqEvidenceSession:
                  allowed_chinese_terms: tuple[str, ...] = (),
                  allowed_tools: frozenset[str] | None = None,
                  raw_requirements: list[dict] | None = None,
-                 evidence_entities: dict[str, dict] | None = None):
+                 evidence_entities: dict[str, dict] | None = None,
+                 evidence_records: dict[str, dict] | None = None,
+                 evidence_sections: dict[str, dict] | None = None,
+                 evidence_release: str | None = None):
         self.requirements = requirements
         self.last_submission: AnswerSubmission | None = None
         self.status = {
@@ -237,8 +249,12 @@ class DaqEvidenceSession:
             item.id: set() for item in requirements}
         self._required_delivery_sources: dict[str, set[str]] = {}
         self._supporting_sources: dict[str, set[str]] = {}
+        self._document_parents: set[str] = set()
         self._raw_requirements = deepcopy(raw_requirements or [])
         self._evidence_entities = deepcopy(evidence_entities or {})
+        self._evidence_records = deepcopy(evidence_records or {})
+        self._evidence_sections = deepcopy(evidence_sections or {})
+        self._evidence_release = evidence_release
         self.question = question
         self.allow_dev_source_check = allow_dev_source_check
         self.answer_language = answer_language
@@ -412,9 +428,33 @@ class DaqEvidenceSession:
                 result, allow_dev_source_check=self.allow_dev_source_check):
             visible_source_ids = _governed_source_ids(
                 result, allow_dev_source_check=self.allow_dev_source_check)
+            if tool_name == 'read_doc' and content.get('release_id') == self._evidence_release:
+                documents = observed_documents(
+                    content, {source['source_id'] for source in result.sources
+                              if isinstance(source, dict)
+                              and isinstance(source.get('source_id'), str)
+                              and source.get('source_id') in visible_source_ids
+                              and source.get('type') == 'daq_governed_claim'
+                              and source.get('verification_status') == 'verified'
+                              and source.get('evidence_scope') == 'document_statement_only'
+                              and source.get('release_id') == self._evidence_release
+                              and source.get('scope') == self._evidence_records.get(
+                                  source.get('source_id'), {}).get('scope')
+                              and source.get('source_refs') == self._evidence_records.get(
+                                  source.get('source_id'), {}).get('source_refs')},
+                    self._raw_requirements,
+                    self._evidence_entities, self._evidence_records, self._evidence_sections)
+                self._supporting_sources.update({key: set(item['source_ids'])
+                                                for key, item in documents.items()})
+                self._document_parents.update(item['parent_requirement_id']
+                                              for item in documents.values())
             if tool_name == 'lookup_spec':
+                typed_content = {**content, 'matches': [row for row in content.get('matches', [])
+                    if isinstance(row, dict) and isinstance(row.get('id'), str)
+                    and not is_document_statement(
+                        self._evidence_records.get(row.get('id'), {}))]}
                 self._supporting_sources.update(observed_support(
-                    content, visible_source_ids, self._raw_requirements, self._evidence_entities,
+                    typed_content, visible_source_ids, self._raw_requirements, self._evidence_entities,
                     allow_dev_source_check=self.allow_dev_source_check))
             exact = content.get('requirement_source_ids')
             if isinstance(exact, dict):
@@ -842,7 +882,9 @@ class DaqEvidenceSession:
             ]
             coverage[capability] = (
                 "full" if all(status == "satisfied" for status in statuses)
-                else "partial" if "satisfied" in statuses
+                else "partial" if "satisfied" in statuses or any(
+                    item.id in self._document_parents for item in self.requirements
+                    if item.capability == capability)
                 else "empty" if "missing" in statuses
                 else "unknown"
             )

@@ -25,7 +25,8 @@ def supporting_specs(matches: list[dict], requirements: list[dict],
                      entities: dict[str, dict], bound_ids: set[str]) -> list[dict]:
     supporting = []
     for row in matches:
-        if row['kind'] != 'claim' or row['status'] != 'verified' or row['id'] in bound_ids:
+        if (row.get('kind') != 'claim' or row.get('status') != 'verified'
+                or not isinstance(row.get('id'), str) or row['id'] in bound_ids):
             continue
         entity = entities.get(row['data'].get('entity_id'))
         if entity is None:
@@ -33,6 +34,16 @@ def supporting_specs(matches: list[dict], requirements: list[dict],
         labels = {_label(str(value)) for value in (
             entity['id'], entity['data']['name'], entity['scope'].get('product', ''),
             *entity['data'].get('aliases', [])) if value}
+        document = (row['data'].get('field') == 'source_text'
+                    and row['data'].get('evidence_scope') == 'document_statement_only')
+        family_document = document and entity['data'].get('entity_type') == 'family'
+        if family_document:
+            # Family text may contextualize a child, never certify its variant.
+            for child in entities.values():
+                if child['data'].get('family_entity_id') == entity['id']:
+                    labels.update(_label(str(value)) for value in (
+                        child['id'], child['data']['name'],
+                        *child['data'].get('aliases', [])) if value)
         for parent in requirements:
             if (not isinstance(parent, dict) or not isinstance(parent.get('id'), str)
                     or parent.get('evidence_class', 'governed_required') != 'governed_required'
@@ -44,10 +55,10 @@ def supporting_specs(matches: list[dict], requirements: list[dict],
                     isinstance(value, str) and _label(value) in labels for value in wanted):
                 continue
             conditions = parent.get('conditions') or {}
-            if not isinstance(conditions, dict) or any(
+            if not isinstance(conditions, dict) or (not family_document and any(
                     key in conditions and _label(str(conditions[key])) !=
                     _label(str(row['scope'].get(key, '')))
-                    for key in ('variant', 'resolution_variant', 'hardware_revision')):
+                    for key in ('variant', 'resolution_variant', 'hardware_revision'))):
                 continue
             supporting.append({
                 'id': support_id(parent['id'], row['id']),
@@ -57,6 +68,9 @@ def supporting_specs(matches: list[dict], requirements: list[dict],
                 'scope': row['scope'],
                 'conditions': row['data'].get('conditions', {}),
                 'satisfies_parent': False,
+                **({'evidence_scope': 'document_statement_only',
+                    'source_limits': row['data'].get('source_limits', '')}
+                   if document else {}),
             })
             break
     return supporting
@@ -68,6 +82,8 @@ def observed_support(content: dict, visible_source_ids: set[str], requirements: 
     """Validate tool metadata against the actual verified typed rows, not text."""
     rows = {row.get('id'): row for row in content.get('matches', [])
             if isinstance(row, dict) and row.get('kind') == 'claim'
+            and row.get('data', {}).get('field') != 'source_text'
+            and row.get('data', {}).get('evidence_scope') != 'document_statement_only'
             and (row.get('status') == 'verified' or (
                 allow_dev_source_check and row.get('status') == 'source_checked'))}
     expected = {item['id']: item for item in supporting_specs(
