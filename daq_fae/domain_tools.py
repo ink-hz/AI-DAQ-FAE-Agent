@@ -29,6 +29,7 @@ from daq_fae.knowledge.section_search import (
 )
 from daq_fae.supporting_evidence import supporting_specs
 from daq_fae.document_references import is_document_statement, section_documents
+from daq_fae.knowledge.document_navigation import document_navigation
 from daq_fae.knowledge.entity_families import mentions_variant
 
 
@@ -1559,10 +1560,15 @@ class DaqToolBox:
             return ToolResult(status="tool_error", content={"error": "invalid_tool_arguments"})
         sections = [s for s in self.knowledge.sections_for(self.role)
                     if not contains_source_path(s)]
+        rows = self.knowledge.records_for(self.role)
+        chunks = getattr(self.knowledge, 'manifest', {}).get('review', {}).get(
+            'readiness', {}).get('snapshot', {}).get('chunks', [])
+        navigation = ({} if getattr(self.knowledge, 'is_candidate_preview', False)
+                      else document_navigation(sections, rows, source_chunks=chunks))
         if name == "read_doc":
             matches = [s for s in sections if s["section_id"] == value]
         else:
-            matches = rank_sections(sections, self.knowledge.records_for(self.role), value)
+            matches = rank_sections(sections, rows, value, document_context=navigation)
             if getattr(self.knowledge, "is_candidate_preview", False):
                 matches = matches[:8]
         if not matches:
@@ -1577,7 +1583,7 @@ class DaqToolBox:
                 "matches": [], "matched_requirement_ids": [],
             })
         projected = []
-        records = {r['id']: r for r in self.knowledge.records_for(self.role)}
+        records = {r['id']: r for r in rows}
         document_rows = ([r for s in matches for r in section_documents(s, records)]
                          if name == 'read_doc' and not getattr(
                              self.knowledge, 'is_candidate_preview', False) else [])
@@ -1592,7 +1598,16 @@ class DaqToolBox:
                         "hardware_revision", "software_versions", "link_ids",
                         "evidence_scope", "source_limits"):
                 if key in section:
+                    if key == 'source_limits' and name != 'read_doc':
+                        continue
                     item[key] = section[key]
+            if section['section_id'] in navigation:
+                nav = navigation[section['section_id']]
+                item['document_context'] = (nav if name == 'read_doc' else {
+                    'heading_path': nav['heading_path'], 'parent': nav['parent'],
+                    'child_sections_count': nav['children_count'],
+                    'children_truncated': nav['children_truncated'],
+                    'requires_read_doc': True, 'navigation_scope': 'published_passages_only'})
             if name == "read_doc":
                 item["body"] = section["body"]
             else:

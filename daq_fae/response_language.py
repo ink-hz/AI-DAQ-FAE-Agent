@@ -18,7 +18,7 @@ _EN_HEADINGS = {
 def _present_safe_abstention(submission: AnswerSubmission, language: str) -> str:
     """Render DAQ's validated facts and gap without parsing model prose."""
     delivered = '\n'.join(unit.text for unit in submission.delivery_units)
-    confirmed = '\n'.join(part for part in (submission.basis, delivered) if part)
+    confirmed = '\n\n'.join(part for part in (delivered, submission.basis) if part)
     headings = (('Conclusion', 'To confirm', 'Cautions', 'Next steps')
                 if language == 'en' else ('结论', '尚待确认', '注意', '建议'))
     conclusion, gap, cautions, next_steps = headings

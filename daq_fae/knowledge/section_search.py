@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
+from daq_fae.document_references import section_documents
+from .document_navigation import document_navigation
 
 MAX_QUERY_CHARS = 2000
 MAX_BODY_CHARS = 32000
@@ -57,12 +59,15 @@ def body_text(body: str) -> str:
     return _BLOCK.sub(readable, body)
 
 
-def rank_sections(sections: list[dict], records: list[dict], query: str) -> list[dict]:
+def rank_sections(sections: list[dict], records: list[dict], query: str,
+                  *, document_context: dict | None = None) -> list[dict]:
     query_terms = terms(query)
     if not query_terms:
         return []
     entities = {r['id']: r for r in records if r['kind'] == 'entity'}
     by_record = {r['id']: r for r in records}
+    navigation = (document_navigation(sections, records)
+                  if document_context is None else document_context)
     ranked = []
     for section in sections:
         entity_ids = set(section.get('entity_ids', []))
@@ -78,9 +83,13 @@ def rank_sections(sections: list[dict], records: list[dict], query: str) -> list
         for eid in sorted(entity_ids):
             data = entities.get(eid, {}).get('data', {})
             aliases.extend(strings(data.get('name', '')) + strings(data.get('aliases', [])))
-        fields = [(8, section['title']), (6, ' '.join(aliases)),
+        passages = section_documents(section, by_record)
+        readable = ('\n\n'.join(row['data']['value'] for row in passages)
+                    if passages else body_text(section['body']))
+        ancestry = ' '.join(navigation.get(section['section_id'], {}).get('heading_path', []))
+        fields = [(8, section['title']), (6, ' '.join(aliases)), (8, ancestry),
                   (5, ' '.join(strings(section.get('domain_terms', [])))),
-                  (1, body_text(section['body']))]
+                  (1, readable)]
         score = sum(weight * sum(len(term) for term in query_terms & terms(text))
                     for weight, text in fields)
         scope = section.get('scope', {})

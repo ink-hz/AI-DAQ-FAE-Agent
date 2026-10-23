@@ -50,6 +50,9 @@ def supporting_specs(matches: list[dict], requirements: list[dict],
                     or parent.get('reason') == 'intent_or_entity_not_grounded'
                     or parent.get('conditions_authority') == 'platform_context_unverified'):
                 continue
+            if document and (parent.get('delivery_required') is False
+                             or parent.get('capability') in {'resolve_entity', 'catalog'}):
+                continue
             wanted = parent.get('entities') or []
             if not isinstance(wanted, list) or not any(
                     isinstance(value, str) and _label(value) in labels for value in wanted):
@@ -62,7 +65,8 @@ def supporting_specs(matches: list[dict], requirements: list[dict],
                 continue
             supporting.append({
                 'id': support_id(parent['id'], row['id']),
-                'parent_requirement_id': parent['id'], 'capability': 'lookup_spec',
+                'parent_requirement_id': parent['id'],
+                'capability': 'read_doc' if document else 'lookup_spec',
                 'source_ids': [row['id']], 'entity_id': entity['id'],
                 'field': row['data']['field'],
                 'scope': row['scope'],
@@ -72,7 +76,8 @@ def supporting_specs(matches: list[dict], requirements: list[dict],
                     'source_limits': row['data'].get('source_limits', '')}
                    if document else {}),
             })
-            break
+            if not document:
+                break
     return supporting
 
 
