@@ -2,20 +2,20 @@
 
 数采 FAE 是独立版本、独立知识发布和回滚的内部服务，复用固定源码版本的通用 FAE 运行时。生产入口为 [数采 FAE](https://agent.orbbec.com.cn/daq/)。
 
-## 当前生产状态（2026-10-23，已部署）
+## 当前生产状态（2026-10-27，已部署）
 
 生产实际加载 **388 条记录、318 个章节、329 个逐段证据单元**：保留原有已核实规格和流程，新增 **20 份 PDF/Markdown 的 310 段资料记载参考**；SDK 保留 **24 条用法、17 条更新说明**。现有内容可以附版本、条件和冲突交付，不等待全部候选章节成为确定参数。
 
 | 对象 | 实际生产身份 |
 | --- | --- |
-| 回答源码 / runtime | `2988e11051f398f7d35cb50075c32cb58836fb38` / `daq-8e87f90c8751` |
-| 主知识 | `f6730aa125b334b8f7b978d15f4c68736767ba543dbaed18b35ee7c40b3ab69b` |
-| SDK | `52b297a577cb2883738e246e9694e760a35ce3a32514cb8895457df45d13a398` |
-| 镜像 | `sha256:25928d849409bb02b5117fe81ce101bbd289d6ef351ce06ed551eb84a5c8adee` |
+| 回答源码 / runtime | `445e4f874c08c01faf450af65956de0e1d0bbee6` / `daq-af20e94b4704` |
+| 主知识 | `1a9e0952eba955fbce044e3cc930e608229986f7ea5ba6570bcdc13173b408e8` |
+| SDK | `fa023dbe3c06b524bd102de0a0a73fb7c9d5ef5fe22f523896fd7ffb439e152c` |
+| 镜像 | `sha256:c282bb1e71fa0ed8c0953b917f233599f82a584b68f309d2f286eb637b6a81ee` |
 
-实际容器健康、重启 0，默认生产签名加载通过，未启用 Dev 放行；公网 `/daq/` 返回 200 且保持路径。本批修复章节导航、实质目标绑定、资料任务被扩成兼容验收、产品简称未统一及已知内容展示顺序。隔离 Dev 共 4 个不同问答轮次、6 次尝试：只重测两条失败，两条已通过 UMI 多轮保留首候选身份；独立 Codex 复审接受，仍保留谨慎措辞重复的小问题。共享源码及相机仓未改；生产只做只读观察，没有模型评测。
+实际容器健康、重启 0，默认生产签名加载通过，未启用 Dev 放行；公网 `/daq/` 返回 200 且保持路径。保留 10/23 章节导航、目标绑定及产品简称修复，本批仅收紧资料问答的任务范围和交付比例。隔离 Dev 两个不同问题、三次尝试（基线一次、候选两题），独立 Codex 复审接受；窄用途题不再展开完整前序流程或追加独立功能核验，真实兼容验收仍保留缺口。截图边界和重复措辞等 P3 尚未完全消除，旧通过题未重跑。共享源码及相机仓未改；生产只做只读观察，没有模型评测。
 
-资料记载不等于设备实测，精确 SoC/BOM、具体组合验证、整套实测续航及图片/表格歧义仍按实际依据限定；这些局部缺项不阻挡其他内容上线。原件、来源权限、发布身份与整组回滚均已保留。详见[本次完整性生产发布记录](docs/reviews/2026-10-23-answer-completeness-production-release.md)；[此前资料参考发布](docs/reviews/2026-10-23-document-reference-production-release.md)、[此前机制修复发布](docs/reviews/2026-10-23-daq-real-feedback-production-release.md)与[此前 Dev 复审](docs/reviews/2026-10-23-daq-real-feedback-repair.md)作为历史保留。
+资料记载不等于设备实测，精确 SoC/BOM、具体组合验证、整套实测续航及图片/表格歧义仍按实际依据限定；这些局部缺项不阻挡其他内容上线。原件、来源权限、发布身份与整组回滚均已保留。详见[本次会话分析与生产发布记录](docs/reviews/2026-10-27-daq-session-followup.md)；[此前完整性发布](docs/reviews/2026-10-23-answer-completeness-production-release.md)；[此前资料参考发布](docs/reviews/2026-10-23-document-reference-production-release.md)、[此前机制修复发布](docs/reviews/2026-10-23-daq-real-feedback-production-release.md)与[此前 Dev 复审](docs/reviews/2026-10-23-daq-real-feedback-repair.md)作为历史保留。
 
 ## 架构和范围
 

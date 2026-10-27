@@ -1,0 +1,113 @@
+{
+  "format": "daq-document-task-scope-release/v1",
+  "date": "2026-10-27",
+  "state": "actual_production_released",
+  "source_commit": "445e4f874c08c01faf450af65956de0e1d0bbee6",
+  "code_sha256": "af20e94b4704415267fcc50848eec057f2ba45cfa3c9ae6b166cb353afb95ac3",
+  "runtime_release": "daq-af20e94b4704",
+  "main_release": "1a9e0952eba955fbce044e3cc930e608229986f7ea5ba6570bcdc13173b408e8",
+  "sdk_release": "fa023dbe3c06b524bd102de0a0a73fb7c9d5ef5fe22f523896fd7ffb439e152c",
+  "image": "sha256:c282bb1e71fa0ed8c0953b917f233599f82a584b68f309d2f286eb637b6a81ee",
+  "container": "68d916ba50a6546f686d89d81b1ee3c629409933a7acebb273264032646dc2b2",
+  "knowledge_counts": {
+    "records": 388,
+    "chapters": 318,
+    "narrative_units": 329,
+    "sdk_records": 24,
+    "release_notes": 17
+  },
+  "runtime_change": [
+    "prompts/reviewed_knowledge_system.md"
+  ],
+  "program_schema_shared_runtime_knowledge_roles_model_changes": false,
+  "evaluation": {
+    "distinct_questions": 2,
+    "attempts": 3,
+    "baseline_attempts": 1,
+    "candidate_attempts": 2,
+    "candidate_core_passes": 2,
+    "old_passed_scenario_replays": 0,
+    "production_model_tests": 0,
+    "unrelated_contract_reruns": 0,
+    "independent_reviewer": "Codex; not answering model",
+    "all_P3_closed": false,
+    "provider_model_echo_conflict_retained": true,
+    "actual_provider_model": null,
+    "boundary": "in-process real schema/tool/Loop/policy/render; not authenticated HTTP/persistence acceptance"
+  },
+  "production_observation": {
+    "healthy": true,
+    "restarts": 0,
+    "default_signed_loader": true,
+    "local_dev_only": false,
+    "camera_container_head_and_status_equal": true,
+    "camera_uncommitted_file_content_digest_verified": false,
+    "non_DAQ_equal": 26,
+    "other_changes": [
+      "orbbec-voc-bot-ingest-1",
+      "orbbec-voc-bot-interact-1",
+      "orbbec-voc-workspace-1"
+    ],
+    "other_changes_attribution": "unassigned; not claimed all other services unchanged",
+    "public_checks": [
+      {
+        "url": "https://agent.orbbec.com.cn/daq/",
+        "status": 200,
+        "final_url": "https://agent.orbbec.com.cn/daq/"
+      },
+      {
+        "url": "https://agent.orbbec.com.cn/",
+        "status": 200,
+        "final_url": "https://agent.orbbec.com.cn/login"
+      },
+      {
+        "url": "https://agent.orbbec.com.cn/api/health",
+        "status": 200,
+        "final_url": "https://agent.orbbec.com.cn/api/health"
+      },
+      {
+        "url": "https://agent.orbbec.com.cn/admin",
+        "status": 401,
+        "final_url": "https://agent.orbbec.com.cn/admin"
+      },
+      {
+        "url": "https://agent.orbbec.com.cn/daq/api/authenticated/conversations",
+        "status": 401,
+        "final_url": "https://agent.orbbec.com.cn/daq/api/authenticated/conversations"
+      }
+    ],
+    "nonidentity_environment_lines_equal": true,
+    "legacy_knowledge_pointers_equal": true
+  },
+  "rollback": {
+    "backup_path": "/opt/ai-daq-fae-agent/backups/doc-scope-20261027-20261027T062150Z",
+    "source": "2988e11051f398f7d35cb50075c32cb58836fb38",
+    "image": "sha256:25928d849409bb02b5117fe81ce101bbd289d6ef351ce06ed551eb84a5c8adee",
+    "runtime": "daq-8e87f90c8751",
+    "main": "f6730aa125b334b8f7b978d15f4c68736767ba543dbaed18b35ee7c40b3ab69b",
+    "sdk": "52b297a577cb2883738e246e9694e760a35ce3a32514cb8895457df45d13a398",
+    "production_rollback_exercised": false,
+    "database_migrations_or_restore": false
+  },
+  "review_receipts": {
+    "baseline-independent-review.private.json": "8eb04156b7369517adef1399edb551038cb09c0b20ef4ab3e91525e35aebfa26",
+    "prompt-independent-review.private.json": "82eba6e39afa10114cbcf7706b488b2ae81916c212053c3682b9bcdd4e4414ce",
+    "independent-knowledge-approval.private.json": "8c164d99e034bd633decb0f1516b150964502901c92350a1e56ca7cf1f0c287a",
+    "independent-loader-identity-verification.private.json": "afcb413d9b6998a7eb94a76b05a8e59fe2f0d0b29ee575e67a99750d3fae8156",
+    "candidate-answer-independent-review.private.json": "a2c3ff8fe6581cd19da7b494a0f68d7f151b5a77dd850e09ee79d27225cf952d",
+    "deployment-independent-review.private.json": "d0301caead74cd1cb9476c66f7bacd4d38b73f6c02164a9c85a8bbe033917f53",
+    "production-observation-independent-review.private.json": "a60291caa51170ad060dcb841f0e83db53066863897fdee857e37499365a2e08"
+  },
+  "private_evidence": {
+    "root": "data/knowledge/curated/document-scope-production-20261027",
+    "files": 64,
+    "index_sha256": "02f609e66069847ad9ff90af4e59a151336e803fca286ff05cb0655de619abd9"
+  },
+  "remaining": [
+    "unasked screenshot scope note",
+    "repeated compatibility explanation",
+    "procedure-query scope wording",
+    "provider nominal model echo conflict; actual weights unverified",
+    "previous exact source gaps retained"
+  ]
+}
