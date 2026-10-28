@@ -14,7 +14,7 @@ import psycopg
 
 from src.agent.anthropic_transport import AnthropicTransportError
 from src.agent.guardrails import categorize_refusal
-from src.agent.loop.runtime import LoopRuntime
+from daq_fae.thinking_prefix import DaqLoopRuntime as LoopRuntime
 from src.agent.orchestrator import StreamEvent
 from src.agent.protocol import RUNTIME_FAILURE_OUTCOMES
 from src.platform_tasks.crypto import TaskContentCodec

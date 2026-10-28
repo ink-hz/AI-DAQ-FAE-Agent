@@ -15,7 +15,7 @@ from fastapi.responses import StreamingResponse
 from src.agent.guardrails import categorize_refusal
 from src.platform_identity.models import PlatformIdentityError
 from src.agent.anthropic_transport import AnthropicTransportError
-from src.agent.loop.runtime import LoopRuntime
+from daq_fae.thinking_prefix import DaqLoopRuntime as LoopRuntime
 from src.agent.protocol import RUNTIME_FAILURE_OUTCOMES
 from src.agent.tracing import install_trace_ctx
 from src.api.stream import StreamHeartbeat, iter_with_heartbeat, sse_event

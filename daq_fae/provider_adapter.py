@@ -3,6 +3,7 @@
 from collections.abc import Iterator
 
 from src.agent.loop.adapters import AnthropicAdapter
+from daq_fae.thinking_prefix import DaqLoopRuntime
 
 
 def normalize_unsigned_thinking(event: dict) -> dict:
@@ -37,6 +38,8 @@ def normalize_unsigned_thinking(event: dict) -> dict:
 
 class DaqAnthropicAdapter(AnthropicAdapter):
     """Keep the shared camera adapter unchanged while normalizing DAQ replay."""
+
+    preserve_thinking_prefix = True
 
     def chat(self, messages: list[dict], tools: list[dict] | None = None,
              required_tool: str | None = None) -> Iterator[dict]:

@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 
 from src.agent.loop.adapters import AnthropicAdapter
 from src.agent.anthropic_transport import AnthropicTransportError
-from src.agent.loop.runtime import LoopRuntime
+from daq_fae.thinking_prefix import DaqLoopRuntime as LoopRuntime
 from src.agent.guardrails import categorize_refusal
 
 from daq_fae.api_attachments import configure_attachments
