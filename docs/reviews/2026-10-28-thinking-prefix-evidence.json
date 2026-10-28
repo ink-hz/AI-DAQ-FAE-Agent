@@ -1,0 +1,142 @@
+{
+  "format": "daq-thinking-prefix-production-evidence/v1",
+  "date": "2026-10-28",
+  "state": "actual_single_DAQ_production_released",
+  "source_commit": "2caa860465820d0c4e6c0f42c5a15eca030389a8",
+  "code_sha256": "062f0a7ae744c10ed3aace2d39f48f22e4793d08603c4f9cc49b29afdcde4ab4",
+  "runtime_release": "daq-062f0a7ae744",
+  "main_release": "11fc32a02a1692d44dde1a3753a0406e1b6b33c2148ea1ea192b7b211d00c5b9",
+  "sdk_release": "2a43d71308f278a919edd422c65276831caf5160a4fd28725a00dbd2286b14e5",
+  "image": "sha256:5ed10ead83ee10ad5ef668fad8ee6aa7d28e37bb8d217fd22daa84d6d5db5bf7",
+  "container": "cff5d7f4fbc70c088ddd2c81c6997fe546b111e34d6407782a794278d110416f",
+  "knowledge_counts": {
+    "records": 388,
+    "sections": 318,
+    "narrative_units": 329,
+    "sdk": 24,
+    "release_notes": 17
+  },
+  "scope": {
+    "camera_repository_edits": false,
+    "shared_src_or_pin_changes": false,
+    "knowledge_or_roles_changed": false,
+    "model_or_output_budget_changed": false,
+    "DAQ_entry_points": [
+      "app",
+      "authenticated_chat",
+      "platform_tasks"
+    ]
+  },
+  "mechanism": [
+    "request-local stable wire tool catalog",
+    "append-only wire prefix including opaque assistant blocks",
+    "logical phase hard guard",
+    "deep copy before shared serialization",
+    "nonretryable local protocol rejection on real prefix edit"
+  ],
+  "verification": {
+    "strict_gateway_red": "3 failed,1 passed after fixture repair; not a historical upstream error-body reproduction",
+    "mixed_tool_result_red": "1 failed before deep-copy fix",
+    "final_prefix_contracts": 11,
+    "independent_final_prefix_contracts": 11,
+    "earlier_entry_contract_batches": [
+      56,
+      43
+    ],
+    "entry_receipts_before_send_deepcopy_fix": true,
+    "contract_sets_overlap": true,
+    "new_real_Dev_cases": 3,
+    "real_model_attempts": 3,
+    "explicit_test_contract_retry_injections": 2,
+    "injection_does_not_modify_model_or_opaque_blocks": true,
+    "protocol_case_results": [
+      "gcd21",
+      "image6red6blue"
+    ],
+    "typed_domain_outcome": "safe_abstained: known1280x800 and30fps atY16/1280x800, max_unknown",
+    "old_passed_model_replays": 0,
+    "production_model_evals": 0,
+    "independent_answer_review": "Codex, not answering model",
+    "image_scope": "inline real model/wire continuation; not full authenticated attachment/analyze_image chain",
+    "protocol_questionnaire_byte_identical_to_plan": false,
+    "actual_private_protocol_questions_preserved": true,
+    "model_weights_verified": false
+  },
+  "original_camera_failure": {
+    "trace_id": "28e9dd065ed3ab4800ceee8480672823",
+    "gateway_request_id": "202610280841588593944398268d9d6GiYtEUjK",
+    "http_status": 400,
+    "duration_ms": 56457,
+    "specific_error_body_acquired": false,
+    "camera_fix_and_deploy_claimed": false
+  },
+  "production_observation": {
+    "health": "healthy",
+    "restarts": 0,
+    "default_nonDev_signed_loader": true,
+    "legacy_knowledge_pointers_unchanged": true,
+    "nonidentity_environment_lines_byte_identical": true,
+    "public_checks": [
+      {
+        "url": "https://agent.orbbec.com.cn/daq/",
+        "status": 200,
+        "final_url": "https://agent.orbbec.com.cn/daq/"
+      },
+      {
+        "url": "https://agent.orbbec.com.cn/",
+        "status": 200,
+        "final_url": "https://agent.orbbec.com.cn/login"
+      },
+      {
+        "url": "https://agent.orbbec.com.cn/api/health",
+        "status": 200,
+        "final_url": "https://agent.orbbec.com.cn/api/health"
+      },
+      {
+        "url": "https://agent.orbbec.com.cn/admin",
+        "status": 401,
+        "final_url": "https://agent.orbbec.com.cn/admin"
+      },
+      {
+        "url": "https://agent.orbbec.com.cn/daq/api/authenticated/conversations",
+        "status": 401,
+        "final_url": "https://agent.orbbec.com.cn/daq/api/authenticated/conversations"
+      }
+    ],
+    "non_DAQ_equal_count": 29,
+    "camera_container_equal": true,
+    "camera_head_and_status_equal": true,
+    "camera_uncommitted_content_tree_hash_verified": false
+  },
+  "rollback": {
+    "backup": "/opt/ai-daq-fae-agent/backups/thinking-prefix-20261028-20261028T093054Z",
+    "source_commit": "445e4f874c08c01faf450af65956de0e1d0bbee6",
+    "image": "sha256:c282bb1e71fa0ed8c0953b917f233599f82a584b68f309d2f286eb637b6a81ee",
+    "runtime": "daq-af20e94b4704",
+    "main": "1a9e0952eba955fbce044e3cc930e608229986f7ea5ba6570bcdc13173b408e8",
+    "sdk": "fa023dbe3c06b524bd102de0a0a73fb7c9d5ef5fe22f523896fd7ffb439e152c",
+    "backup_receipts_validated": true,
+    "production_rollback_exercised": false,
+    "database_restore_or_migration": false
+  },
+  "review_receipts": {
+    "independent-design-review.private.json": "79b89ddd89ce794a4e0c83adacfe4868dd030f3f316f5743947b2ee59a121ce6",
+    "independent-code-review.private.json": "5b86a5a8e25fbbd4f46a5831babc4026a11f483a5092402809eaea7cc1f40d6c",
+    "independent-knowledge-approval.private.json": "8a0ddc319de5278aa907e07753d994788318699f2e7b6216f62342238a05e708",
+    "independent-dev-answer-review.private.json": "402ae06d6af8e01999caafabc40d2ee10f9b6a2b6cae219caf7860924ad333db",
+    "independent-deployment-review.private.json": "c007c43447f853c855c8e68763fc7eb5e361f4e3879bcf95459fbfc7f3beb779",
+    "independent-production-observation-review.private.json": "73ad374893ef53da90d1b3d8cfbda29b666217e3aa30c5ba758d0c1a5b135d6c"
+  },
+  "private_evidence": {
+    "root": "data/knowledge/curated/thinking-prefix-production-20261028",
+    "files": 80,
+    "index_sha256": "53d4267a29d344c924b50c9aec44863dfdeb6f9743e9d9a03fc4138392521780"
+  },
+  "remaining": [
+    "Original camera400 fine attribution and camera release are separate",
+    "raw protocol renderer English-heading fixture limit",
+    "typed answer wording P3",
+    "actual model weights unverified",
+    "rollback not exercised"
+  ]
+}

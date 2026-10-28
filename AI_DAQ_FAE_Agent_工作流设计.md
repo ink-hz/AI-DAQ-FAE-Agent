@@ -1,12 +1,12 @@
 # AI DAQ FAE Agent 工作流设计
 
-版本：v2.5 候选，2026-10-28；thinking 前缀兼容修复中，当前生产仍为第 1 节的 v2.4 身份。
+版本：v2.5，2026-10-28；thinking 前缀兼容修复已完成单 DAQ 生产切换，实际身份见第 1 节。
 
 数采 FAE 用一个前置语义抽取阶段和一个模型驱动的工具循环完成咨询。程序负责身份、状态、工具权限、来源适用性和交付协议；模型负责理解用户任务、组织取证、解释证据并回答。后续回答质量改进按这条链路定位最早失效的环节，再修改通用机制。
 
 本文是当前 DAQ 工作流的维护入口，包含实际实现、已知边界和坏例改进流程。历史任务书中的设计目标、已经部署的能力和未完成的能力分别说明。本批针对真实反馈的修复、候选身份及逐题结果见[修复记录](docs/reviews/2026-10-23-daq-real-feedback-repair.md)。**不得针对题目原文、测试编号或某个答案添加固定回复、推荐映射、补写结论或静默降级。**
 
-### Thinking 前缀兼容（候选）
+### Thinking 前缀兼容（已发布）
 
 触发：相机侧真实 trace `28e9dd065ed3ab4800ceee8480672823` 为上游 HTTP 400，实际请求 ID 已取回；该次细分错误原文尚缺，不能把代码机制直接当作历史归因实证。DAQ 固定内核同样在收尾/纠错收缩 tools 并保留旧 thinking。严格本地假网关在真实序列化/fold 后复现前缀变化 400；不是业务知识缺证。
 
@@ -14,7 +14,7 @@
 
 有签名 thinking 和图像原样保留，不默认删思考、启用 drop_block、关闭 adaptive thinking、换模型或对 400 盲重试。预算、终稿、来源、权限及证据门仍由固定内核执行；非 Anthropic 适配器保持旧行为。相邻负例覆盖禁用工具不执行、工具定义/旧 tool_result/system 编辑拒绝、图片前缀、同适配器跨请求隔离和普通 400 原样归因。相机由隔壁修复，本批不改相机仓、共享 src/ 或 pin。
 
-当前仅候选：严格协议 RED/GREEN 与受影响入口合同进行中，真实 Dev 及独立答案复审、生产发布尚待实际收据。见[局部计划](docs/superpowers/plans/2026-10-28-thinking-prefix-compatibility.md)。
+严格协议 RED/GREEN、最终 11 项前缀合同和受影响入口合同通过；三个新真实 Dev 案例经独立复审接受，两个协议案例明确使用一次测试用纠错注入，图像只验证 inline 消息续接。实际单 DAQ 切换、默认生产签名加载及只读观察通过；相机原次 400 细分原因和相机发布仍由隔壁核对。本批不冒称所有历史 400 均已消失。见[局部计划](docs/superpowers/plans/2026-10-28-thinking-prefix-compatibility.md)与[实际发布记录](docs/reviews/2026-10-28-thinking-prefix-production-release.md)。
 
 ### 资料问答范围与比例修复（已发布）
 
@@ -50,16 +50,16 @@
 
 ### 1.1 版本依据
 
-本次资料问答范围改进基线为 `6cf456c`，实际回答源码提交 `445e4f874c08c01faf450af65956de0e1d0bbee6`。2026-10-27 完成单 DAQ 生产切换，通过实际容器默认签名加载、健康及公网只读检查；没有生产模型评测。仅主提示为运行时变动，程序、共享 `src/`、上游 pin 及相机仓未改。相机容器身份、镜像、健康/重启及 Git HEAD/status 输出前后一致；26 个非 DAQ 容器观察字段一致，另三个 VOC 容器出现外部版本更新，原因/操作者未归因，不能声称所有非 DAQ 服务都未变。
+本次 thinking 前缀兼容基线为 `80ec827`，实际回答源码 `2caa860465820d0c4e6c0f42c5a15eca030389a8`。2026-10-28 完成单 DAQ 生产切换，通过实际镜像源码/UI、默认签名加载、健康和公网只读检查。三入口使用 DAQ 薄协议委托，共享 src/、上游 pin、相机仓、知识内容/角色和模型配置未改；没有生产模型评测。以本次切换前新快照比较，相机及其余 29 个非 DAQ 容器观察字段一致，Git HEAD/status 输出也一致；不承诺对未提交内容做过全树哈希，或相机后续不会由隔壁独立发布。
 
 | 对象 | 实际生产身份 |
 | --- | --- |
 | Agent | `ai-daq-fae-agent` |
-| 回答运行时 | `daq-af20e94b4704` |
-| 主知识 | `1a9e0952eba955fbce044e3cc930e608229986f7ea5ba6570bcdc13173b408e8` |
-| SDK 知识 | `fa023dbe3c06b524bd102de0a0a73fb7c9d5ef5fe22f523896fd7ffb439e152c` |
+| 回答运行时 | `daq-062f0a7ae744` |
+| 主知识 | `11fc32a02a1692d44dde1a3753a0406e1b6b33c2148ea1ea192b7b211d00c5b9` |
+| SDK 知识 | `2a43d71308f278a919edd422c65276831caf5160a4fd28725a00dbd2286b14e5` |
 | 共享源码快照 | `6bad94591dc4c40c29ad054b526c0ec526478607` |
-| 回答容器镜像 | `sha256:c282bb1e71fa0ed8c0953b917f233599f82a584b68f309d2f286eb637b6a81ee` |
+| 回答容器镜像 | `sha256:5ed10ead83ee10ad5ef668fad8ee6aa7d28e37bb8d217fd22daa84d6d5db5bf7` |
 
 生产实际加载 **388 条记录、318 个章节、329 个逐段证据单元**，其中新增 310 段受审资料记载；保留原 24 条 SDK 用法、17 条版本说明。系列节点用于原指南范围，不额外计作物理产品；这些库存不等于全部产品或全部问题已覆盖。未审候选章节仍不具权威性。
 
@@ -282,7 +282,7 @@ flowchart LR
 - EvidencePolicy 补证最多 2 次；结构协议、URL、附件和截断另有各自的有界控制，不能说全请求总共只重试两次。终稿缺失或协议失败不能放行自由文本。
 - 工具结果模型可见字符默认上限 6000，旧结果全文裁剪默认关闭。账本观察的完整结果与模型最终看见的结果可能不同；长证据问题要检查实际投影和截取，不能假设无损。
 - DAQ Provider 适配器会丢弃不能合法续传的无签名 thinking 块，保留传输诊断；不会把私有思考改写为可见正文。没有自动换模型的业务兜底路径。
-- 候选 PrefixSession 在每次 Loop 执行内固定 wire 工具目录和 append-only transcript；收尾只改变逻辑可用工具集合，额外工具由本地代理硬拦。`anthropic_prefix` 记录策略、声明/可用工具数、范围变化和被拦调用数，不记录思考或签名正文；本地前缀拒绝是协议失败，真实 Provider 400 分类不改。
+- PrefixSession 在每次 Loop 执行内固定 wire 工具目录和 append-only transcript；收尾只改变逻辑可用工具集合，额外工具由本地代理硬拦。`anthropic_prefix` 记录策略、声明/可用工具数、范围变化和被拦调用数，不记录思考或签名正文；本地前缀拒绝是协议失败，真实 Provider 400 分类不改。
 
 参考 [共享 Loop](src/agent/loop/runtime.py)、[Provider 适配器](daq_fae/provider_adapter.py)、[共享传输](src/agent/anthropic_transport.py)。
 
@@ -504,6 +504,7 @@ flowchart LR
 | 辅助输入事实及系列/前提图 | [supporting_evidence.py](daq_fae/supporting_evidence.py)、[entity_families.py](daq_fae/knowledge/entity_families.py) |
 | 领域工具及需求匹配 | [daq_fae/domain_tools.py](daq_fae/domain_tools.py) `DaqToolBox` |
 | 原文章节导航及复合身份 | [document_navigation.py](daq_fae/knowledge/document_navigation.py)、[identity_selectors.py](daq_fae/knowledge/identity_selectors.py)、[section_search.py](daq_fae/knowledge/section_search.py) |
+| DAQ 前缀与阶段协议 | [thinking_prefix.py](daq_fae/thinking_prefix.py) `DaqLoopRuntime` / request-local PrefixSession |
 | 共享循环和终稿协议 | [runtime.py](src/agent/loop/runtime.py)、[answer_contract.py](src/agent/loop/answer_contract.py) |
 | 主知识/角色加载 | [reviewed_view.py](daq_fae/knowledge/reviewed_view.py)、[entitlements.py](daq_fae/knowledge/entitlements.py) |
 | SDK 和发布绑定 | [sdk_catalog.py](daq_fae/knowledge/sdk_catalog.py)、[sdk_release.py](daq_fae/knowledge/sdk_release.py) |
@@ -518,4 +519,4 @@ flowchart LR
 
 真实案例入口：[2026-10-23 线上反馈根因调查](docs/reviews/2026-10-23-daq-real-feedback-root-cause.md)。5 个会话、8 轮原始问答显示知识发布缺口、目录目标错误排除变体、集合交付漏检及组合定量目标拆分不足；另保留 63mm 主控和四目精确组合的来源缺口。该调查保留原失败与版本身份；后续实施、Dev 真实答案及独立复审见[修复记录](docs/reviews/2026-10-23-daq-real-feedback-repair.md)，状态不得与生产部署混淆。
 
-版本沿革：v1.0 形成完整执行地图；v1.1 校正历史 trace 采集边界；v2.0 实施真实反馈驱动的目录集合、辅助输入、系列/组合前提、单次 schema 纠正、可执行目标优先及按语义主题拆章，并在隔离 Dev 回放；v2.1 经独立生产审批、实签和默认加载后完成单 DAQ 发布；v2.2 发布受审资料记载参考；v2.3 发布章节导航、交付目标绑定、复合身份归一及完整交付机制；v2.4 收紧资料任务完成范围与交付比例，并以实际兼容验收负例保留硬证据边界。未添加原问特例，未扩大共享运行时或相机操作范围。
+版本沿革：v1.0 形成完整执行地图；v1.1 校正历史 trace 采集边界；v2.0 实施真实反馈驱动的目录集合、辅助输入、系列/组合前提、单次 schema 纠正、可执行目标优先及按语义主题拆章，并在隔离 Dev 回放；v2.1 经独立生产审批、实签和默认加载后完成单 DAQ 发布；v2.2 发布受审资料记载参考；v2.3 发布章节导航、交付目标绑定、复合身份归一及完整交付机制；v2.4 收紧资料任务完成范围与交付比例，并以实际兼容验收负例保留硬证据边界；v2.5 在 DAQ 应用层增加固定 wire 目录、append-only 历史和阶段执行硬门，兼容 preserved thinking。未添加原问特例，未扩大共享运行时或相机操作范围。
