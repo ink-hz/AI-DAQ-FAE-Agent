@@ -156,7 +156,13 @@ class OwnedDocker:
     def inspect(self, target):
         result = self.run(['container', 'inspect', target])
         if result.returncode:
-            if result.stderr.strip() == 'Error: No such container: ' + target:
+            # Explicit supported CLI protocols, including the first native
+            # daemon's rc=1 / [] result. A nonzero code alone proves nothing.
+            absent_errors = {prefix + target + ending
+                for prefix in ('Error: No such container: ', 'Error response from daemon: No such container: ')
+                for ending in ('', '\n')}
+            if (result.returncode == 1 and result.stdout.strip() in {'', '[]'}
+                    and result.stderr in absent_errors):
                 return None
             raise ProbeError('inspect_unknown')
         value = json.loads(result.stdout)
@@ -1426,6 +1432,11 @@ def runtime_main(args):
     except BaseException as exc:
         target = Path('/tmp/app-failure.json') if args.phase in {'app', 'scripted-app'} else Path('/probe-output') / (os.environ['DAQ_NATIVE_PROBE_PHASE'] + '.json')
         failure = {'status': 'FAIL', 'category': error_category(exc), 'exception_type': type(exc).__name__}
+        if (isinstance(exc, ModuleNotFoundError) and isinstance(exc.name, str)
+                and len(exc.name) <= 160
+                and re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]*(?:\.[A-Za-z_][A-Za-z_0-9]*)*', exc.name)):
+            # Private receipt only: no exception message, paths or traceback.
+            failure['missing_module'] = exc.name
         atomic_json(target, failure)
         if args.phase in {'app', 'scripted-app'}:
             atomic_json(Path('/app/data/attachments') / ('.probe-' + os.environ['DAQ_NATIVE_PROBE_PHASE'] + '-failure.json'), failure)

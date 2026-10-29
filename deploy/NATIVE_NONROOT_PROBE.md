@@ -71,7 +71,13 @@ use the old root/default-capability baseline and are labelled separately.
 reconciled only by exact unique name, owner/role labels and image ID. A current
 not-found response cannot prove that an in-flight create will never materialize:
 the lease remains blocked. SIGTERM/SIGHUP kill and reap the separately sessioned
-Docker client group, then reconcile owned objects; SIGKILL cannot run cleanup. Cleanup
+Docker client group, then reconcile owned objects; SIGKILL cannot run cleanup. Inspect absence accepts only return code 1, empty stdout or `[]` (surrounding
+whitespace permitted), and exactly one supported full-target error line:
+`Error: No such container: <target>` or
+`Error response from daemon: No such container: <target>` (optional final newline).
+Other codes, nonempty JSON, wrong targets or extra text remain unknown. This
+protocol adaptation does not release an unknown create merely because it is
+currently absent. Cleanup
 requires actual stopped state and subsequent full-ID and name absence. A failure
 leaves a blocked journal and unreleased `/run/daq-native-probe/active.json` lease;
 starting another workroot is refused. Cleanup walks all journaled objects in
@@ -117,7 +123,10 @@ Never delete or hand-edit a lease/journal to bypass this procedure.
 `report.json` has fixed safe result categories. Private `output/` retains synthetic
 fixtures, input hashes, issued synthetic session credentials, intermediate evidence
 and task receipts. Keep the workroot private; do not attach the whole directory to
-a public issue. Provider/identity substitutions are recorded before each app starts. Unique phase
+a public issue. Runtime failure receipts may include `missing_module` only for a
+`ModuleNotFoundError.name` matching ASCII dotted identifiers of at most 160
+characters. This stays in private evidence; exception messages and raw traceback
+are never copied. Provider/identity substitutions are recorded before each app starts. Unique phase
 files preserve worker evidence and each app's warnings, including shutdown
 warnings copied before and after every stop. Warnings block success; ordinary
 application logs are disabled. Bounded process evidence records PID/starttime,
@@ -184,5 +193,8 @@ Tests use
 real temporary files and crypto/store modules, include an actual loopback identity
 HTTP fixture, and include a separate **development ASGI** scripted-provider loop
 check. None of those are production-mode native, real-PG, OCR-process, rollback,
-browser or production acceptance. Native V01–V11 remain NOT_EXECUTED until run on
-the reviewed native host. Real model calls and input/output model tokens are zero.
+browser or production acceptance. The parent's first native batch at `b40a6e8` failed V01 before migration because
+immutable image directories were unreadable by nonroot; V02–V11 were not executed.
+That failure remains preserved. The inspect-protocol fix is local engineering
+only; original-batch cleanup and any later native run are separate parent actions.
+Real model calls and input/output model tokens are zero.

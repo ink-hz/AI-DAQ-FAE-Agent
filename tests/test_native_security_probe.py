@@ -1007,3 +1007,62 @@ def test_continuous_journal_failure_never_skips_known_cleanup(tmp_path, monkeypa
         assert bad['cleanup_error'] == 'unresolved_create'
     assert (tmp_path / 'journal.json').read_bytes() == durable_before
     assert json.loads(durable_before)['state'] != 'released'
+
+
+@pytest.mark.parametrize('prefix', ['Error: No such container: ', 'Error response from daemon: No such container: '])
+@pytest.mark.parametrize('stdout', ['', '[]\n'])
+def test_inspect_supported_absence_protocol_is_exact(tmp_path, prefix, stdout):
+    m = module(); target = 'a' * 64
+    manager = m.OwnedDocker(tmp_path, lambda args, **kwargs: subprocess.CompletedProcess(args, 1, stdout, prefix + target + '\n'))
+    assert manager.inspect(target) is None
+
+
+@pytest.mark.parametrize('rc,stdout,stderr', [
+    (2, '[]\n', 'Error response from daemon: No such container: TARGET\n'),
+    (125, '', 'Error: No such container: TARGET'),
+    (1, '[{}]', 'Error response from daemon: No such container: TARGET'),
+    (1, '{}', 'Error response from daemon: No such container: TARGET'),
+    (1, '[]\nextra', 'Error response from daemon: No such container: TARGET'),
+    (1, 'null', 'Error response from daemon: No such container: TARGET'),
+    (1, '[]', 'Error response from daemon: No such container: WRONG'),
+    (1, '[]', 'Error response from daemon: No such container: TARGET-extra'),
+    (1, '[]', 'Error response from daemon: No such container: TARGET\nextra'),
+    (1, '', 'unrecognized daemon error TARGET'),
+])
+def test_inspect_absence_rejects_ambiguous_protocol(tmp_path, rc, stdout, stderr):
+    m = module(); target = 'a' * 64
+    manager = m.OwnedDocker(tmp_path, lambda args, **kwargs: subprocess.CompletedProcess(
+        args, rc, stdout, stderr.replace('TARGET', target)))
+    with pytest.raises(m.ProbeError, match='inspect_unknown'): manager.inspect(target)
+
+
+@pytest.mark.parametrize('known', [True, False])
+def test_modern_absence_reconciles_known_only(tmp_path, known):
+    m = module(); daemon = Daemon(); manager = m.OwnedDocker(tmp_path, daemon)
+    item = add_known_running(m, manager, daemon, 'app', 'c')
+    if not known: item['id'] = None; manager.save()
+    manager.run = lambda args, **kwargs: subprocess.CompletedProcess(args, 1, '[]\n',
+        'Error response from daemon: No such container: ' + args[-1] + '\n')
+    if known:
+        manager.cleanup(); assert manager.data['state'] == 'released'
+    else:
+        with pytest.raises(m.ProbeError, match='unresolved_create'): manager.cleanup()
+        assert manager.data['state'] == 'blocked'
+
+
+@pytest.mark.parametrize('missing', ['src.agent.session', 'psycopg', None, '../secret', 'module\nsecret', 'a' * 161])
+def test_runtime_missing_module_evidence_is_bounded_and_private(tmp_path, monkeypatch, capsys, missing):
+    m = module(); actual_path = Path
+    from types import SimpleNamespace
+    monkeypatch.setattr(m, 'runtime_isolation_check', lambda: None)
+    monkeypatch.setattr(m, 'Path', lambda value: tmp_path if value == '/probe-output' else actual_path(value))
+    monkeypatch.setenv('DAQ_NATIVE_PROBE_PHASE', 'migrate-1')
+    def missing_import(): raise ModuleNotFoundError('private-token raw message must never appear', name=missing)
+    monkeypatch.setattr(m, 'runtime_migrate', missing_import)
+    assert m.runtime_main(SimpleNamespace(phase='migrate')) == 1
+    raw = (tmp_path / 'migrate-1.json').read_text(); receipt = json.loads(raw)
+    assert receipt['exception_type'] == 'ModuleNotFoundError' and receipt['status'] == 'FAIL'
+    if missing in {'src.agent.session', 'psycopg'}: assert receipt['missing_module'] == missing
+    else: assert 'missing_module' not in receipt
+    assert 'private-token' not in raw and 'raw message' not in raw and 'traceback' not in raw
+    assert capsys.readouterr().out == ''
