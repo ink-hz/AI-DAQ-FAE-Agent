@@ -29,11 +29,13 @@ def setup(tmp_path, monkeypatch):
         monkeypatch.setattr(assets, '_trusted_parent', lambda st: True)
         monkeypatch.setattr(assets.os, 'fchown', lambda *args: None)
         monkeypatch.setattr(assets, '_owner_mode', lambda st, uid, gid, mode: stat.S_IMODE(st.st_mode) == mode)
+        monkeypatch.setattr(assets, '_check_compose_binary', lambda runtime: {'synthetic_boundary': True})
     paths = {}
     expected = {}
     for name in ['main', 'sdk', 'secrets', 'attachments']:
-        p = tmp_path / name
-        p.mkdir()
+        relative = {'main': 'knowledge/reviewed-thinking-prefix-20261028', 'sdk': 'knowledge/sdk-thinking-prefix-20261028'}.get(name, name)
+        p = tmp_path / relative
+        p.mkdir(parents=True)
         paths[name] = str(p)
         files = SECRETS if name == 'secrets' else ['nested/file']
         expected[name] = {}
@@ -43,7 +45,7 @@ def setup(tmp_path, monkeypatch):
             file.parent.mkdir(parents=True, exist_ok=True)
             file.write_bytes(content)
             expected[name][f] = identity(content)
-    trace = tmp_path / 'trace'
+    trace = tmp_path / 'daq_traces.jsonl'
     trace.write_bytes(b'old trace\n')
     paths['trace'] = str(trace)
     expected['trace'] = {'daq_traces.jsonl': identity(b'old trace\n')}
@@ -52,12 +54,19 @@ def setup(tmp_path, monkeypatch):
 
 
 def add_runtime_evidence(root, spec):
-    config = root / 'old-compose.yml'
-    config.write_text('services: {}\n')
+    config = root / 'old-compose.json'
+    override = root / 'override.json'
+    runtime = spec['runtime']
+    service = {'image': 'old', 'container_name': 'ai-daq-fae-backend', 'restart': 'unless-stopped', 'env_file': runtime['env_file'], 'volumes': [str(root) + ':/app/data', runtime['old_secrets_dir'] + ':/run/daq-secrets:ro'], 'ports': ['127.0.0.1:8081:8081'], 'networks': {'camera-db': {}, 'platform-edge': {'ipv4_address': '172.31.0.9'}}, 'healthcheck': {'test': ['CMD', 'curl', '-fsS', 'http://127.0.0.1:8081/health'], 'interval': '15s', 'timeout': '5s', 'retries': 12}}
+    config.write_text(json.dumps({'services': {'ai-daq-fae-backend': service}, 'networks': {'camera-db': {'external': True, 'name': 'deploy_default'}, 'platform-edge': {'external': True, 'name': 'orbbec-agent-platform-edge'}}}))
+    override.write_text(json.dumps({'services': {'ai-daq-fae-backend': {'environment': {'SYNTHETIC_SETTING': 'present'}, 'mem_limit': '512m', 'logging': {'driver': 'json-file', 'options': {'max-size': '10m'}}}}}))
     labels = root / 'labels.json'
-    labels.write_text(json.dumps({'com.docker.compose.project': 'deploy', 'com.docker.compose.service': 'ai-daq-fae-backend', 'com.docker.compose.project.config_files': str(config)}))
+    labels.write_text(json.dumps({'com.docker.compose.project': 'deploy', 'com.docker.compose.service': 'ai-daq-fae-backend', 'com.docker.compose.project.config_files': str(config) + ',' + str(override)}))
     labels.chmod(0o600)
-    spec['runtime'].update({'labels_file': str(labels), 'config_files': {str(config): hashlib.sha256(config.read_bytes()).hexdigest()}, 'config_identity': 'sha256:' + hashlib.sha256(labels.read_bytes()).hexdigest()})
+    ctx = root / 'interpolation.env'
+    ctx.write_text('')
+    ctx.chmod(0o600)
+    runtime.update({'old_data_dir': str(root), 'labels_file': str(labels), 'config_files': {str(config): hashlib.sha256(config.read_bytes()).hexdigest(), str(override): hashlib.sha256(override.read_bytes()).hexdigest()}, 'config_identity': 'sha256:' + hashlib.sha256(labels.read_bytes()).hexdigest(), 'compose_binary': '/opt/homebrew/bin/docker-compose', 'compose_sha256': 'ignored-under-test', 'interpolation_file': str(ctx), 'interpolation_sha256': hashlib.sha256(ctx.read_bytes()).hexdigest()})
 
 
 def test_staging_exact_scope_and_private_metadata(setup):
@@ -77,13 +86,13 @@ def test_staging_exact_scope_and_private_metadata(setup):
 def test_refuses_unsafe_source_files(setup, kind):
     assert assets is not None, 'security asset implementation missing'
     root, spec = setup
-    path = root / 'main/nested/file'
+    path = root / 'knowledge/reviewed-thinking-prefix-20261028/nested/file'
     if kind == 'hardlink':
         os.link(path, root / 'hard')
     else:
         path.unlink()
         if kind == 'symlink':
-            path.symlink_to(root / 'sdk/nested/file')
+            path.symlink_to(root / 'knowledge/sdk-thinking-prefix-20261028/nested/file')
         else:
             os.mkfifo(path)
     with pytest.raises(assets.AssetError):
@@ -97,7 +106,7 @@ def test_refuses_target_collision_and_hash_drift(setup):
     (root / 'out').mkdir()
     with pytest.raises(assets.AssetError):
         assets.stage_ro(spec, root / 'out')
-    (root / 'main/nested/file').write_bytes(b'modified')
+    (root / 'knowledge/reviewed-thinking-prefix-20261028/nested/file').write_bytes(b'modified')
     with pytest.raises(assets.AssetError):
         assets.stage_ro(spec, root / 'out2')
 
@@ -123,7 +132,7 @@ def test_source_mutation_after_copy_refused(setup, monkeypatch):
         nonlocal changed
         result = original(*args, **kwargs)
         if not changed:
-            (root / 'main/nested/file').write_bytes(b'changed after copy')
+            (root / 'knowledge/reviewed-thinking-prefix-20261028/nested/file').write_bytes(b'changed after copy')
             changed = True
         return result
     monkeypatch.setattr(assets, '_copy_file', copy_then_mutate)
@@ -157,6 +166,9 @@ def test_render_pins_image_and_rollback_uses_new_data(setup):
     b = rollback['services']['ai-daq-fae-backend']
     assert a['image'] == b['image'] == assets.IMAGE
     assert a['pull_policy'] == b['pull_policy'] == 'never'
+    assert a['environment']['SYNTHETIC_SETTING'] == b['environment']['SYNTHETIC_SETTING'] == 'present'
+    assert a['mem_limit'] == b['mem_limit'] == '536870912'
+    assert a['logging'] == b['logging']
     assert a['user'] == '21081:21081' and b['user'] == '0:0'
     assert 'cap_drop' not in b and 'read_only' not in b
     mounts_a = {v['target']: v['source'] for v in a['volumes']}
@@ -189,8 +201,8 @@ def test_trace_mutation_after_copy_refused(setup, monkeypatch):
     original = assets._copy_file
     def copy_then_mutate(*args, **kwargs):
         result = original(*args, **kwargs)
-        if args[1] == 'trace':
-            (root / 'trace').write_bytes(b'new trace')
+        if args[1] == 'daq_traces.jsonl':
+            (root / 'daq_traces.jsonl').write_bytes(b'new trace')
         return result
     monkeypatch.setattr(assets, '_copy_file', copy_then_mutate)
     evidence = {'container_id': 'a' * 64, 'image_id': assets.IMAGE, 'stopped_at': '2026-10-29T00:00:00Z', 'quiescence_evidence': 'sha256:' + 'b' * 64}
@@ -356,15 +368,15 @@ def test_target_cannot_be_created_within_source_tree(setup):
     assert assets is not None
     root, spec = setup
     with pytest.raises(assets.AssetError):
-        assets.stage_ro(spec, root / 'main/new-target')
-    assert not (root / 'main/new-target').exists()
+        assets.stage_ro(spec, root / 'knowledge/reviewed-thinking-prefix-20261028/new-target')
+    assert not (root / 'knowledge/reviewed-thinking-prefix-20261028/new-target').exists()
 
 
 def test_symlink_in_source_root_path_rejected(setup):
     assert assets is not None
     root, spec = setup
     alias = root / 'alias'
-    alias.symlink_to(root / 'main', target_is_directory=True)
+    alias.symlink_to(root / 'knowledge/reviewed-thinking-prefix-20261028', target_is_directory=True)
     spec['paths']['main'] = str(alias)
     with pytest.raises(assets.AssetError):
         assets.stage_ro(spec, root / 'out')
@@ -379,7 +391,7 @@ def test_source_mode_change_after_copy_refused(setup, monkeypatch):
         nonlocal changed
         result = original(*args, **kwargs)
         if not changed:
-            (root / 'main/nested/file').chmod(0o600)
+            (root / 'knowledge/reviewed-thinking-prefix-20261028/nested/file').chmod(0o600)
             changed = True
         return result
     monkeypatch.setattr(assets, '_copy_file', copy_then_chmod)
@@ -397,7 +409,7 @@ def test_source_directory_mode_change_after_copy_refused(setup, monkeypatch):
         result = original(*args, **kwargs)
         count += 1
         if count == 2:
-            (root / 'main/nested').chmod(0o700)
+            (root / 'knowledge/reviewed-thinking-prefix-20261028/nested').chmod(0o700)
         return result
     monkeypatch.setattr(assets, '_copy_file', copy_then_chmod)
     with pytest.raises(assets.AssetError):
@@ -421,7 +433,7 @@ def test_path_rejects_compose_interpolation_syntax():
 def test_directory_depth_is_bounded(setup, monkeypatch):
     assert assets is not None
     root, spec = setup
-    deep = root / 'main/nested/deeper'
+    deep = root / 'knowledge/reviewed-thinking-prefix-20261028/nested/deeper'
     deep.mkdir()
     (deep / 'file').write_bytes(b'x')
     spec['expected']['main']['nested/deeper/file'] = identity(b'x')
@@ -433,7 +445,7 @@ def test_directory_depth_is_bounded(setup, monkeypatch):
 def test_failure_receipt_explains_identity_mismatch_without_contents(setup):
     assert assets is not None
     root, spec = setup
-    (root / 'main/nested/file').write_bytes(b'synthetic confidential content')
+    (root / 'knowledge/reviewed-thinking-prefix-20261028/nested/file').write_bytes(b'X' * len((root / 'knowledge/reviewed-thinking-prefix-20261028/nested/file').read_bytes()))
     with pytest.raises(assets.AssetError):
         assets.stage_ro(spec, root / 'out')
     receipt = (root / 'out/failure.json').read_text()
