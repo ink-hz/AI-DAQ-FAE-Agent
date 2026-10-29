@@ -248,8 +248,10 @@ class OwnedDocker:
             self.data['recovery_evidence'] = {'prior_boot_id': self.data['boot_id'],
                 'observed_boot_id': boot_identity(), 'basis': 'kernel_boot_changed'}
             self.save()
-        try:
-            for item in reversed(self.data['containers']):
+        errors = []
+        self.data['cleanup_errors'] = errors
+        for item in reversed(self.data['containers']):
+            try:
                 obj = self.inspect(item['name'])
                 if obj is None:
                     if item['id'] is None and not changed_boot:
@@ -258,7 +260,7 @@ class OwnedDocker:
                     # recorded full ID, or that ID also is absent.
                     if item['id'] and self.inspect(item['id']) is not None:
                         raise ProbeError('ownership_mismatch')
-                    item['state'] = 'absent'; self.save(); continue
+                    item['state'] = 'absent'; item['cleanup_status'] = 'absent'; item.pop('cleanup_error', None); self.save(); continue
                 self.owned(item, obj)
                 cid = obj['Id']
                 item['id'] = cid; self.save()
@@ -273,11 +275,24 @@ class OwnedDocker:
                 self.run(['rm', cid])
                 if self.inspect(cid) is not None or self.inspect(item['name']) is not None:
                     raise ProbeError('absence_unconfirmed')
-                item['state'] = 'absent'; self.save()
-            self.data['state'] = 'released'; self.save()
-        except BaseException:
-            self.data['state'] = 'blocked'; self.save()
-            raise ProbeError('cleanup_' + error_category(sys.exc_info()[1])) from None
+                item['state'] = 'absent'; item['cleanup_status'] = 'absent'; item.pop('cleanup_error', None); self.save()
+            except BaseException as exc:
+                # One ambiguous object blocks release, not independently safe
+                # cleanup of earlier owned writers/PG. Never widen ownership.
+                item['cleanup_status'] = 'blocked'
+                item['cleanup_error'] = error_category(exc)
+                errors.append({'name': item['name'], 'category': item['cleanup_error']})
+                self.data['state'] = 'blocked'
+                try:
+                    self.save()
+                except BaseException:
+                    # Continue stopping other known writers even if persistence
+                    # itself failed. The unreleased global lease remains intact.
+                    pass
+        self.data['state'] = 'blocked' if errors else 'released'
+        self.save()
+        if errors:
+            raise ProbeError('cleanup_' + errors[0]['category'])
 
 
 def security_flags(pg_id):
@@ -1551,6 +1566,31 @@ class NativeController:
             audit_candidate(self.manager.inspect(self.app), self.pg)
         return self.worker('startup', root_mode=root_mode, share_pid=True)
 
+    def start_initial_app(self):
+        startup = self.start_app()
+        # startup worker only observes health/PG/proc. Capture maintenance
+        # attribution BEFORE any worker that constructs AttachmentStore.
+        self.current_gate = 'V08'
+        self.verify_workroot()
+        seed_raw, _ = asset_helpers()._read_regular(str(self.root / 'output/seed.json'), 65536)
+        seed = json.loads(seed_raw)
+        snapshot = asset_helpers()._snapshot_target_tree(str(self.attachments))
+        interrupted = sorted(name for name in snapshot
+                             if name.split('/', 1)[0].startswith(('.partial-', '.batch-')))
+        expired_present = seed['expired_id'] + '/' in snapshot
+        retained = {seed[key]: seed[key] + '/original.bin' in snapshot
+                    for key in ('attachment_id', 'disposable_id')}
+        passed = not interrupted and not expired_present and all(retained.values())
+        evidence = {'status': 'PASS' if passed else 'FAIL',
+                    'phase': 'after_initial_app_before_consumers', 'interrupted': interrupted,
+                    'expired_present': expired_present, 'retained_originals': retained,
+                    'filesystem_snapshot': snapshot}
+        atomic_json(self.root / 'startup-maintenance.json', evidence)
+        self.report['startup_maintenance'] = evidence; self.save()
+        require(passed, 'startup_maintenance_failed')
+        self.current_gate = 'V01'
+        return startup
+
     def stop_app(self):
         self.capture_app_evidence(require_clean=True)
         self.manager.stop(self.app)
@@ -1622,7 +1662,7 @@ class NativeController:
         # Seed workload has stopped; no app exists. Preserve old root snapshot.
         self.attachments.rmdir()
         copied = copy_current(self.root / 'old-attachments', self.attachments)
-        startup = self.start_app()
+        startup = self.start_initial_app()
         self.complete('V01', ['exact_local_image', 'production_signed_main_sdk', 'real_pg_migrations_marker',
                               'production_auth_no_sqlite'], startup)
         selected = set(self.args.gate or GATES)
@@ -1649,17 +1689,13 @@ class NativeController:
             self.complete('V07', ['six_real_multipart_formats', 'manifest_original_chunks', 'normalized_ocr_text'], uploads)
             self.complete('V02', ['actual_main_spawn_tesseract_proc'], uploads['identity'])
             self.current_gate = 'V08'
-            require(not list(self.attachments.glob('.partial-*')) and not list(self.attachments.glob('.batch-*')),
-                    'interrupted_cleanup_failed')
-            seed = json.loads((self.root / 'output/seed.json').read_text())
-            require(not (self.attachments / seed['expired_id']).exists(), 'expired_gc_failed')
-            require((self.attachments / seed['attachment_id'] / 'original.bin').is_file(), 'unexpired_gc_removed')
+            require(self.report['startup_maintenance']['status'] == 'PASS', 'startup_maintenance_failed')
             migrated = self.worker('migrated')
             self.report['optional_capabilities'] = {'archive_protection': {
                 'status': 'NOT_EXECUTED', 'applicability': 'disabled_by_source_configuration'}}
             self.complete('V08', ['owner_other_http_read_delete', 'nonempty_migration_actual_store_tools',
                                   'startup_partial_batch_cleanup', 'real_startup_expired_gc', 'unexpired_preserved'],
-                          {'copied_files': copied, 'consumers': migrated})
+                          {'copied_files': copied, 'consumers': migrated, 'startup': self.report['startup_maintenance']})
         if 'V09' in selected:
             self.current_gate = 'V09'
             first = self.worker('trace-before'); prefix = self.trace.read_bytes()

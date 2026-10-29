@@ -698,6 +698,7 @@ def run(args, timeout=30):
         m.run_process([sys.executable,'-c','import os,pathlib,time; pathlib.Path('+repr(str(root/'client.pid'))+').write_text(str(os.getpid())); time.sleep(120)'],{},120)
     return original(args, timeout)
 manager=m.OwnedDocker(root,run)
+t.add_known_running(m,manager,d,'postgres','b'); t.add_known_running(m,manager,d,'app','c')
 try:
     with m.controlled_signals():
         cid=manager.create('signal','sha256:'+'1'*64,[],['python','-V'])
@@ -718,8 +719,10 @@ finally:
         child = int(pidfile.read_text()); os.kill(proc.pid, getattr(signal, termination))
         proc.communicate(timeout=5)
         with pytest.raises(ProcessLookupError): os.kill(child, 0)
-        state = json.loads((tmp_path / 'journal.json').read_text())['state']
-        assert state == ('blocked' if stage == 'create' else 'released')
+        journal = json.loads((tmp_path / 'journal.json').read_text())
+        assert journal['state'] == ('blocked' if stage == 'create' else 'released')
+        assert all(item['state'] == 'absent' for item in journal['containers'][:2])
+        if stage == 'create': assert journal['cleanup_errors'][0]['category'] == 'unresolved_create'
     finally:
         if proc.poll() is None: proc.kill(); proc.communicate(timeout=5)
 
@@ -850,3 +853,110 @@ def test_cleanup_retains_final_phase_warning_after_owned_removal(tmp_path):
     controller.app = 'a' * 64; controller.app_phase = 'scripted-9'
     controller.capture_app_evidence(removed=True)
     assert controller.report['app_summaries']['scripted-9']['app-warnings.json']['warning_count'] == 2
+
+
+def add_known_running(m, manager, daemon, role, digit):
+    cid = digit * 64; name = 'daq-probe-' + manager.data['attempt'] + '-' + role
+    item = {'role': role, 'name': name, 'image': 'sha256:' + '1' * 64, 'id': cid, 'state': 'started'}
+    obj = {'Id': cid, 'Name': '/' + name, 'Image': item['image'], 'State': {'Running': True},
+           'Config': {'Labels': {m.OWNER_LABEL: manager.data['attempt'], m.OWNER_LABEL + '.role': role}}}
+    daemon.objects[cid] = daemon.objects[name] = obj
+    manager.data['containers'].append(item); manager.save()
+    return item
+
+
+@pytest.mark.parametrize('failure', ['unknown', 'inspect', 'ownership', 'stop'])
+def test_cleanup_aggregates_failure_and_continues_known_objects(tmp_path, failure):
+    m = module(); daemon = Daemon(); base = daemon.__call__
+    manager = m.OwnedDocker(tmp_path, daemon)
+    pg = add_known_running(m, manager, daemon, 'postgres', 'b')
+    app = add_known_running(m, manager, daemon, 'app', 'c')
+    bad = add_known_running(m, manager, daemon, 'worker', 'd')
+    if failure == 'unknown':
+        daemon.objects.pop(bad['name']); daemon.objects.pop(bad['id']); bad['id'] = None
+    if failure == 'ownership': daemon.objects[bad['id']]['Config']['Labels'] = {}
+    def run(args, timeout=30):
+        if failure == 'inspect' and args[:2] == ['container', 'inspect'] and args[-1] == bad['name']:
+            raise subprocess.TimeoutExpired('docker', timeout)
+        if failure == 'stop' and args[0] == 'stop' and args[-1] == bad['id']:
+            raise subprocess.TimeoutExpired('docker', timeout)
+        return base(args, timeout)
+    manager.run = run
+    with pytest.raises(m.ProbeError): manager.cleanup()
+    journal = json.loads((tmp_path / 'journal.json').read_text())
+    assert journal['state'] == 'blocked'
+    assert pg['state'] == app['state'] == 'absent'
+    assert pg['id'] not in daemon.objects and app['id'] not in daemon.objects
+    assert bad['cleanup_status'] == 'blocked' and bad['cleanup_error']
+    assert journal['cleanup_errors'] == [{'name': bad['name'], 'category': bad['cleanup_error']}]
+    assert not any(call[0] == 'rm' and call[-1] == bad['id'] for call in daemon.calls)
+
+
+@pytest.mark.parametrize('cleaned', [False, True])
+def test_initial_startup_snapshot_precedes_side_effecting_consumer(tmp_path, monkeypatch, cleaned):
+    m = module(); fake_root_metadata(monkeypatch, m)
+    from types import SimpleNamespace
+    from src.attachments.models import AttachmentLimits
+    from src.attachments.store import AttachmentStore
+    attachments = tmp_path / 'attachments'; attachments.mkdir()
+    (attachments / '.partial-synthetic').mkdir(); (attachments / '.batch-synthetic').mkdir()
+    for aid in ('retained', 'disposable', 'expired'):
+        (attachments / aid).mkdir(); (attachments / aid / 'original.bin').write_bytes(b'old fixture')
+    output = tmp_path / 'output'; output.mkdir()
+    (output / 'seed.json').write_text(json.dumps({'attachment_id': 'retained', 'disposable_id': 'disposable', 'expired_id': 'expired'}))
+    manager = SimpleNamespace(data={'attempt': 'a' * 32})
+    controller = m.NativeController(SimpleNamespace(workroot=str(tmp_path), source_image=m.SOURCE_IMAGE,
+                                   pg_image='sha256:' + '1' * 64, gate=[]), manager)
+    def startup():
+        # Only the simulated APP is allowed to perform this prerequisite work.
+        if cleaned:
+            (attachments / '.partial-synthetic').rmdir(); (attachments / '.batch-synthetic').rmdir()
+            (attachments / 'expired' / 'original.bin').unlink(); (attachments / 'expired').rmdir()
+        return {'app_ready': True}
+    controller.start_app = startup
+    if cleaned:
+        assert controller.start_initial_app() == {'app_ready': True}
+    else:
+        with pytest.raises(m.ProbeError, match='startup_maintenance_failed'): controller.start_initial_app()
+        assert (attachments / '.partial-synthetic').is_dir() and (attachments / '.batch-synthetic').is_dir()
+    evidence = json.loads((tmp_path / 'startup-maintenance.json').read_text())
+    assert evidence['status'] == ('PASS' if cleaned else 'FAIL')
+    assert controller.report['startup_maintenance'] == evidence
+    # The real later consumer would silently remove both interrupted paths.
+    AttachmentStore(attachments, AttachmentLimits())
+    assert not (attachments / '.partial-synthetic').exists() and not (attachments / '.batch-synthetic').exists()
+    assert json.loads((tmp_path / 'startup-maintenance.json').read_text()) == evidence
+
+
+def test_startup_readiness_worker_has_no_attachment_maintenance(tmp_path, monkeypatch):
+    m = module()
+    from types import SimpleNamespace
+    import httpx
+    import psycopg
+    from daq_fae.knowledge import code_identity
+    from src.attachments.store import AttachmentStore
+    (tmp_path / '.partial-synthetic').mkdir(); (tmp_path / '.batch-synthetic').mkdir()
+    (tmp_path / 'warnings.json').write_text('{"warning_count":0}')
+    (tmp_path / 'source.json').write_text('{"revision":"synthetic"}')
+    def forbidden(*args, **kwargs): raise AssertionError('readiness must not construct a maintenance consumer')
+    monkeypatch.setattr(AttachmentStore, '__init__', forbidden)
+    monkeypatch.setattr(m, 'runtime_store', forbidden)
+    monkeypatch.setattr(m, 'Path', lambda path: {
+        '/app/data': tmp_path, '/proc/1/root/tmp/app-warnings.json': tmp_path / 'warnings.json',
+        '/app/upstream-source.json': tmp_path / 'source.json'}[path])
+    health = {'status': 'ok', 'environment': 'production', 'runtime_release': m.RUNTIME_RELEASE,
+              'provider_mode': 'anthropic', 'platform_identity_enabled': True, 'platform_task_enabled': False,
+              'attachment_archive_enabled': False, 'session_persistence': 'postgres_daq_authenticated',
+              'local_dev_only': False, 'knowledge_release': 'synthetic', 'sdk_knowledge_release': 'synthetic',
+              'attachment_archive': {'ready': True}}
+    class Readiness:
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def get(self, path): return SimpleNamespace(status_code=200, json=lambda: health)
+        def execute(self, sql): return SimpleNamespace(fetchone=lambda: ('ai-daq-fae-agent', True))
+    monkeypatch.setattr(httpx, 'Client', lambda **kwargs: Readiness())
+    monkeypatch.setattr(psycopg, 'connect', lambda *args: Readiness())
+    monkeypatch.setattr(code_identity, 'daq_code_sha', lambda: 'synthetic')
+    monkeypatch.setenv('DAQ_DATABASE_URL', 'synthetic')
+    assert m.runtime_startup()['runtime_release'] == m.RUNTIME_RELEASE
+    assert (tmp_path / '.partial-synthetic').is_dir() and (tmp_path / '.batch-synthetic').is_dir()

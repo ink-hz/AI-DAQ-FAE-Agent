@@ -74,7 +74,12 @@ the lease remains blocked. SIGTERM/SIGHUP kill and reap the separately sessioned
 Docker client group, then reconcile owned objects; SIGKILL cannot run cleanup. Cleanup
 requires actual stopped state and subsequent full-ID and name absence. A failure
 leaves a blocked journal and unreleased `/run/daq-native-probe/active.json` lease;
-starting another workroot is refused. Retain all files and use only:
+starting another workroot is refused. Cleanup walks all journaled objects in
+reverse dependency order even when one is unresolved or fails inspection,
+ownership, stop or removal. Each independently confirmed owned object is still
+stopped/removed and absence checked; fixed per-object errors are persisted and
+aggregated only after traversal. Any unresolved object keeps the lease blocked.
+Retain all files and use only:
 
 ```sh
 python3 deploy/probe_nonroot_runtime.py cleanup --workroot /opt/daq-native-probes/UNIQUE-ATTEMPT
@@ -114,6 +119,15 @@ parent, UID/GID/capabilities/NNP, namespaces and entry identity. Journal audits
 retain actual APP/worker/PostgreSQL policy, tmpfs and mount-source identities. The full synthetic old trace prefix,
 old root attachment snapshot, current data and re-forward copy remain available.
 No production data is preserved there because none is admitted.
+
+Initial APP readiness is followed immediately by a host-side, bounded,
+read-only filesystem snapshot of interrupted directories and expired/retained
+legacy fixtures, persisted as `startup-maintenance.json`. It precedes all probe
+attachment consumers. The readiness worker only checks health, PG identity and
+proc/filesystem evidence; it never constructs `AttachmentStore`. The actual
+store/tools may perform maintenance later, but cannot retroactively change the
+recorded startup result. A failed startup prerequisite is V08 FAIL even when a
+later consumer could clear the leftovers.
 
 Select affected gates with repeated `--gate Vxx`. V01 is always a prerequisite;
 V02/V07/V08 share the actual upload/spawn observation; V10/V11 require those same
