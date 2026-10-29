@@ -21,4 +21,4 @@ def test_nonroot_runtime_contract():
     for target, mount in mounts.items():
         assert mount['bind']['create_host_path'] is False
         assert ':?' in mount['source']
-        assert mount.get('read_only', False) == (target not in {'/app/data/attachments', '/app/data/daq_traces.jsonl'})
+        assert mount['read_only'] is (target not in {'/app/data/attachments', '/app/data/daq_traces.jsonl'})
