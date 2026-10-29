@@ -276,3 +276,48 @@ def test_bounded_post_scan_succeeds_when_global_budget_exactly_full(tree, monkey
     monkeypatch.setattr(m, 'MAX_NODES', 32)  # eight fences plus six four-node trees
     result = m.normalize(tree, apply=True, expected_uid=os.getuid())
     assert result['before']['count'] == result['after']['count'] == 32
+
+
+def test_overlay_ancestor_ctime_propagation_is_accounted(tree, monkeypatch):
+    m = module()
+    target = tree / 'app/daq_fae/private'
+    original = m.os.fchmod
+    injected = []
+    def overlay(fd, mode):
+        original(fd, mode)
+        if os.fstat(fd).st_ino == target.stat().st_ino:
+            for ancestor in (tree / 'app', tree / 'app/daq_fae'):
+                os.chmod(ancestor, stat.S_IMODE(ancestor.stat().st_mode))
+            injected.append(1)
+    monkeypatch.setattr(m.os, 'fchmod', overlay)
+    result = m.normalize(tree, apply=True, expected_uid=os.getuid())
+    assert injected
+    assert result['ctime_effects']['count'] >= 3
+    assert len(result['ctime_effects']['digest']) == 64
+    assert result['before']['digest'] == result['after']['digest']
+
+
+@pytest.mark.parametrize('drift', ['mtime', 'identity', 'membership', 'sibling_ctime'])
+def test_overlay_unrelated_or_nonctime_drift_is_rejected(tree, monkeypatch, drift):
+    m = module()
+    target = tree / 'app/daq_fae/private'
+    original = m.os.fchmod
+    injected = []
+    def mutate(fd, mode):
+        original(fd, mode)
+        if not injected and os.fstat(fd).st_ino == target.stat().st_ino:
+            injected.append(1)
+            parent = tree / 'app/daq_fae'
+            if drift == 'mtime':
+                st = parent.stat(); os.utime(parent, ns=(st.st_atime_ns, st.st_mtime_ns - 1_000_000_000))
+            elif drift == 'identity':
+                parent.rename(tree / 'app/moved'); parent.mkdir()
+            elif drift == 'membership':
+                (parent / 'intruder').write_bytes(b'x')
+            else:
+                sibling = tree / 'app/src/private/code.py'
+                os.chmod(sibling, stat.S_IMODE(sibling.stat().st_mode))
+    monkeypatch.setattr(m.os, 'fchmod', mutate)
+    with pytest.raises((ValueError, OSError)):
+        m.normalize(tree, apply=True, expected_uid=os.getuid())
+    assert injected

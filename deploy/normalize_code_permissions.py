@@ -140,35 +140,53 @@ def _target(entry):
 
 def _apply_one(base, path, entry, expected):
     parts = path.split('/')
-    fd = os.dup(base)
+    chain = []
+    parent = base
     try:
         for i, part in enumerate(parts):
             flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
             if i < len(parts) - 1 or entry['dir']:
                 flags |= os.O_DIRECTORY
-            child = os.open(part, flags, dir_fd=fd)
-            os.close(fd)
-            fd = child
+            fd = os.open(part, flags, dir_fd=parent)
             prefix = '/'.join(parts[:i + 1])
+            chain.append((prefix, fd))
+            parent = fd
             if prefix not in expected or _metadata(os.fstat(fd)) != expected[prefix]:
                 raise ValueError('path identity changed before chmod')
-    except BaseException:
-        os.close(fd)
-        raise
-    try:
+        fd = chain[-1][1]
         st = os.fstat(fd)
-        if _metadata(st) != entry['metadata']:
-            raise ValueError('entry changed before chmod')
         if not entry['dir'] and _read_hash(fd, st) != entry['digest']:
             raise ValueError('file content changed before chmod')
         target = _target(entry)
-        if stat.S_IMODE(st.st_mode) != target:
-            os.fchmod(fd, target)
-            expected[path] = _metadata(os.fstat(fd))
-            return 1
-        return 0
+        if stat.S_IMODE(st.st_mode) == target:
+            return 0, []
+        # Verify the held chain again immediately before the mutation.
+        for prefix, held in chain:
+            if _metadata(os.fstat(held)) != expected[prefix]:
+                raise ValueError('path changed before chmod')
+        os.fchmod(fd, target)
+        verified = {}
+        effects = []
+        for prefix, held in chain:
+            previous = expected[prefix]
+            current = _metadata(os.fstat(held))
+            target_mode = (previous[2] & ~0o7777) | target if prefix == path else previous[2]
+            if current[:2] != previous[:2] or current[2] != target_mode or current[3:8] != previous[3:8]:
+                raise ValueError('unexpected chmod metadata effect')
+            reopened = _open_path(base, prefix, directory=(prefix != path or entry['dir']))
+            try:
+                if _metadata(os.fstat(reopened)) != current or _metadata(os.fstat(held)) != current:
+                    raise ValueError('path changed after chmod')
+            finally:
+                os.close(reopened)
+            verified[prefix] = current
+            if current[8] != previous[8]:
+                effects.append((prefix, previous[8], current[8]))
+        expected.update(verified)
+        return 1, effects
     finally:
-        os.close(fd)
+        for _, held in reversed(chain):
+            os.close(held)
 
 
 def _summary(entries, total):
@@ -182,13 +200,19 @@ def normalize(root, *, apply, expected_uid):
     try:
         before, total = _scan(fd, expected_uid)
         changed = 0
+        effect_count = 0
+        effect_hash = hashlib.sha256()
         expected = {p: e['metadata'] for p, e in before.items()}
         if not apply and any(e['mutable'] and stat.S_IMODE(e['metadata'][2]) != _target(e) for e in before.values()):
             raise ValueError('unnormalized permissions')
         if apply:
             for path, entry in before.items():
                 if entry['mutable']:
-                    changed += _apply_one(fd, path, entry, expected)
+                    count, event = _apply_one(fd, path, entry, expected)
+                    changed += count
+                    for effect in event:
+                        effect_hash.update(json.dumps(effect, separators=(',', ':')).encode() + b'\n')
+                        effect_count += 1
         after, after_total = _scan(fd, expected_uid)
         if before.keys() != after.keys() or total != after_total:
             raise ValueError('membership changed')
@@ -198,10 +222,11 @@ def normalize(root, *, apply, expected_uid):
             expected_mode = _target(old) if apply and old['mutable'] else stat.S_IMODE(a[2])
             if (a[0:2] != b[0:2] or a[3:8] != b[3:8] or old['digest'] != new['digest']
                     or stat.S_IMODE(b[2]) != expected_mode
-                    or ((not apply or not old['mutable'] or stat.S_IMODE(a[2]) == expected_mode) and a[8] != b[8])):
+                    or b != expected[path]):
                 raise ValueError('postflight metadata or content changed')
         return {'policy': POLICY, 'before': _summary(before, total),
-                'after': _summary(after, after_total), 'changed': changed}
+                'after': _summary(after, after_total), 'changed': changed,
+                'ctime_effects': {'count': effect_count, 'digest': effect_hash.hexdigest()}}
     finally:
         os.close(fd)
 
