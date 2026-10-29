@@ -1,0 +1,6 @@
+FROM orbbec-daq-nonroot-base:5ed10ead83ee10ad
+COPY normalize_code_permissions.py /tmp/daq-normalize-code-permissions.py
+RUN python -B /tmp/daq-normalize-code-permissions.py --apply && rm /tmp/daq-normalize-code-permissions.py
+LABEL org.ai-daq.permission-policy="daq-immutable-code-permissions-v1" \
+      org.ai-daq.base-image-id="sha256:5ed10ead83ee10ad5ef668fad8ee6aa7d28e37bb8d217fd22daa84d6d5db5bf7"
+USER 21081:21081

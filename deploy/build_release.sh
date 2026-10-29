@@ -18,6 +18,6 @@ tar -czf "$package" \
   --exclude='__pycache__' --exclude='*.pyc' --exclude='.DS_Store' \
   daq_fae src scripts migrations prompts upstream-source.json \
   requirements.txt requirements-daq.txt deploy/Dockerfile.prod \
-  deploy/compose.prod.yml deploy/provision_env.py webui/dist
+  deploy/compose.prod.yml deploy/provision_env.py deploy/normalize_code_permissions.py webui/dist
 
 printf '%s  %s\n' "$(shasum -a 256 "$package" | awk '{print $1}')" "$package"

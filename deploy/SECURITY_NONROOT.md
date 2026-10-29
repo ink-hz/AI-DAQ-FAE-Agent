@@ -66,3 +66,23 @@ The helper reads ordered original inputs using the pinned Compose front end in b
 4. After the service has written data, the captured RW manifest is deliberately stale: do not present `verify` against that old inventory as a post-write or rollback acceptance. Use the previously verified rollback config after stopping writers; do not overwrite new data from the old snapshot or restore PG. A later re-forward after root recovery needs a fresh stopped-source copy into another exclusive batch because root may have created root-owned files. No online recursive chown.
 
 Any failure after a new target is created leaves a private `failure.json` with a sanitized reason/category and partial target; it is not published as a successful batch. Failures before an exclusive target can be safely created (including bad inputs, unsafe parents or collisions) cannot leave a receipt there. Preserve the controller's sanitized command result and inspect private evidence; never overwrite or reuse a failed target. `verify` is read-only and leaves no receipt. An existing valid batch is never overwritten.
+
+### Offline immutable code permissions
+
+The original image remains the root rollback image. The reviewed derivative recipe
+`deploy/Dockerfile.nonroot` uses only the local tag
+`orbbec-daq-nonroot-base:5ed10ead83ee10ad`; the controller must verify that tag
+against the full original image ID before and after the build, and build with
+pull disabled and RUN networking disabled. Its private build context contains
+only that Dockerfile and `normalize_code_permissions.py`. The resulting image
+ID must be reviewed and registered separately before any runtime use.
+
+The normalizer applies the fixed six code roots only after a complete bounded
+preflight; it checks ancestor/data/deployment fences without changing them.
+`--audit` verifies the same policy without modifying permissions. Each pass
+reports only bounded content-manifest digests, counts and byte totals. File
+contents, membership, ownership and mtime must remain stable; chmod changes
+ctime and reading may change atime. A concurrent change after preflight can
+leave partial permission changes in a failed, discarded build; a failed RUN
+must never yield an accepted candidate. The full release package includes the
+same normalizer; it is distinct from the two-file derivative context.
