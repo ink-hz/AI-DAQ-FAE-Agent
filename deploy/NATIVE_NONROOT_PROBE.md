@@ -27,7 +27,7 @@ python3 deploy/probe_nonroot_runtime.py run \
 ```
 
 Deploy this script together with `security_assets.py` from the **same checkout**.
-The reviewed dependency is commit `15be5c8e82438be85e3b4b356af23a4d0970253f`;
+The reviewed dependency is commit `f03e98097e8f44e2ad49b379120710b55af3f066`;
 its required SHA-256 is
 `3c513406ae0336ac6e5c0bd8cae6dbc0e0c670b02b307b51726b3afb7190c2a8`.
 The native branch merges that full approved branch and checks the helper bytes
