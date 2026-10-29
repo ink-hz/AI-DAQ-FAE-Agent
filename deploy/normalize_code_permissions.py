@@ -18,6 +18,33 @@ MAX_DEPTH = 64
 POLICY = 'daq-immutable-code-permissions-v1'
 
 
+MOUNTINFO_LIMIT = 1024 * 1024
+
+
+def _parse_root_mountinfo(data):
+    if len(data) > MOUNTINFO_LIMIT:
+        return False
+    roots = []
+    for line in data.splitlines():
+        parts = line.split(b' - ')
+        if len(parts) != 2:
+            return False
+        left, right = parts[0].split(), parts[1].split()
+        if len(left) < 6 or len(right) < 3:
+            return False
+        if left[4] == b'/':
+            roots.append(right[0])
+    return roots == [b'overlay']
+
+
+def _root_is_overlay():
+    try:
+        with open('/proc/self/mountinfo', 'rb') as stream:
+            return _parse_root_mountinfo(stream.read(MOUNTINFO_LIMIT + 1))
+    except OSError:
+        return False
+
+
 def _owner_matches(uid, expected):
     return uid == expected
 
@@ -138,7 +165,7 @@ def _target(entry):
     return 0o755 if entry['metadata'][2] & 0o111 else 0o644
 
 
-def _apply_one(base, path, entry, expected):
+def _apply_one(base, path, entry, expected, overlay):
     parts = path.split('/')
     chain = []
     parent = base
@@ -171,8 +198,14 @@ def _apply_one(base, path, entry, expected):
             previous = expected[prefix]
             current = _metadata(os.fstat(held))
             target_mode = (previous[2] & ~0o7777) | target if prefix == path else previous[2]
-            if current[:2] != previous[:2] or current[2] != target_mode or current[3:8] != previous[3:8]:
-                raise ValueError('unexpected chmod metadata effect')
+            fields = ('dev', 'inode', 'mode', 'uid', 'gid', 'nlink', 'size', 'mtime')
+            wanted = previous[:2] + (target_mode,) + previous[3:]
+            changed_fields = [fields[i] for i in range(8) if current[i] != wanted[i]]
+            if ('nlink' in changed_fields and overlay and stat.S_ISDIR(previous[2])
+                    and previous[5] > 1 and current[5] == 1):
+                changed_fields.remove('nlink')
+            if changed_fields:
+                raise ValueError('unexpected chmod metadata effect: ' + ','.join(changed_fields))
             reopened = _open_path(base, prefix, directory=(prefix != path or entry['dir']))
             try:
                 if _metadata(os.fstat(reopened)) != current or _metadata(os.fstat(held)) != current:
@@ -181,7 +214,9 @@ def _apply_one(base, path, entry, expected):
                 os.close(reopened)
             verified[prefix] = current
             if current[8] != previous[8]:
-                effects.append((prefix, previous[8], current[8]))
+                effects.append(('ctime', prefix, previous[8], current[8]))
+            if current[5] != previous[5]:
+                effects.append(('nlink', prefix, previous[5], current[5]))
         expected.update(verified)
         return 1, effects
     finally:
@@ -200,19 +235,21 @@ def normalize(root, *, apply, expected_uid):
     try:
         before, total = _scan(fd, expected_uid)
         changed = 0
-        effect_count = 0
-        effect_hash = hashlib.sha256()
+        effect_count = {'ctime': 0, 'nlink': 0}
+        effect_hash = {name: hashlib.sha256() for name in effect_count}
+        overlay = _root_is_overlay()
         expected = {p: e['metadata'] for p, e in before.items()}
         if not apply and any(e['mutable'] and stat.S_IMODE(e['metadata'][2]) != _target(e) for e in before.values()):
             raise ValueError('unnormalized permissions')
         if apply:
             for path, entry in before.items():
                 if entry['mutable']:
-                    count, event = _apply_one(fd, path, entry, expected)
+                    count, event = _apply_one(fd, path, entry, expected, overlay)
                     changed += count
                     for effect in event:
-                        effect_hash.update(json.dumps(effect, separators=(',', ':')).encode() + b'\n')
-                        effect_count += 1
+                        kind = effect[0]
+                        effect_hash[kind].update(json.dumps(effect, separators=(',', ':')).encode() + b'\n')
+                        effect_count[kind] += 1
         after, after_total = _scan(fd, expected_uid)
         if before.keys() != after.keys() or total != after_total:
             raise ValueError('membership changed')
@@ -220,13 +257,14 @@ def normalize(root, *, apply, expected_uid):
             new = after[path]
             a, b = old['metadata'], new['metadata']
             expected_mode = _target(old) if apply and old['mutable'] else stat.S_IMODE(a[2])
-            if (a[0:2] != b[0:2] or a[3:8] != b[3:8] or old['digest'] != new['digest']
+            if (a[0:2] != b[0:2] or a[3:5] != b[3:5] or a[6:8] != b[6:8] or old['digest'] != new['digest']
                     or stat.S_IMODE(b[2]) != expected_mode
                     or b != expected[path]):
                 raise ValueError('postflight metadata or content changed')
         return {'policy': POLICY, 'before': _summary(before, total),
                 'after': _summary(after, after_total), 'changed': changed,
-                'ctime_effects': {'count': effect_count, 'digest': effect_hash.hexdigest()}}
+                'ctime_effects': {'count': effect_count['ctime'], 'digest': effect_hash['ctime'].hexdigest()},
+                'nlink_effects': {'count': effect_count['nlink'], 'digest': effect_hash['nlink'].hexdigest()}}
     finally:
         os.close(fd)
 

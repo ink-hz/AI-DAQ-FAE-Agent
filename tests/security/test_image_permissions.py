@@ -169,11 +169,11 @@ def test_fence_file_link_and_oversized_file_fail_before_chmod(tree, monkeypatch)
 def test_ancestor_replaced_after_preflight_is_refused(tree, monkeypatch):
     m = module()
     original = m._apply_one
-    def replace(base, path, entry, expected):
+    def replace(base, path, entry, expected, overlay):
         if path == 'app/src':
             (tree / 'app/src').rename(tree / 'app/moved')
             (tree / 'app/src').mkdir()
-        return original(base, path, entry, expected)
+        return original(base, path, entry, expected, overlay)
     monkeypatch.setattr(m, '_apply_one', replace)
     with pytest.raises(ValueError):
         m.normalize(tree, apply=True, expected_uid=os.getuid())
@@ -321,3 +321,55 @@ def test_overlay_unrelated_or_nonctime_drift_is_rejected(tree, monkeypatch, drif
     with pytest.raises((ValueError, OSError)):
         m.normalize(tree, apply=True, expected_uid=os.getuid())
     assert injected
+
+
+def test_copyup_root_mountinfo_detection_is_bounded_and_unambiguous(monkeypatch):
+    m = module()
+    assert m._parse_root_mountinfo(b'22 1 0:20 / / rw - overlay overlay rw\n')
+    assert not m._parse_root_mountinfo(b'22 1 0:20 / / rw - ext4 /dev/a rw\n')
+    assert not m._parse_root_mountinfo(b'22 1 0:20 / / rw - overlay overlay rw\n23 1 0:21 / / rw - ext4 /dev/a rw\n')
+    assert not m._parse_root_mountinfo(b'x' * (1024 * 1024 + 1))
+
+
+@pytest.mark.parametrize('scenario', ['allowed', 'wrong_direction', 'unknown_fs', 'file_hardlink', 'file_metadata', 'sibling'])
+def test_copyup_directory_nlink_boundary(tree, monkeypatch, scenario):
+    m = module()
+    target = tree / 'app/daq_fae/private'
+    parent = tree / 'app/daq_fae'
+    sibling = tree / 'app/src/private'
+    file_target = target / 'code.py'
+    original_fchmod = m.os.fchmod
+    original_metadata = m._metadata
+    overrides = {}
+    fired = []
+    monkeypatch.setattr(m, '_root_is_overlay', lambda: scenario != 'unknown_fs', raising=False)
+    def metadata(st):
+        values = list(original_metadata(st))
+        values[5] = overrides.get(st.st_ino, values[5])
+        return tuple(values)
+    monkeypatch.setattr(m, '_metadata', metadata)
+    def copyup(fd, mode):
+        st = os.fstat(fd)
+        original_fchmod(fd, mode)
+        if not fired and st.st_ino == (file_target if scenario in ('file_hardlink', 'file_metadata') else target).stat().st_ino:
+            fired.append(1)
+            if scenario == 'file_hardlink':
+                os.link(file_target, target / 'hardlink')
+            elif scenario == 'file_metadata':
+                overrides[file_target.stat().st_ino] = 2
+            elif scenario == 'sibling':
+                overrides[sibling.stat().st_ino] = 1
+            elif scenario == 'wrong_direction':
+                overrides[parent.stat().st_ino] = parent.stat().st_nlink + 1
+            else:
+                overrides[parent.stat().st_ino] = 1
+                overrides[target.stat().st_ino] = 1
+    monkeypatch.setattr(m.os, 'fchmod', copyup)
+    if scenario == 'allowed':
+        result = m.normalize(tree, apply=True, expected_uid=os.getuid())
+        assert result['nlink_effects']['count'] == 2
+        assert result['before']['digest'] == result['after']['digest']
+    else:
+        with pytest.raises((ValueError, OSError)):
+            m.normalize(tree, apply=True, expected_uid=os.getuid())
+    assert fired
