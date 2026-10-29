@@ -733,22 +733,23 @@ def scripted_chat(self, messages, tools=None, required_tool=None):
     yield {'type': 'stop', 'stop_reason': 'tool_use', 'usage': None}
 
 
+@contextmanager
 def http_client(subject='a', saved=None):
     import httpx
-    client = httpx.Client(base_url='http://127.0.0.1:8081', timeout=60, trust_env=False)
-    if saved is None:
-        response = client.post('/enterprise/session', json={'code': subject * 43}, headers={'Origin': ORIGIN})
-        require(response.status_code == 201, 'http_launch_failed')
-        # Secure __Host cookie remains Secure on the wire. HTTP loopback transport
-        # is the isolated equivalent of the reverse proxy's internal HTTP hop;
-        # supply exactly the issued cookie, never synthesize or insert DB sessions.
-        token = response.cookies.get(COOKIE)
-        csrf = response.json()['csrf_token']
-        require(bool(token) and 'Secure' in response.headers['set-cookie']
-                and 'HttpOnly' in response.headers['set-cookie'], 'cookie_contract_failed')
-        saved = {'cookie': token, 'csrf': csrf}
-    client.headers.update({'Cookie': COOKIE + '=' + saved['cookie'], 'Origin': ORIGIN, CSRF: saved['csrf']})
-    return client, saved
+    with httpx.Client(base_url='http://127.0.0.1:8081', timeout=60, trust_env=False) as client:
+        if saved is None:
+            response = client.post('/enterprise/session', json={'code': subject * 43}, headers={'Origin': ORIGIN})
+            require(response.status_code == 201, 'http_launch_failed')
+            # Secure __Host cookie remains Secure on the wire. HTTP loopback transport
+            # is the isolated equivalent of the reverse proxy's internal HTTP hop;
+            # supply exactly the issued cookie, never synthesize or insert DB sessions.
+            token = response.cookies.get(COOKIE)
+            csrf = response.json()['csrf_token']
+            require(bool(token) and 'Secure' in response.headers['set-cookie']
+                    and 'HttpOnly' in response.headers['set-cookie'], 'cookie_contract_failed')
+            saved = {'cookie': token, 'csrf': csrf}
+        client.headers.update({'Cookie': COOKIE + '=' + saved['cookie'], 'Origin': ORIGIN, CSRF: saved['csrf']})
+        yield client, saved
 
 
 def runtime_startup():
@@ -810,8 +811,7 @@ def runtime_auth():
             require(response.status_code == 200 and response.content == expected_static(relative, path.read_bytes()), 'static_bytes_mismatch')
             count += 1
         require(count > 1, 'static_assets_missing')
-    client, _ = http_client()
-    with client:
+    with http_client() as (client, _):
         require(client.get('/enterprise/session').status_code == 200, 'session_http_failed')
         require(client.get('/authenticated/conversations').status_code == 200, 'authenticated_history_failed')
         require(client.post('/attachments', headers={CSRF: 'invalid'}).status_code == 403,
@@ -1123,11 +1123,9 @@ class ProcessObservation:
 
 
 def runtime_upload():
-    client, session = http_client()
-    other, _ = http_client('b')
     ids = []; contracts = {}
     store = runtime_store()
-    with client, other, ProcessObservation() as observer:
+    with http_client() as (client, session), http_client('b') as (other, _), ProcessObservation() as observer:
         input_root = Path('/probe-output/inputs')
         input_root.mkdir(mode=0o700)
         inputs = []
@@ -1199,10 +1197,10 @@ def runtime_seed():
 
 
 def runtime_migrated():
-    store = runtime_store(); client, _ = http_client(); other, _ = http_client('b')
+    store = runtime_store()
     seed = json.loads(Path('/probe-output/seed.json').read_text())
     evidence = []
-    with client, other:
+    with http_client() as (client, _), http_client('b') as (other, _):
         for aid in (seed['attachment_id'], seed['disposable_id']):
             evidence.append(consume_fixture(store, aid, seed['contracts'][aid]))
             require(client.get('/attachments/' + aid).status_code == 200, 'migrated_owner_access_failed')
@@ -1266,7 +1264,6 @@ def task_snapshot(sid, aid):
 def runtime_task(phase):
     import psycopg
     session = json.loads(Path('/probe-output/session.json').read_text())
-    client, _ = http_client(saved=session)
     ids = json.loads(Path('/probe-output/attachment-ids.json').read_text())
     request = {'message': 'Read this synthetic log: status=ready.', 'attachment_ids': [ids[0]],
                'client_request_id': 'native-probe-first'}
@@ -1284,7 +1281,7 @@ def runtime_task(phase):
         require(terminal['outcome'] == 'safe_abstained' and terminal['fallback_used'] is False,
                 'task_outcome_failed')
         return terminal, parsed
-    with client:
+    with http_client(saved=session) as (client, _):
         before_calls = provider_metrics()
         if phase == 'first':
             terminal, frames = events(client.post('/chat', json=request))
@@ -1380,8 +1377,7 @@ def runtime_migrate():
 
 
 def runtime_rollback_check():
-    client, _ = http_client(); other, _ = http_client('b')
-    with client, other:
+    with http_client() as (client, _), http_client('b') as (other, _):
         before = verify_current_consumers(client, other)
         response = client.post('/attachments', files=[('files', ('root.txt', b'status=ready\nroot current write', 'text/plain'))])
         require(response.status_code == 201, 'rollback_upload_failed')
@@ -1402,8 +1398,7 @@ def runtime_rollback_check():
 
 
 def runtime_reforward_check():
-    client, _ = http_client(); other, _ = http_client('b')
-    with client, other:
+    with http_client() as (client, _), http_client('b') as (other, _):
         evidence = verify_current_consumers(client, other)
         for item in evidence:
             require((Path('/app/data/attachments') / item['attachment_id'] / 'original.bin').stat().st_uid == UID,

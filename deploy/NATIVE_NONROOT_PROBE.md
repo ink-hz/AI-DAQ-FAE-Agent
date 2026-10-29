@@ -234,3 +234,30 @@ Existing FAIL/category/type and bounded missing_module fields remain. Engineerin
 tests compile fixed static filenames to simulate those paths; this is not native
 image execution, and no metadata is backfilled into prior failures. Image/helper
 pins, upload/task fixtures, provider substitution and all native gates are unchanged.
+
+
+## One-owner HTTP scope and per-gate evidence
+
+`http_client` is now a standard context manager: one real httpx Client is entered
+once, session exchange (or saved-cookie restoration) occurs inside that scope,
+and the same client is yielded and closed on authentication, consumer or normal
+exit. All authenticated consumers—auth, upload, migrated, task, root rollback and
+re-forward—enter this factory scope; helpers receiving a client only borrow it.
+There is no second client swap, repeated exchange, swallowed RuntimeError or
+client re-entry. Cookie/CSRF/Origin assertions and private HTTP endpoints remain.
+
+The actual prior `01a1f8b` batch remains V01/V03/V04/V05 PASS, V06 FAIL, six gates
+NOT_EXECUTED (27.398 seconds, cleanup released). Its V06 failure was the former
+factory returning an already-used client followed by consumer re-entry. Local
+real-httpx tests use only an owned random-port HTTP/session fixture and explicitly
+do not establish native authenticated PG behavior.
+
+The next parent-owned native selection is V02/V06/V07/V08/V09/V10/V11 plus required
+V01. V03/V04/V05 evidence may be inherited only after checking unchanged relevant
+functions/controller policy/context and the same actual image, kernel and config.
+The report supplies source/AST hashes; it cannot prove host state remotely. Keep a
+per-gate batch/version table, preserve the previous V06 FAIL, and never describe
+this later eight-gate batch as eleven same-batch passes. The complete
+upload→ownership→two-turn task→rollback story V07/V08/V10/V11 must close in the same
+new batch with the original fixtures; unknown inheritance conditions require the
+affected check instead of silently skipping it.

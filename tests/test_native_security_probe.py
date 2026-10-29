@@ -1242,3 +1242,134 @@ def test_runtime_value_error_persists_safe_frames(tmp_path, monkeypatch, capsys)
     assert receipt['status'] == 'FAIL' and receipt['exception_type'] == 'ValueError'
     assert receipt['frames'][-1] == {'file': '/app/scripts/migrate_daq_pg.py', 'function': 'fail', 'line': 2}
     assert 'TASK7_PRIVATE_SENTINEL' not in raw and capsys.readouterr().out == ''
+
+
+@pytest.fixture
+def native_http_fixture(monkeypatch):
+    """Real httpx lifecycle + owned random HTTP port; no native/auth/PG claim."""
+    import httpx
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    m = module(); real_client = httpx.Client
+    state = {'clients': [], 'requests': [], 'auth_failure': None, 'reject_subject': None, 'static': {}}
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args): pass
+        def reply(self, status, payload, cookie=None):
+            raw = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
+            self.send_response(status); self.send_header('Content-Length', str(len(raw)))
+            if cookie: self.send_header('Set-Cookie', cookie)
+            self.end_headers(); self.wfile.write(raw)
+        def do_POST(self):
+            raw = self.rfile.read(int(self.headers.get('Content-Length', 0)))
+            state['requests'].append((self.command, self.path, dict(self.headers)))
+            if self.path == '/enterprise/session':
+                if self.headers.get('Origin') != m.ORIGIN: return self.reply(403, {})
+                subject = json.loads(raw)['code'][0]
+                if state['auth_failure'] == 'status' or state['reject_subject'] == subject: return self.reply(401, {})
+                cookie = None if state['auth_failure'] == 'cookie' else f'{m.COOKIE}=synthetic-{subject}; Secure; HttpOnly; Path=/'
+                payload = b'invalid-json' if state['auth_failure'] == 'json' else {'csrf_token': 'synthetic-csrf'}
+                return self.reply(201, payload, cookie)
+            return self.reply(403 if self.headers.get('Cookie') else 401, {})
+        def do_GET(self):
+            state['requests'].append((self.command, self.path, dict(self.headers)))
+            if self.path in state['static']: return self.reply(200, state['static'][self.path])
+            return self.reply(200 if self.headers.get('Cookie') else 401, {'ok': True})
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=lambda: server.serve_forever(poll_interval=.01), daemon=True); thread.start()
+    def constructor(*args, **kwargs):
+        assert not args and kwargs['base_url'] == 'http://127.0.0.1:8081'
+        assert kwargs['trust_env'] is False
+        kwargs['base_url'] = f'http://127.0.0.1:{server.server_port}'
+        client = real_client(**kwargs); state['clients'].append(client); return client
+    monkeypatch.setattr(httpx, 'Client', constructor)
+    try: yield m, state
+    finally:
+        for client in state['clients']: client.close()
+        server.shutdown(); thread.join(timeout=2); server.server_close()
+
+
+def test_http_scope_auth_then_consumer_uses_same_real_client(native_http_fixture):
+    m, state = native_http_fixture
+    with m.http_client() as (client, saved):
+        assert client is state['clients'][0] and not client.is_closed
+        assert saved == {'cookie': 'synthetic-a', 'csrf': 'synthetic-csrf'}
+        assert client.get('/probe').status_code == 200
+        assert client.headers['Origin'] == m.ORIGIN and client.headers[m.CSRF] == saved['csrf']
+    assert client.is_closed and len(state['clients']) == 1
+    assert [(method, path) for method, path, _ in state['requests']] == [('POST', '/enterprise/session'), ('GET', '/probe')]
+
+
+def test_http_scope_saved_cookie_never_exchanges_again(native_http_fixture):
+    m, state = native_http_fixture; saved = {'cookie': 'restored-fixture', 'csrf': 'restored-csrf'}
+    with m.http_client(saved=saved) as (client, restored):
+        assert restored is saved and client.get('/probe').status_code == 200
+        assert client.headers['Cookie'] == m.COOKIE + '=restored-fixture'
+    assert client.is_closed and len(state['clients']) == 1
+    assert all(method != 'POST' for method, _, _ in state['requests'])
+
+
+@pytest.mark.parametrize('failure', ['status', 'cookie', 'json'])
+def test_http_scope_auth_failure_closes_real_client(native_http_fixture, failure):
+    m, state = native_http_fixture; state['auth_failure'] = failure
+    with pytest.raises((m.ProbeError, ValueError)):
+        with m.http_client(): pytest.fail('invalid authentication yielded a client')
+    assert len(state['clients']) == 1 and state['clients'][0].is_closed
+    assert len(state['requests']) == 1
+
+
+def test_http_scope_consumer_exception_closes_real_client(native_http_fixture):
+    m, state = native_http_fixture
+    with pytest.raises(RuntimeError, match='consumer-fixture'):
+        with m.http_client() as (client, _):
+            assert client.get('/probe').status_code == 200
+            raise RuntimeError('consumer-fixture')
+    assert len(state['clients']) == 1 and state['clients'][0].is_closed
+
+
+def test_http_scope_second_auth_failure_closes_both_real_clients(native_http_fixture):
+    m, state = native_http_fixture; state['reject_subject'] = 'b'
+    with pytest.raises(m.ProbeError, match='http_launch_failed'):
+        with m.http_client() as (first, _), m.http_client('b') as (second, _):
+            pytest.fail('second auth failure must prevent consumer execution')
+    assert len(state['clients']) == 2 and all(client.is_closed for client in state['clients'])
+    assert len(state['requests']) == 2
+
+
+def test_runtime_auth_uses_single_owner_real_http_scopes(native_http_fixture, tmp_path, monkeypatch):
+    m, state = native_http_fixture; actual_path = Path
+    (tmp_path / 'index.html').write_bytes(b'<html>fixture</html>')
+    (tmp_path / 'main.js').write_bytes(b'fixture-js')
+    state['static'] = {'/daq': m.expected_static('index.html', (tmp_path / 'index.html').read_bytes()), '/daq/main.js': b'fixture-js'}
+    class FixturePath(type(tmp_path)):
+        def relative_to(self, *other):
+            return super().relative_to(tmp_path if other == ('/app/webui/dist',) else other[0])
+    monkeypatch.setattr(m, 'Path', lambda value: FixturePath(tmp_path) if value == '/app/webui/dist' else actual_path(value))
+    assert m.runtime_auth()['static_files_verified'] == 2
+    assert len(state['clients']) == 2 and all(client.is_closed for client in state['clients'])
+    authenticated = [headers for method, path, headers in state['requests'] if path == '/enterprise/session' and headers.get('Origin') == m.ORIGIN]
+    assert len(authenticated) == 2  # one POST exchange, one authenticated GET
+
+
+@pytest.mark.parametrize('phase', ['upload', 'migrated', 'task', 'rollback_check', 'reforward_check'])
+def test_each_http_consumer_owns_scopes_on_domain_failure(native_http_fixture, tmp_path, monkeypatch, phase):
+    m, state = native_http_fixture; actual_path = Path
+    from types import SimpleNamespace
+    class DomainFailure(Exception): pass
+    def fail(*args, **kwargs): raise DomainFailure('engineering domain boundary')
+    monkeypatch.setattr(m, 'Path', lambda value: tmp_path / str(value).split('/')[-1] if str(value).startswith('/probe-output/') else actual_path(value))
+    monkeypatch.setattr(m, 'runtime_store', lambda: SimpleNamespace(root=tmp_path))
+    (tmp_path / 'seed.json').write_text(json.dumps({'attachment_id': 'retained', 'disposable_id': 'disposable', 'contracts': {'retained': {}, 'disposable': {}}}))
+    (tmp_path / 'session.json').write_text(json.dumps({'cookie': 'restored', 'csrf': 'restored-csrf'}))
+    (tmp_path / 'attachment-ids.json').write_text('["fixture"]')
+    if phase == 'upload':
+        class Observer:
+            def __enter__(self): fail()
+            def __exit__(self, *args): pass
+        monkeypatch.setattr(m, 'ProcessObservation', Observer)
+    elif phase == 'migrated': monkeypatch.setattr(m, 'consume_fixture', fail)
+    elif phase == 'task': monkeypatch.setattr(m, 'provider_metrics', fail)
+    else: monkeypatch.setattr(m, 'verify_current_consumers', fail)
+    with pytest.raises(DomainFailure): getattr(m, 'runtime_' + phase)(*(['first'] if phase == 'task' else []))
+    assert len(state['clients']) == (1 if phase == 'task' else 2)
+    assert all(client.is_closed for client in state['clients'])
+    assert len(state['requests']) == (0 if phase == 'task' else 2)
