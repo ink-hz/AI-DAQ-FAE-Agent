@@ -1166,3 +1166,79 @@ def test_dual_image_inspection_is_readonly_and_rejects_before_control_creation(m
     candidate['Config']['User'] = '0:0'
     with pytest.raises(m.ProbeError):
         m.inspect_image_inputs(m.SOURCE_IMAGE, m.CANDIDATE_IMAGE, pg['Id'], inspect)
+
+
+def test_native_origin_uses_actual_source_allowlist_and_preserves_bad_config():
+    m = module()
+    from src.platform_identity.routes import _canonical_browser_origin
+    assert m.ORIGIN == 'https://agent.orbbec.com.cn'
+    assert _canonical_browser_origin(m.ORIGIN, error_code='enterprise_public_origin_invalid') == m.ORIGIN
+    with pytest.raises(ValueError, match='^enterprise_public_origin_invalid$'):
+        _canonical_browser_origin('https://native-probe.invalid', error_code='enterprise_public_origin_invalid')
+    assert m.synthetic_environment()['DAQ_PLATFORM_IDENTITY_BASE_URL'] == 'http://127.0.0.1:8082'
+
+
+def test_original_invalid_origin_is_rejected_by_actual_http_boundary():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from src.platform_identity.routes import register_platform_identity_routes
+    class NoExchange:
+        async def exchange_launch(self, code): raise AssertionError('bad Origin must never exchange')
+    app = FastAPI()
+    register_platform_identity_routes(app, service=NoExchange(), public_origin='https://agent.orbbec.com.cn')
+    with TestClient(app, base_url='http://127.0.0.1') as client:
+        response = client.post('/enterprise/session', json={'code': 'a' * 43}, headers={'Origin': 'https://native-probe.invalid'})
+        assert response.status_code == 403 and response.json()['error']['code'] == 'enterprise_origin_invalid'
+
+
+def test_private_frames_admit_static_metadata_never_message_or_locals():
+    m = module(); secret = 'TASK7_SECRET_SENTINEL'
+    namespace = {'secret': secret}
+    # Engineering-only static filename simulation, not image/native execution.
+    exec(compile('def fail():\n    body = secret\n    raise ValueError(secret)\n', '/app/src/platform_identity/routes.py', 'exec'), namespace)
+    try: namespace['fail']()
+    except ValueError as exc: metadata = m.private_failure_frames(exc)
+    assert metadata['frames'] == [{'file': '/app/src/platform_identity/routes.py', 'function': 'fail', 'line': 3}]
+    assert secret not in json.dumps(metadata) and 'body' not in json.dumps(metadata)
+
+
+@pytest.mark.parametrize('filename,function', [
+    ('/app/src/../secrets.py', 'fail'), ('/app/src//module.py', 'fail'),
+    ('/app/data/private.py', 'fail'), ('/home/user/private.py', 'fail'),
+    ('/app/src/module.py', 'secret\nfunction'), ('/app/src/module.py', 'a' * 81),
+    ('/app/src/' + 'a' * 241 + '.py', 'fail'), ('/app/src/module.txt', 'fail'),
+])
+def test_private_frames_refuse_untrusted_path_or_function(filename, function):
+    m = module(); namespace = {}
+    exec(compile('def fail():\n    raise ValueError("secret")\n', filename, 'exec'), namespace)
+    namespace['fail'].__code__ = namespace['fail'].__code__.replace(co_name=function)
+    try: namespace['fail']()
+    except ValueError as exc: metadata = m.private_failure_frames(exc)
+    assert metadata['frames'] == []
+    assert filename not in json.dumps(metadata) and function not in json.dumps(metadata)
+
+
+def test_private_frames_bound_traversal_and_output():
+    m = module(); namespace = {}
+    exec(compile('def recurse(n):\n    if n: return recurse(n-1)\n    raise ValueError("secret")\n', '/probe.py', 'exec'), namespace)
+    try: namespace['recurse'](50)
+    except ValueError as exc: metadata = m.private_failure_frames(exc)
+    assert metadata['frames_inspected'] == 32 and len(metadata['frames']) == 8
+    assert metadata['frames_truncated'] is True
+    assert all(set(frame) == {'file', 'function', 'line'} for frame in metadata['frames'])
+
+
+def test_runtime_value_error_persists_safe_frames(tmp_path, monkeypatch, capsys):
+    m = module(); actual_path = Path
+    from types import SimpleNamespace
+    monkeypatch.setattr(m, 'runtime_isolation_check', lambda: None)
+    monkeypatch.setattr(m, 'Path', lambda value: tmp_path if value == '/probe-output' else actual_path(value))
+    monkeypatch.setenv('DAQ_NATIVE_PROBE_PHASE', 'migrate-1')
+    namespace = {}
+    exec(compile('def fail():\n    raise ValueError("TASK7_PRIVATE_SENTINEL")\n', '/app/scripts/migrate_daq_pg.py', 'exec'), namespace)
+    monkeypatch.setattr(m, 'runtime_migrate', namespace['fail'])
+    assert m.runtime_main(SimpleNamespace(phase='migrate')) == 1
+    raw = (tmp_path / 'migrate-1.json').read_text(); receipt = json.loads(raw)
+    assert receipt['status'] == 'FAIL' and receipt['exception_type'] == 'ValueError'
+    assert receipt['frames'][-1] == {'file': '/app/scripts/migrate_daq_pg.py', 'function': 'fail', 'line': 2}
+    assert 'TASK7_PRIVATE_SENTINEL' not in raw and capsys.readouterr().out == ''

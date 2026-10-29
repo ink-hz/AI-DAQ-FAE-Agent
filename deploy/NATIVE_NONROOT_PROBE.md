@@ -205,3 +205,32 @@ immutable image directories were unreadable by nonroot; V02–V11 were not execu
 That failure remains preserved. The inspect-protocol fix is local engineering
 only; original-batch cleanup and any later native run are separate parent actions.
 Real model calls and input/output model tokens are zero.
+
+
+## Assembly correction after the first derived-image batch
+
+The first derived-image batch at `e0aa155` failed V01 after 14.615 seconds;
+actual migration and root seed passed, APP recorded ValueError, cleanup released.
+No frames were recorded then, so its throwing function is unknown. Those original
+receipts remain unchanged. A separate pure-source reproduction confirms that the
+old probe Origin `https://native-probe.invalid` is rejected by the real product
+allowlist. The next positive assembly uses the already-approved string
+`https://agent.orbbec.com.cn`; actual HTTP stays on private 127.0.0.1 ports. There
+is no public-domain request/DNS dependency, allowlist change or real credential.
+The old string stays an explicit configuration refusal and HTTP wrong-Origin403
+negative. This corrects an agent-authored test configuration, not a business
+input or gate criterion; a later corrected batch cannot be called the old pass.
+
+Runtime failures now retain bounded private frame metadata: inspect at most 32
+traceback nodes and emit the last at most 8 admitted frames within that inspected
+prefix, with an explicit truncation flag. Allowed filenames are `/probe.py` and
+Python files below `/app/daq_fae/`, `/app/src/`, `/app/scripts/`, ASCII identifier
+components only, no dotdot/aliases, at most 240 characters. Function names are
+ASCII identifiers up to 80 characters or the fixed Python module/lambda/comprehension
+names; line numbers are integers 1..1,000,000. Unknown paths/functions are omitted.
+Only filename/function/line and safe counts are retained: no formatted traceback,
+source lines, message/args, locals, environment, request or knowledge bodies.
+Existing FAIL/category/type and bounded missing_module fields remain. Engineering
+tests compile fixed static filenames to simulate those paths; this is not native
+image execution, and no metadata is backfilled into prior failures. Image/helper
+pins, upload/task fixtures, provider substitution and all native gates are unchanged.

@@ -41,7 +41,7 @@ SUBJECT_A = 'b78b3205-2c86-424a-a217-775382c208bd'
 SUBJECT_B = 'd46114bb-e01c-4f69-b67f-ef0d21f62e5e'
 BINDING_A = '6dbedcf8-5263-493f-91f5-6324be037d7c'
 BINDING_B = '5dc301b1-1f29-4618-832d-74b24355964f'
-ORIGIN = 'https://native-probe.invalid'
+ORIGIN = 'https://agent.orbbec.com.cn'
 COOKIE = '__Host-daq_enterprise_session'
 CSRF = 'X-DAQ-Enterprise-CSRF'
 GATES = tuple(f'V{i:02}' for i in range(1, 12))
@@ -61,6 +61,27 @@ def error_category(exc):
     if isinstance(exc, AssertionError):
         return 'assertion_failed'
     return 'internal_error'
+
+
+def private_failure_frames(exc):
+    """Bounded immutable-code metadata only; never format or inspect locals."""
+    frames = []; inspected = 0; truncated = False
+    current = exc.__traceback__
+    while current is not None and inspected < 32:
+        inspected += 1
+        code = current.tb_frame.f_code
+        filename, function, line = code.co_filename, code.co_name, current.tb_lineno
+        path_ok = len(filename) <= 240 and (filename == '/probe.py' or re.fullmatch(
+            r'/app/(?:daq_fae|src|scripts)/(?:[A-Za-z_][A-Za-z_0-9]*/)*[A-Za-z_][A-Za-z_0-9]*\.py', filename))
+        function_ok = len(function) <= 80 and (re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]*', function)
+            or function in {'<module>', '<lambda>', '<listcomp>', '<dictcomp>', '<setcomp>', '<genexpr>'})
+        if path_ok and function_ok and isinstance(line, int) and 1 <= line <= 1000000:
+            frames.append({'file': filename, 'function': function, 'line': line})
+            if len(frames) > 8:
+                del frames[0]; truncated = True
+        current = current.tb_next
+    return {'frames': frames, 'frames_inspected': inspected,
+            'frames_truncated': truncated or current is not None}
 
 
 def fresh_report():
@@ -774,6 +795,9 @@ def runtime_auth():
         require(anon.post('/attachments').status_code == 401, 'anonymous_upload_allowed')
         require(anon.post('/enterprise/session', json={'code': 'a' * 43}).status_code == 403,
                 'origin_contract_failed')
+        require(anon.post('/enterprise/session', json={'code': 'a' * 43},
+                          headers={'Origin': 'https://native-probe.invalid'}).status_code == 403,
+                'wrong_origin_contract_failed')
         # Fetch every deployed static file by its native URL; compare complete
         # uncompressed body with the exact image bytes, never HTTP 200 alone.
         count = 0
@@ -1438,6 +1462,7 @@ def runtime_main(args):
     except BaseException as exc:
         target = Path('/tmp/app-failure.json') if args.phase in {'app', 'scripted-app'} else Path('/probe-output') / (os.environ['DAQ_NATIVE_PROBE_PHASE'] + '.json')
         failure = {'status': 'FAIL', 'category': error_category(exc), 'exception_type': type(exc).__name__}
+        failure.update(private_failure_frames(exc))
         if (isinstance(exc, ModuleNotFoundError) and isinstance(exc.name, str)
                 and len(exc.name) <= 160
                 and re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]*(?:\.[A-Za-z_][A-Za-z_0-9]*)*', exc.name)):
