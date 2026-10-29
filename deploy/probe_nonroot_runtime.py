@@ -8,6 +8,7 @@ not application modules and never modify approved application/knowledge bytes.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import base64
 import hashlib
 import json
@@ -15,7 +16,6 @@ import os
 from pathlib import Path
 import re
 import secrets
-import shutil
 import signal
 import stat
 import subprocess
@@ -39,6 +39,8 @@ ORIGIN = 'https://native-probe.invalid'
 COOKIE = '__Host-daq_enterprise_session'
 CSRF = 'X-DAQ-Enterprise-CSRF'
 GATES = tuple(f'V{i:02}' for i in range(1, 12))
+FIXTURE_MARKER = 'DAQNATIVE736492'
+PROVIDER_EVIDENCE = {'calls': 0, 'reads': []}
 
 
 class ProbeError(RuntimeError):
@@ -61,7 +63,10 @@ def fresh_report():
         'substitutions': ['synthetic_identity_http', 'synthetic_postgres',
                           'synthetic_credentials', 'synthetic_attachment_data'],
         'real_model_calls': 0, 'input_tokens': 0, 'output_tokens': 0,
-        'quality_acceptance': 'NOT_EXECUTED', 'production': 'NOT_EXECUTED'}
+        'quality_acceptance': 'NOT_EXECUTED', 'production': 'NOT_EXECUTED',
+        'optional_capabilities': {'archive_protection': {'status': 'NOT_EXECUTED',
+            'applicability': 'disabled_by_source_configuration'}},
+        'transaction_failure_atomicity': {'status': 'NOT_EXECUTED', 'reason': 'normal_success_scenario_only'}}
 
 
 def atomic_json(path, value):
@@ -79,20 +84,53 @@ def atomic_json(path, value):
         os.close(fd)
 
 
-def docker_command(args, timeout=30):
-    # No inherited Docker context/host, proxy, credentials or shell expansion.
-    env = {'PATH': '/usr/local/bin:/usr/bin:/bin', 'HOME': '/nonexistent',
-           'DOCKER_HOST': 'unix:///var/run/docker.sock', 'LC_ALL': 'C'}
-    process = subprocess.Popen(['docker', *args], stdout=subprocess.PIPE,
-                               stderr=subprocess.PIPE, text=True, env=env,
-                               start_new_session=True)
+class ControllerTerminated(BaseException):
+    pass
+
+
+@contextmanager
+def controlled_signals():
+    previous = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGHUP)}
+    def terminate(signum, frame):
+        # Further termination signals cannot interrupt the reconciliation finally.
+        for sig in previous:
+            signal.signal(sig, signal.SIG_IGN)
+        raise ControllerTerminated()
+    try:
+        for sig in previous:
+            signal.signal(sig, terminate)
+        yield
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+
+
+def boot_identity():
+    try:
+        return Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+    except OSError:
+        return None  # Engineering hosts cannot authorize reboot recovery.
+
+
+def run_process(command, env, timeout):
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               text=True, env=env, start_new_session=True)
     try:
         stdout, stderr = process.communicate(timeout=timeout)
     except BaseException:
-        os.killpg(process.pid, signal.SIGKILL)
-        process.communicate()
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.communicate()  # reap the independently sessioned client
         raise
-    return subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
+    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+
+
+def docker_command(args, timeout=30):
+    env = {'PATH': '/usr/local/bin:/usr/bin:/bin', 'HOME': '/nonexistent',
+           'DOCKER_HOST': 'unix:///var/run/docker.sock', 'LC_ALL': 'C'}
+    return run_process(['docker', *args], env, timeout)
 
 
 class OwnedDocker:
@@ -108,7 +146,8 @@ class OwnedDocker:
         else:
             if recover:
                 raise ProbeError('journal_missing')
-            self.data = {'attempt': uuid.uuid4().hex, 'state': 'active', 'containers': []}
+            self.data = {'attempt': uuid.uuid4().hex, 'state': 'active', 'containers': [],
+                         'boot_id': boot_identity(), 'journal_version': 2}
             self.save()
 
     def save(self):
@@ -138,13 +177,15 @@ class OwnedDocker:
         if self.data['state'] != 'active':
             raise ProbeError('attempt_blocked')
         item = {'role': role, 'name': 'daq-probe-' + self.data['attempt'] + '-' + role,
-                'image': image, 'id': None, 'state': 'create_intent'}
+                'image': image, 'id': None, 'state': 'create_intent', 'create_outcome': 'unknown', 'policy_plan': policy_plan(flags)}
         self.data['containers'].append(item); self.save()
         args = ['create', '--name', item['name'], '--label', OWNER_LABEL + '=' + self.data['attempt'],
                 '--label', OWNER_LABEL + '.role=' + role, '--pull', 'never', *flags, image, *command]
         failure = None
         try:
             result = self.run(args)
+            item['create_outcome'] = 'unknown' if result.returncode else 'acknowledged'
+            self.save()
             if result.returncode:
                 failure = ProbeError('create_failed')
         except Exception as exc:
@@ -158,7 +199,8 @@ class OwnedDocker:
         except BaseException:
             self.data['state'] = 'blocked'; self.save()
             raise
-        item['id'] = obj['Id']; item['state'] = 'created'; self.save()
+        item['id'] = obj['Id']; item['state'] = 'created'; item['create_outcome'] = 'materialized'; self.save()
+        item['effective_policy'] = audit_plan(obj, item['policy_plan']); self.save()
         return item['id']
 
     def item(self, cid):
@@ -169,8 +211,14 @@ class OwnedDocker:
         if obj is None:
             raise ProbeError('owned_container_missing')
         self.owned(item, obj)
+        audit_plan(obj, item['policy_plan'])
         if self.run(['start', cid]).returncode:
             raise ProbeError('start_failed')
+        observed = self.inspect(cid)
+        require(observed is not None, 'started_container_missing')
+        self.owned(item, observed)
+        item['effective_policy'] = audit_plan(observed, item['policy_plan'])
+        item['runtime_state'] = {key: observed['State'].get(key) for key in ('Pid', 'Status', 'StartedAt', 'ExitCode')}
         item['state'] = 'started'; self.save()
 
     def wait(self, cid, timeout=120):
@@ -193,11 +241,19 @@ class OwnedDocker:
             raise ProbeError('stop_unconfirmed')
         item['state'] = 'stopped'; self.save()
 
-    def cleanup(self):
+    def cleanup(self, *, after_reboot=False):
+        changed_boot = bool(after_reboot and self.data.get('boot_id') and boot_identity()
+                            and self.data['boot_id'] != boot_identity())
+        if changed_boot:
+            self.data['recovery_evidence'] = {'prior_boot_id': self.data['boot_id'],
+                'observed_boot_id': boot_identity(), 'basis': 'kernel_boot_changed'}
+            self.save()
         try:
             for item in reversed(self.data['containers']):
                 obj = self.inspect(item['name'])
                 if obj is None:
+                    if item['id'] is None and not changed_boot:
+                        raise ProbeError('unresolved_create')
                     # An exact name absence is sufficient only if there was no
                     # recorded full ID, or that ID also is absent.
                     if item['id'] and self.inspect(item['id']) is not None:
@@ -234,6 +290,51 @@ def security_flags(pg_id):
 
 
 
+def mount_identity(path):
+    st = os.stat(path, follow_symlinks=False)
+    require(not stat.S_ISLNK(st.st_mode), 'mount_source_symlink')
+    return {'dev': st.st_dev, 'inode': st.st_ino, 'mode': st.st_mode, 'uid': st.st_uid, 'gid': st.st_gid}
+
+
+def policy_plan(flags):
+    def values(key): return [flags[i + 1] for i, value in enumerate(flags) if value == key]
+    def first(key, default): return next(iter(values(key)), default)
+    mounts = []
+    for value in values('--mount'):
+        fields = dict(piece.split('=', 1) if '=' in piece else (piece, True) for piece in value.split(','))
+        mounts.append({'source': fields['source'], 'target': fields['target'], 'rw': not fields.get('readonly', False),
+                       'identity': mount_identity(fields['source'])})
+    return {'user': first('--user', ''), 'readonly': '--read-only' in flags, 'cap_drop': values('--cap-drop'),
+            'security_opt': values('--security-opt'), 'network': first('--network', 'bridge'),
+            'pid': first('--pid', ''), 'log': first('--log-driver', 'json-file'),
+            'tmpfs': dict(value.split(':', 1) for value in values('--tmpfs')), 'mounts': mounts}
+
+
+def audit_plan(obj, plan):
+    host = obj['HostConfig']
+    require(obj['Config']['User'] == plan['user'] and host['ReadonlyRootfs'] == plan['readonly']
+            and (host.get('CapDrop') or []) == plan['cap_drop'] and not host.get('CapAdd')
+            and (host.get('SecurityOpt') or []) == plan['security_opt'] and not host.get('GroupAdd')
+            and not host.get('Privileged') and not host.get('PortBindings')
+            and host['NetworkMode'] == plan['network'] and host.get('PidMode', '') == plan['pid']
+            and host['LogConfig']['Type'] == plan['log'], 'effective_daemon_policy_mismatch')
+    expected_tmp = {key: sorted(value.split(',')) for key, value in plan['tmpfs'].items()}
+    actual_tmp = {key: sorted(value.split(',')) for key, value in (host.get('Tmpfs') or {}).items()}
+    require(actual_tmp == expected_tmp, 'effective_tmpfs_policy_mismatch')
+    mounts = {item['Destination']: item for item in obj['Mounts'] if item.get('Type') != 'tmpfs'}
+    require(set(mounts) == {item['target'] for item in plan['mounts']}, 'effective_mount_set_mismatch')
+    for item in plan['mounts']:
+        actual = mounts[item['target']]
+        require(actual['Source'] == item['source'] and actual['RW'] == item['rw']
+                and mount_identity(actual['Source']) == item['identity'], 'effective_mount_source_mismatch')
+    return {'user': obj['Config']['User'], 'readonly': host['ReadonlyRootfs'],
+            'network': host['NetworkMode'], 'pid': host.get('PidMode', ''),
+            'cap_drop': host.get('CapDrop') or [], 'security_opt': host.get('SecurityOpt') or [],
+            'log': host['LogConfig']['Type'], 'tmpfs': dict(host.get('Tmpfs') or {}),
+            'mounts': [{'source': item['Source'], 'target': item['Destination'], 'rw': item['RW'],
+                        'identity': mount_identity(item['Source'])} for item in mounts.values()]}
+
+
 def audit_candidate(obj, pg_id):
     config = obj['Config']; host = obj['HostConfig']
     require(config['User'] == '21081:21081' and host['ReadonlyRootfs'] is True
@@ -248,22 +349,153 @@ def audit_candidate(obj, pg_id):
     require(actual == expected, 'daemon_mount_policy_mismatch')
 
 
+ASSET_HELPER_SHA = '451dafbd88b4f3b07836940ad4500b34af63ae9796f0f676888435a06117061b'
+ASSET_HELPER_COMMIT = '07b2fc354fc3e5e8609c2a03f15b3450d3b884ce'
+ASSET_FILE_LIMIT = 16 * 1024**2
+ASSET_TOTAL_LIMIT = 32 * 1024**2
+ASSET_NODE_LIMIT = 4096
+ASSET_DEPTH_LIMIT = 32
+SYNTHETIC_DISK_BUDGET = 256 * 1024**2
+DISK_RESERVE = 1024 * 1024**2
+TRUSTED_UID = 0
+_ASSET_HELPER = None
+
+
+def asset_helpers():
+    global _ASSET_HELPER
+    if _ASSET_HELPER is None:
+        import types
+        path = Path(__file__).with_name('security_assets.py')
+        raw = path.read_bytes()
+        require(hashlib.sha256(raw).hexdigest() == ASSET_HELPER_SHA, 'asset_helper_identity_mismatch')
+        module = types.ModuleType('daq_reviewed_security_assets')
+        module.__file__ = str(path)
+        exec(compile(raw, str(path), 'exec'), module.__dict__)
+        _ASSET_HELPER = module
+    return _ASSET_HELPER
+
+
+def strict_path(value):
+    try:
+        asset_helpers()._parts(str(value))
+    except Exception:
+        raise ProbeError('canonical_path_required') from None
+    require(',' not in str(value), 'canonical_path_required')
+    return Path(value)
+
+
+class BoundedTree:
+    """Stable native handoff v1; reuses reviewed same-checkout copy primitives.
+
+    Root-controlled prepared RO roots; synthetic RW roots require their root-
+    controlled parent and stopped writers. Budget/identity/membership preflight
+    is complete before any destination publication or Docker creation.
+    """
+    def __init__(self, path, *, trusted):
+        self.path = strict_path(path); self.h = asset_helpers(); self.fd = None
+        parent, name = self.h._parent(str(self.path), trusted=True)
+        try:
+            self.fd = self.h._open_dir(str(self.path), trusted=trusted)
+            self.identity = self.h._metadata(os.fstat(self.fd))
+            require(self.identity == self.h._metadata(os.stat(name, dir_fd=parent, follow_symlinks=False)),
+                    'source_root_identity_changed')
+        finally:
+            os.close(parent)
+        try:
+            self.members = self.h._snapshot_target_tree(str(self.path))
+            require(self.members[''] == self.identity and len(self.members) <= ASSET_NODE_LIMIT,
+                    'asset_budget_or_identity_invalid')
+            self.total = 0; self.expected = {}
+            for rel, meta in self.members.items():
+                require(rel.count('/') <= ASSET_DEPTH_LIMIT, 'asset_depth_budget_exceeded')
+                if trusted:
+                    require(meta['uid'] == TRUSTED_UID and not meta['mode'] & 0o022,
+                            'asset_owner_or_write_access_invalid')
+                if rel and not rel.endswith('/'):
+                    self.total += meta['size']
+                    require(meta['size'] <= ASSET_FILE_LIMIT and self.total <= ASSET_TOTAL_LIMIT,
+                            'asset_byte_budget_exceeded')
+            # All sizes/types/ownership are validated before any body read.
+            for rel, meta in self.members.items():
+                if rel and not rel.endswith('/'):
+                    raw, st = self.h._read_regular(str(self.path / rel), ASSET_FILE_LIMIT)
+                    require(self.h._metadata(st) == meta, 'source_file_identity_changed')
+                    self.expected[rel] = {'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
+            self.verify()
+        except BaseException:
+            os.close(self.fd); self.fd = None; raise
+
+    def __enter__(self): return self
+    def __exit__(self, *_):
+        if self.fd is not None:
+            os.close(self.fd); self.fd = None
+
+    def verify(self):
+        records = {rel: {**rec, 'source': self.members[rel]} for rel, rec in self.expected.items()}
+        dirs = {rel: meta for rel, meta in self.members.items() if not rel or rel.endswith('/')}
+        self.h._verify_tree(self.fd, records, directories=dirs)
+        require(self.h._snapshot_target_tree(str(self.path)) == self.members, 'source_membership_changed')
+
+    def copy(self, destination, *, owner, mode):
+        destination = strict_path(destination)
+        self.verify()
+        parent, name = self.h._parent(str(destination), trusted=True)
+        try:
+            # Physical parent ancestry rejects bind aliases as well as names.
+            cursor = os.dup(parent)
+            try:
+                while True:
+                    st = os.fstat(cursor)
+                    require((st.st_dev, st.st_ino) != (self.identity['dev'], self.identity['inode']),
+                            'destination_inside_source')
+                    up = os.open('..', self.h.DIR_FLAGS, dir_fd=cursor)
+                    same = (st.st_dev, st.st_ino) == (os.fstat(up).st_dev, os.fstat(up).st_ino)
+                    os.close(cursor); cursor = up
+                    if same: break
+            finally: os.close(cursor)
+            disk = os.fstatvfs(parent)
+            require(disk.f_bavail * disk.f_frsize >= self.total + SYNTHETIC_DISK_BUDGET + DISK_RESERVE,
+                    'disk_budget_insufficient')
+            out = self.h._mkdir_at(parent, name, owner, UID, 0o750 if owner == 0 else 0o700)
+            try:
+                records = self.h._tree(self.fd, out, self.expected, owner, UID, mode, [0, 0])
+                self.verify()
+                identity = self.h._metadata(os.fstat(out))
+                require(identity == self.h._metadata(os.stat(name, dir_fd=parent, follow_symlinks=False)),
+                        'destination_identity_changed')
+            finally: os.close(out)
+        finally: os.close(parent)
+        return {'source': self.members, 'files': records,
+                'destination': self.h._snapshot_target_tree(str(destination))}
+
+
+def validate_release_handoff(tree, kind):
+    # Stable native handoff v1, derived from the fixed current-source inventory
+    # in design section 9. A drift needs review; it is never auto-expanded.
+    count, size = {'main': (2, 9412265), 'sdk': (15, 1329624)}[kind]
+    require(len(tree.expected) == count and tree.total == size, 'release_handoff_inventory_mismatch')
+    directories = {'', 'releases/'}
+    for path, rec in tree.expected.items():
+        if path == 'active.json': continue
+        match = re.fullmatch(r'releases/([a-f0-9]{64})/manifest.json', path)
+        require(match is not None and rec['sha256'] == match.group(1), 'release_handoff_member_invalid')
+        directories.add('releases/' + match.group(1) + '/')
+    require({path for path in tree.members if not path or path.endswith('/')} == directories,
+            'release_handoff_directory_mismatch')
+    raw, _ = tree.h._read_regular(str(tree.path / 'active.json'), 4096)
+    pointer = json.loads(raw)
+    require(set(pointer) == {'release_id'} and
+            'releases/' + str(pointer['release_id']) + '/manifest.json' in tree.expected,
+            'release_handoff_active_invalid')
+    tree.verify()
+
+
 def tree_digest(root):
-    root = Path(root)
-    if any(p.is_symlink() for p in (root, *root.parents)):
-        raise ProbeError('asset_path_invalid')
-    digest = hashlib.sha256()
-    for path in [root, *sorted(root.rglob('*'))]:
-        info = path.lstat()
-        if not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)) or (path.is_file() and info.st_nlink != 1):
-            raise ProbeError('asset_type_invalid')
-        digest.update(str(path.relative_to(root)).encode() + b'\0')
-        digest.update(str((info.st_mode, info.st_uid, info.st_gid, info.st_size)).encode() + b'\0')
-        if path.is_file():
-            with path.open('rb') as stream:
-                for chunk in iter(lambda: stream.read(1024 * 1024), b''):
-                    digest.update(chunk)
-    return digest.hexdigest()
+    try:
+        with BoundedTree(root, trusted=False) as tree:
+            return hashlib.sha256(json.dumps({'members': tree.members, 'files': tree.expected}, sort_keys=True).encode()).hexdigest()
+    except Exception:
+        raise ProbeError('asset_inventory_invalid') from None
 
 
 def identity_valid(status):
@@ -319,6 +551,13 @@ def identity_server(port=8082):
         def log_message(self, *args):
             pass
 
+        def do_GET(self):
+            if self.path != '/probe-metrics':
+                self.send_error(404); return
+            raw = json.dumps(PROVIDER_EVIDENCE).encode()
+            self.send_response(200); self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(raw))); self.end_headers(); self.wfile.write(raw)
+
         def do_POST(self):
             code = 403
             body = {}
@@ -360,7 +599,9 @@ def runtime_app(scripted=False):
     import logging
     import uvicorn
     warning_path = Path('/tmp/app-warnings.json')
+    persistent_warning = Path('/app/data/attachments') / ('.probe-' + os.environ['DAQ_NATIVE_PROBE_PHASE'] + '-warnings.json')
     atomic_json(warning_path, {'warning_count': 0})
+    atomic_json(persistent_warning, {'warning_count': 0})
     class WarningCapture(logging.Handler):
         def __init__(self):
             super().__init__(logging.WARNING)
@@ -368,6 +609,7 @@ def runtime_app(scripted=False):
         def emit(self, record):
             self.count += 1
             atomic_json(warning_path, {'warning_count': self.count})
+            atomic_json(persistent_warning, {'warning_count': self.count})
     logging.getLogger().addHandler(WarningCapture())
     server = identity_server()
     thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
@@ -384,7 +626,18 @@ def runtime_app(scripted=False):
         server.shutdown(); thread.join(timeout=5); server.server_close()
 
 
+def checked_read_receipt(payload, source_id, locator, expected_text):
+    require(isinstance(payload, dict) and payload.get('status') == 'ok', 'read_receipt_not_ok')
+    value = payload.get('content', {})
+    require(value.get('source_id') == source_id and value.get('locator') == locator
+            and value.get('text', '').strip() == expected_text.strip(), 'read_receipt_content_mismatch')
+    return {'source_id': source_id, 'locator': locator,
+            'text_sha256': hashlib.sha256(expected_text.strip().encode()).hexdigest()}
+
+
 def scripted_chat(self, messages, tools=None, required_tool=None):
+    PROVIDER_EVIDENCE['calls'] += 1
+    require(PROVIDER_EVIDENCE['calls'] <= 64, 'synthetic_provider_call_limit')
     if required_tool == 'submit_daq_request_schema':
         name = required_tool
         arguments = {'confidence': 'high', 'attachment_dependency': 'required_for_answer',
@@ -392,20 +645,26 @@ def scripted_chat(self, messages, tools=None, required_tool=None):
     else:
         previous = [item for item in messages if item.get('role') == 'tool']
         if not previous:
-            name, arguments = 'search_attachments', {'query': 'status=ready'}
-        elif not any(item.get('tool_call_id') == 'probe-read' for item in previous):
-            # The search producer is consumed as the actual serialized tool
-            # receipt, not by reading the attachment directly in this adapter.
-            payload = json.loads(previous[-1]['content'])
-            content = payload.get('content', payload)
-            hits = content.get('hits', [])
-            require(bool(hits), 'scripted_attachment_evidence_missing')
-            name, arguments = 'read_attachment', {
-                'source_id': hits[0]['source_id'], 'locator': hits[0]['locator']}
+            name, arguments = 'search_attachments', {'query': FIXTURE_MARKER}
         else:
-            name, arguments = 'submit_answer', {
-                'outcome': 'safe_abstained', 'missing': 'Synthetic engineering fixture has no product conclusion.',
-                'next_steps': 'Retain the attachment evidence for the next turn.'}
+            search = next((item for item in previous if item.get('tool_call_id') == 'probe-search_attachments'), None)
+            require(search is not None, 'scripted_search_receipt_missing')
+            payload = json.loads(search['content'])
+            require(payload.get('status') == 'ok', 'scripted_search_not_ok')
+            hits = payload.get('content', {}).get('hits', [])
+            expected_text = 'status=ready\n' + FIXTURE_MARKER
+            locator = {'line_start': 1, 'line_end': 2}
+            require(len(hits) == 1 and hits[0].get('locator') == locator
+                    and hits[0].get('text', '').strip() == expected_text, 'scripted_search_content_mismatch')
+            read = next((item for item in previous if item.get('tool_call_id') == 'probe-read'), None)
+            if read is None:
+                name, arguments = 'read_attachment', {'source_id': hits[0]['source_id'], 'locator': locator}
+            else:
+                evidence = checked_read_receipt(json.loads(read['content']), hits[0]['source_id'], locator, expected_text)
+                PROVIDER_EVIDENCE['reads'].append(evidence)
+                name, arguments = 'submit_answer', {
+                    'outcome': 'safe_abstained', 'missing': 'Synthetic engineering fixture has no product conclusion.',
+                    'next_steps': 'Retain the attachment evidence for the next turn.'}
     yield {'type': 'tool_call', 'id': 'probe-read' if name == 'read_attachment' else 'probe-' + name,
            'name': name, 'arguments': arguments}
     yield {'type': 'stop', 'stop_reason': 'tool_use', 'usage': None}
@@ -488,7 +747,7 @@ def runtime_auth():
     client, _ = http_client()
     with client:
         require(client.get('/enterprise/session').status_code == 200, 'session_http_failed')
-        require(client.get('/history').status_code == 200, 'authenticated_history_failed')
+        require(client.get('/authenticated/conversations').status_code == 200, 'authenticated_history_failed')
         require(client.post('/attachments', headers={CSRF: 'invalid'}).status_code == 403,
                 'csrf_contract_failed')
     return {'static_files_verified': count}
@@ -631,12 +890,12 @@ def upload_fixtures():
     import docx
     import openpyxl
     from PIL import Image, ImageDraw
-    text = b'status=ready\nNATIVE PROBE READY\n'
+    text = ('status=ready\n' + FIXTURE_MARKER + '\n').encode()
     pdf = fitz.open(); page = pdf.new_page(); page.insert_text((72, 72), text.decode())
     pdf_bytes = pdf.tobytes(); pdf.close()
     document = docx.Document(); document.add_paragraph(text.decode()); buffer = io.BytesIO(); document.save(buffer)
     docx_bytes = buffer.getvalue()
-    workbook = openpyxl.Workbook(); workbook.active.append(['status', 'ready']); buffer = io.BytesIO(); workbook.save(buffer)
+    workbook = openpyxl.Workbook(); workbook.active.append(['status', 'ready', FIXTURE_MARKER]); buffer = io.BytesIO(); workbook.save(buffer)
     xlsx_bytes = buffer.getvalue()
     image = Image.new('RGB', (400, 200), 'white'); draw = ImageDraw.Draw(image)
     for y in (20, 60, 100, 140):
@@ -644,11 +903,90 @@ def upload_fixtures():
     image = image.resize((1600, 800), Image.Resampling.NEAREST)
     buffer = io.BytesIO(); image.save(buffer, format='PNG', compress_level=0)
     require(len(buffer.getvalue()) > 1024 * 1024, 'spool_fixture_too_small')
-    return [('probe.txt', text, 'text/plain'), ('probe.csv', b'status,value\nready,1\n', 'text/csv'),
+    return [('probe.txt', text, 'text/plain'), ('probe.csv', ('status,value\nready,' + FIXTURE_MARKER + '\n').encode(), 'text/csv'),
             ('probe.pdf', pdf_bytes, 'application/pdf'),
             ('probe.docx', docx_bytes, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'),
             ('probe.xlsx', xlsx_bytes, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'),
             ('probe.png', buffer.getvalue(), 'image/png')]
+
+
+def fixture_contract(name, content, *, owner=SUBJECT_A):
+    extension = name.rsplit('.', 1)[1]
+    locator = {'txt': {'line_start': 1, 'line_end': len(content.decode().splitlines())} if extension == 'txt' else {},
+               'csv': {'sheet': 'CSV', 'cell_range': 'A1:B2'}, 'pdf': {'page': 1},
+               'docx': {'paragraph_range': '1-1'}, 'xlsx': {'sheet': 'Sheet', 'cell_range': 'A1:C1'},
+               'png': {'region_label': 'ocr'}}[extension]
+    expected = (content.decode().strip() if extension == 'txt' else
+                'status\tvalue\nready\t' + FIXTURE_MARKER if extension == 'csv' else
+                'A1\tstatus\nB1\tready\nC1\t' + FIXTURE_MARKER if extension == 'xlsx' else
+                'NATIVE PROBE READY' if extension == 'png' else 'status=ready\n' + FIXTURE_MARKER)
+    return {'name': name, 'sha256': hashlib.sha256(content).hexdigest(), 'size': len(content),
+            'owner': owner, 'locator': locator, 'expected_text': expected, 'image': extension == 'png'}
+
+
+def consume_fixture(store, aid, contract):
+    from src.agent.attachment_tools import AttachmentTools
+    from src.attachments.models import AttachmentDescriptor
+    manifest = store.get(aid)
+    raw = store.read_bytes(aid)
+    require(manifest.owner_subject_id == contract['owner'] and manifest.status == 'ready'
+            and len(raw) == contract['size'] and manifest.sha256 == contract['sha256']
+            and hashlib.sha256(raw).hexdigest() == contract['sha256'], 'consumer_original_mismatch')
+    chunks = store.read_chunks(aid)
+    require(len(chunks) == 1, 'consumer_chunk_count_mismatch')
+    chunk = chunks[0]
+    require(chunk.source_id == manifest.source_id and chunk.locator.as_dict() == contract['locator']
+            and chunk.content_sha256 == hashlib.sha256(chunk.text.encode()).hexdigest(),
+            'consumer_chunk_identity_mismatch')
+    expected = contract['expected_text']
+    require((expected in chunk.text if contract['image'] else chunk.text.strip() == expected),
+            'consumer_chunk_text_mismatch')
+    if contract['image']:
+        import io
+        from PIL import Image
+        normalized = store.read_normalized_image(aid)
+        require(len(normalized) == manifest.normalized_size_bytes and 'ocr_unavailable' not in manifest.warnings,
+                'consumer_normalized_size_or_ocr_mismatch')
+        try:
+            with Image.open(io.BytesIO(normalized)) as image:
+                image.load()
+                require(image.size == (manifest.normalized_width, manifest.normalized_height)
+                        and {'PNG': 'image/png', 'JPEG': 'image/jpeg'}.get(image.format) == manifest.normalized_media_type,
+                        'consumer_normalized_metadata_mismatch')
+        except (OSError, ValueError):
+            raise ProbeError('consumer_normalized_decode_failed') from None
+    tools = AttachmentTools([AttachmentDescriptor.from_manifest(manifest)], store)
+    receipt = tools.dispatch('read_attachment', {'source_id': manifest.source_id, 'locator': contract['locator']})
+    # The real consumer must return exactly the validated chunk; truthy/ready is insufficient.
+    read = checked_read_receipt(receipt.to_payload(), manifest.source_id, contract['locator'], chunk.text)
+    return {'attachment_id': aid, **read, 'original_sha256': contract['sha256']}
+
+
+def runtime_store():
+    from src.attachments.store import AttachmentStore
+    from src.attachments.models import AttachmentLimits
+    return AttachmentStore(Path('/app/data/attachments'), AttachmentLimits())
+
+
+def provider_metrics():
+    import httpx
+    response = httpx.get('http://127.0.0.1:8082/probe-metrics', timeout=3, trust_env=False)
+    require(response.status_code == 200, 'provider_metrics_unavailable')
+    return response.json()
+
+
+def process_record(pid, cmd, status, starttime, namespace):
+    role = ('main' if pid == 1 else 'spawn' if b'multiprocessing.spawn' in cmd else 'tesseract')
+    if pid == 1:
+        require(b'/probe.py' in cmd.split(b'\0') and b'_runtime' in cmd.split(b'\0')
+                and ({b'app', b'scripted-app'} & set(cmd.split(b'\0'))), 'main_entry_identity_mismatch')
+    require(identity_valid(status), 'process_identity_failed')
+    require(starttime.isdigit() and all(re.fullmatch(kind + r':\[\d+\]', namespace[kind]) for kind in ('pid', 'net')),
+            'process_namespace_identity_invalid')
+    keys = ('Uid', 'Gid', 'Groups', 'CapEff', 'CapPrm', 'CapBnd', 'NoNewPrivs', 'PPid')
+    return {'pid': pid, 'ppid': int(status['PPid']), 'starttime': starttime, 'role': role,
+            'status': {key: status.get(key, '') for key in keys}, 'namespace': namespace,
+            'entrypoint_verified': role == 'main'}
 
 
 class ProcessObservation:
@@ -656,6 +994,7 @@ class ProcessObservation:
         import threading
         self.stop_event = threading.Event()
         self.seen = {}
+        self.records = {}
         self.error = None
         self.rss_kib = 0
         self.tmp_bytes = 0
@@ -674,7 +1013,11 @@ class ProcessObservation:
                             continue
                         status = dict(line.split(':', 1) for line in (path / 'status').read_text().splitlines() if ':' in line)
                         status = {key: value.strip() for key, value in status.items()}
-                        require(identity_valid(status), 'process_identity_failed')
+                        start = (path / 'stat').read_text().rsplit(')', 1)[1].split()[19]
+                        ns = {kind: os.readlink(path / 'ns' / kind) for kind in ('pid', 'net')}
+                        record = process_record(int(path.name), cmd, status, start, ns)
+                        self.records[(int(path.name), start)] = record
+                        require(len(self.records) <= 64, 'process_evidence_budget_exceeded')
                         self.seen[role] = True
                         total += int(status.get('VmRSS', '0 kB').split()[0])
                     except (FileNotFoundError, ProcessLookupError):
@@ -691,11 +1034,24 @@ class ProcessObservation:
 
     def __exit__(self, *_):
         self.stop_event.set(); self.thread.join(timeout=5)
+        if Path('/probe-output').is_dir():
+            phase = os.environ['DAQ_NATIVE_PROBE_PHASE']
+            atomic_json(Path('/probe-output') / ('process-observations-' + phase + '.json'),
+                        {'processes': list(self.records.values()), 'roles': sorted(self.seen),
+                         'error': self.error, 'rss_peak_sampled_kib': self.rss_kib,
+                         'tmp_peak_sampled_bytes': self.tmp_bytes})
 
     def result(self):
         require(self.error is None, self.error or 'process_observation_failed')
         require(set(self.seen) == {'main', 'spawn', 'tesseract'}, 'process_evidence_missing')
-        return {'roles': sorted(self.seen), 'rss_peak_sampled_kib': self.rss_kib,
+        records = list(self.records.values())
+        main = next(item for item in records if item['role'] == 'main')
+        spawns = {item['pid'] for item in records if item['role'] == 'spawn'}
+        require(all(item['namespace'] == main['namespace'] and
+                    (item['pid'] == 1 or (item['role'] == 'spawn' and item['ppid'] == 1) or
+                     (item['role'] == 'tesseract' and item['ppid'] in spawns)) for item in records),
+                'process_parent_namespace_mismatch')
+        return {'roles': sorted(self.seen), 'processes': list(self.records.values()), 'rss_peak_sampled_kib': self.rss_kib,
                 'tmp_peak_sampled_bytes': self.tmp_bytes, 'sampling_ms': 5,
                 'measurement': 'sampled_lower_bound'}
 
@@ -703,7 +1059,8 @@ class ProcessObservation:
 def runtime_upload():
     client, session = http_client()
     other, _ = http_client('b')
-    ids = []
+    ids = []; contracts = {}
+    store = runtime_store()
     with client, other, ProcessObservation() as observer:
         input_root = Path('/probe-output/inputs')
         input_root.mkdir(mode=0o700)
@@ -725,6 +1082,10 @@ def runtime_upload():
                     and persisted['sha256'] == hashlib.sha256(content).hexdigest()
                     and persisted['status'] == 'ready' and persisted['owner_subject_id'] == SUBJECT_A,
                     'attachment_persistence_failed')
+            contract = fixture_contract(name, content)
+            consume_fixture(store, aid, contract)
+            contracts[aid] = contract
+            atomic_json(Path('/probe-output/attachment-contracts.json'), contracts)
             chunks = json.loads((folder / 'chunks.json').read_text())
             require(bool(chunks), 'attachment_chunks_missing')
             require('ocr_unavailable' not in persisted.get('warnings', []), 'ocr_unavailable')
@@ -744,33 +1105,96 @@ def runtime_upload():
 
 
 def runtime_seed():
-    from src.attachments.models import AttachmentLimits
+    from src.attachments.models import AttachmentLimits, AttachmentChunk, AttachmentLocator
     from src.attachments.store import AttachmentStore
-    # Existing parser HTTP path is exercised separately. This fixture deliberately
-    # seeds a nonempty old snapshot through the real store, not successful DB rows.
-    root = Path('/app/data/attachments')
-    store = AttachmentStore(root, AttachmentLimits())
-    manifest = store.create_pending('old.txt', 'text/plain', b'status=ready\nold synthetic attachment',
-                                    kind='text', owner_subject_id=SUBJECT_A)
-    from src.attachments.models import AttachmentChunk, AttachmentLocator
-    text = 'status=ready\nold synthetic attachment'
-    chunk = AttachmentChunk(chunk_id='old-chunk', source_id=manifest.source_id,
-                            locator=AttachmentLocator(line_start=1, line_end=2), text=text,
-                            content_sha256=hashlib.sha256(text.encode()).hexdigest(), token_estimate=10)
-    store.commit_ready(manifest.attachment_id, chunks=[chunk], parse_coverage='full',
-                     parser_name='synthetic-fixture', parser_version='1')
     from datetime import datetime, timezone, timedelta
+    root = Path('/app/data/attachments'); store = AttachmentStore(root, AttachmentLimits())
+    contracts = {}
+    def seed_text(target, name, text):
+        manifest = target.create_pending(name, 'text/plain', text.encode(), kind='text', owner_subject_id=SUBJECT_A)
+        chunk = AttachmentChunk(chunk_id='synthetic-' + name, source_id=manifest.source_id,
+                                locator=AttachmentLocator(line_start=1, line_end=2), text=text,
+                                content_sha256=hashlib.sha256(text.encode()).hexdigest(), token_estimate=10)
+        target.commit_ready(manifest.attachment_id, chunks=[chunk], parse_coverage='full',
+                            parser_name='synthetic-fixture', parser_version='1')
+        contracts[manifest.attachment_id] = fixture_contract(name, text.encode())
+        return manifest.attachment_id
+    retained = seed_text(store, 'old.txt', 'status=ready\n' + FIXTURE_MARKER + '-legacy')
+    disposable = seed_text(store, 'discard.txt', 'status=ready\n' + FIXTURE_MARKER + '-discard')
     old_clock = datetime.now(timezone.utc) - timedelta(seconds=120)
     expired_store = AttachmentStore(root, AttachmentLimits(ttl_seconds=1), clock=lambda: old_clock)
-    expired = expired_store.create_pending('expired.txt', 'text/plain', b'expired synthetic',
-                                           kind='text', owner_subject_id=SUBJECT_A)
-    expired_store.commit_ready(expired.attachment_id, chunks=[chunk], parser_name='synthetic-fixture')
+    expired = seed_text(expired_store, 'expired.txt', 'status=ready\n' + FIXTURE_MARKER + '-expired')
     (root / '.partial-synthetic').mkdir(); (root / '.partial-synthetic/incomplete').write_text('fixture')
     (root / '.batch-synthetic').mkdir(); (root / '.batch-synthetic/incomplete').write_text('fixture')
-    crypto_seed()
-    runtime_trace('old-root-seed')
-    atomic_json(Path('/probe-output/seed.json'), {'attachment_id': manifest.attachment_id, 'expired_id': expired.attachment_id})
-    return {'seeded': 1, 'interrupted_directories': 2}
+    crypto_seed(); runtime_trace('old-root-seed')
+    atomic_json(Path('/probe-output/seed.json'), {'attachment_id': retained, 'disposable_id': disposable,
+                                               'expired_id': expired, 'contracts': contracts})
+    return {'seeded': 3, 'interrupted_directories': 2}
+
+
+def runtime_migrated():
+    store = runtime_store(); client, _ = http_client(); other, _ = http_client('b')
+    seed = json.loads(Path('/probe-output/seed.json').read_text())
+    evidence = []
+    with client, other:
+        for aid in (seed['attachment_id'], seed['disposable_id']):
+            evidence.append(consume_fixture(store, aid, seed['contracts'][aid]))
+            require(client.get('/attachments/' + aid).status_code == 200, 'migrated_owner_access_failed')
+            require(other.get('/attachments/' + aid).status_code == 403 and
+                    other.delete('/attachments/' + aid).status_code == 403, 'migrated_other_access_allowed')
+        require(client.delete('/attachments/' + seed['disposable_id']).status_code == 204,
+                'migrated_owner_delete_failed')
+        for aid in (seed['disposable_id'], seed['expired_id']):
+            require(client.get('/attachments/' + aid).status_code in {404, 410}
+                    and not (store.root / aid).exists(), 'migrated_removed_data_visible')
+    atomic_json(Path('/probe-output/deleted-ids.json'), [seed['disposable_id'], seed['expired_id']])
+    return {'actual_store_tool_reads': evidence, 'owner_other_delete_verified': True}
+
+
+def verify_current_consumers(client, other):
+    store = runtime_store(); seed = json.loads(Path('/probe-output/seed.json').read_text())
+    contracts = json.loads(Path('/probe-output/attachment-contracts.json').read_text())
+    ids = json.loads(Path('/probe-output/attachment-ids.json').read_text())
+    contracts.pop(ids[1])  # Intentionally deleted nonroot CSV.
+    contracts[seed['attachment_id']] = seed['contracts'][seed['attachment_id']]
+    root_record = Path('/probe-output/root-attachment.json')
+    if root_record.exists():
+        record = json.loads(root_record.read_text()); contracts[record['attachment_id']] = record['contract']
+    evidence = []
+    for aid, contract in contracts.items():
+        evidence.append(consume_fixture(store, aid, contract))
+        require(client.get('/attachments/' + aid).status_code == 200, 'current_owner_access_failed')
+        require(other.get('/attachments/' + aid).status_code == 403 and
+                other.delete('/attachments/' + aid).status_code == 403, 'current_other_access_allowed')
+    removed = [*json.loads(Path('/probe-output/deleted-ids.json').read_text()), ids[1]]
+    for aid in removed:
+        require(not (store.root / aid).exists() and client.get('/attachments/' + aid).status_code in {404, 410},
+                'deleted_attachment_resurrected')
+    return evidence
+
+
+def task_snapshot(sid, aid):
+    from src.storage.authenticated_conversations import AuthenticatedConversationRepository, ConversationContentCodec
+    from src.platform_identity.models import PlatformSubject
+    from daq_fae.durable_state import DaqDurableState
+    codec = ConversationContentCodec.from_file('/run/daq-secrets/content-keyring.json')
+    subject = PlatformSubject(subject_id=uuid.UUID(SUBJECT_A), subject_type='enterprise_member',
+        internal_user_id=uuid.UUID(SUBJECT_A), identity_binding_id=uuid.UUID(BINDING_A),
+        agent_id='ai-daq-fae-agent', active=True)
+    database = os.environ['DAQ_DATABASE_URL']
+    restored = AuthenticatedConversationRepository(database, codec=codec).load_for_subject(sid, subject.subject_id)
+    checkpoint = DaqDurableState(database, codec=codec).load_context(subject, sid)
+    require(checkpoint is not None and checkpoint.state.task_context is not None
+            and restored.active_attachment_ids == [aid] and restored.owner_subject_id == SUBJECT_A,
+            'restored_context_attachment_mismatch')
+    manifest = runtime_store().get(aid)
+    require(manifest.bound_session_id == sid and manifest.owner_subject_id == SUBJECT_A,
+            'restored_attachment_binding_mismatch')
+    def digest(value):
+        return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+    return {'context_revision': checkpoint.revision, 'context_sha256': digest(checkpoint.state.model_dump()),
+            'session_sha256': digest(restored.to_checkpoint()), 'message_count': len(restored.messages),
+            'attachment_ids': restored.active_attachment_ids, 'source_id': manifest.source_id}
 
 
 def runtime_task(phase):
@@ -780,50 +1204,64 @@ def runtime_task(phase):
     ids = json.loads(Path('/probe-output/attachment-ids.json').read_text())
     request = {'message': 'Read this synthetic log: status=ready.', 'attachment_ids': [ids[0]],
                'client_request_id': 'native-probe-first'}
-    def done(response):
+    def events(response):
         require(response.status_code == 200, 'task_http_failed')
-        events = []
+        parsed = []
         for block in response.text.strip().split('\n\n'):
             lines = block.splitlines()
             name = next((line[7:] for line in lines if line.startswith('event: ')), None)
             body = next((json.loads(line[6:]) for line in lines if line.startswith('data: ')), None)
-            if name == 'done':
-                events.append(body)
-        require(len(events) == 1, 'task_terminal_missing')
-        terminal = events[0]
+            if name and name != 'heartbeat': parsed.append([name, body])
+        terminals = [payload for name, payload in parsed if name == 'done']
+        require(len(terminals) == 1, 'task_terminal_missing')
+        terminal = terminals[0]
         require(terminal['outcome'] == 'safe_abstained' and terminal['fallback_used'] is False,
                 'task_outcome_failed')
-        return terminal
+        return terminal, parsed
     with client:
+        before_calls = provider_metrics()
         if phase == 'first':
-            terminal = done(client.post('/chat', json=request))
-            require({'search_attachments', 'read_attachment'} <=
-                    {item['tool'] for item in terminal['tool_calls']}, 'task_tools_missing')
-            atomic_json(Path('/probe-output/task.json'), {'terminal': terminal, 'request': request})
+            terminal, frames = events(client.post('/chat', json=request))
+            metrics = provider_metrics()
+            require(metrics['calls'] > before_calls['calls'] and len(metrics['reads']) == len(before_calls['reads']) + 1,
+                    'first_task_read_not_consumed')
+            snapshot = task_snapshot(terminal['session_id'], ids[0])
+            require(metrics['reads'][-1]['source_id'] == snapshot['source_id'], 'provider_read_source_binding_failed')
+            atomic_json(Path('/probe-output/task.json'), {'terminal': terminal, 'events': frames, 'request': request,
+                                                        'snapshot': snapshot, 'provider': metrics})
         else:
             original = json.loads(Path('/probe-output/task.json').read_text())
-            terminal = done(client.post('/chat', json=original['request']))
-            require(terminal == original['terminal'], 'idempotency_replay_changed')
+            require(task_snapshot(original['terminal']['session_id'], ids[0]) == original['snapshot'],
+                    'restart_restored_state_changed')
+            terminal, frames = events(client.post('/chat', json=original['request']))
+            require(frames == original['events'] and terminal == original['terminal'], 'replay_event_identity_changed')
+            require(provider_metrics() == before_calls, 'idempotency_replay_called_provider')
+            require(task_snapshot(terminal['session_id'], ids[0]) == original['snapshot'], 'replay_state_changed')
         sid = terminal['session_id']
         history = client.get('/authenticated/conversations/' + sid)
         require(history.status_code == 200 and len(history.json()['turns']) == 1
                 and history.json()['turns'][0]['trace_id'] == terminal['trace_id'], 'history_continuity_failed')
         with psycopg.connect(os.environ['DAQ_DATABASE_URL']) as connection:
-            counts = []
-            for table in ('daq_request_ledger', 'daq_context_checkpoints', 'chat_session_checkpoints'):
-                row = connection.execute(f'select count(*) from {table} where external_session_id=%s', (sid,)).fetchone()
-                counts.append(row[0])
-            require(counts == [1, 1, 1], 'task_atomic_persistence_failed')
-            state = connection.execute('select state from daq_request_ledger where external_session_id=%s', (sid,)).fetchone()
-            require(state == ('completed',), 'task_ledger_incomplete')
+            counts = [connection.execute(f'select count(*) from {table} where external_session_id=%s', (sid,)).fetchone()[0]
+                      for table in ('daq_request_ledger', 'daq_context_checkpoints', 'chat_session_checkpoints')]
+            require(counts == [1, 1, 1], 'task_successful_persistence_failed')
+            require(connection.execute('select state from daq_request_ledger where external_session_id=%s', (sid,)).fetchone()
+                    == ('completed',), 'task_ledger_incomplete')
         if phase != 'first':
-            next_turn = done(client.post('/chat', json={'message': 'Read status=ready again from the same log.',
-                              'session_id': sid, 'client_request_id': 'native-probe-second'}))
-            require(next_turn['session_id'] == sid and {'search_attachments', 'read_attachment'} <=
-                    {item['tool'] for item in next_turn['tool_calls']}, 'next_turn_attachment_continuity_failed')
+            prior = task_snapshot(sid, ids[0]); counters = provider_metrics()
+            next_turn, _ = events(client.post('/chat', json={'message': '再读取上一轮日志中的status=ready。',
+                                  'session_id': sid, 'client_request_id': 'native-probe-second'}))
+            restored = task_snapshot(sid, ids[0]); metrics = provider_metrics()
+            require(next_turn['session_id'] == sid and restored['context_revision'] == prior['context_revision'] + 1
+                    and restored['message_count'] == prior['message_count'] + 2
+                    and restored['attachment_ids'] == prior['attachment_ids'], 'next_turn_checkpoint_continuity_failed')
+            require(metrics['calls'] > counters['calls'] and len(metrics['reads']) == len(counters['reads']) + 1
+                    and metrics['reads'][-1]['source_id'] == prior['source_id'], 'next_turn_read_not_consumed')
             require(len(client.get('/authenticated/conversations/' + sid).json()['turns']) == 2,
                     'next_turn_history_failed')
-    return {'phase': phase, 'persisted_tables': 3, 'real_model_calls': 0}
+    return {'phase': phase, 'normal_success_persisted_tables': 3, 'real_model_calls': 0,
+            'provider': provider_metrics(), 'restored': task_snapshot(sid, ids[0]),
+            'transaction_failure_atomicity': {'status': 'NOT_EXECUTED', 'reason': 'normal_success_scenario_only'}}
 
 
 def prepare_synthetic_files(root):
@@ -855,9 +1293,7 @@ def prepare_synthetic_files(root):
     with os.fdopen(fd, 'wb') as stream:
         stream.write(b'{"type":"root","trace_id":"synthetic-old-prefix"}\n'); stream.flush(); os.fsync(stream.fileno())
     os.chown(trace, UID, UID)
-    shutil.copyfile(trace, root / 'old-trace.jsonl')
-    (root / 'old-trace.jsonl').chmod(0o600)
-    os.chown(root / 'old-trace.jsonl', 0, 0)
+    copy_private_file(trace, root / 'old-trace.jsonl', uid=0, gid=0)
 
 
 def runtime_migrate():
@@ -878,47 +1314,67 @@ def runtime_migrate():
 
 
 def runtime_rollback_check():
-    client, _ = http_client()
-    seed = json.loads(Path('/probe-output/seed.json').read_text())['attachment_id']
-    ids = json.loads(Path('/probe-output/attachment-ids.json').read_text())
-    with client:
-        for aid in (seed, ids[0], *ids[2:]):
-            require(client.get('/attachments/' + aid).status_code == 200, 'rollback_current_data_missing')
+    client, _ = http_client(); other, _ = http_client('b')
+    with client, other:
+        before = verify_current_consumers(client, other)
         response = client.post('/attachments', files=[('files', ('root.txt', b'status=ready\nroot current write', 'text/plain'))])
         require(response.status_code == 201, 'rollback_upload_failed')
         aid = response.json()['results'][0]['attachment']['attachment_id']
         require((Path('/app/data/attachments') / aid / 'original.bin').stat().st_uid == 0,
                 'rollback_root_owner_unexpected')
-        atomic_json(Path('/probe-output/root-attachment.json'), {'attachment_id': aid})
+        atomic_json(Path('/probe-output/root-attachment.json'), {'attachment_id': aid,
+            'contract': fixture_contract('root.txt', b'status=ready\nroot current write')})
+        after = verify_current_consumers(client, other)
         history = Path('/probe-output/task.json')
         if history.exists():
             terminal = json.loads(history.read_text())['terminal']
             response = client.get('/authenticated/conversations/' + terminal['session_id'])
             require(response.status_code == 200 and len(response.json()['turns']) == 2,
                     'rollback_history_decryption_failed')
-    return {'old_and_new_visible': True, 'root_created_uid': 0,
+    return {'old_nonroot_new_root_new_consumed': after, 'root_created_uid': 0,
             'trace': runtime_trace('rollback')}
 
 
 def runtime_reforward_check():
-    client, _ = http_client()
-    names = ['seed.json', 'root-attachment.json']
-    with client:
-        for name in names:
-            aid = json.loads((Path('/probe-output') / name).read_text())['attachment_id']
-            require(client.get('/attachments/' + aid).status_code == 200, 'reforward_data_missing')
-            require((Path('/app/data/attachments') / aid / 'original.bin').stat().st_uid == UID,
+    client, _ = http_client(); other, _ = http_client('b')
+    with client, other:
+        evidence = verify_current_consumers(client, other)
+        for item in evidence:
+            require((Path('/app/data/attachments') / item['attachment_id'] / 'original.bin').stat().st_uid == UID,
                     'reforward_owner_failed')
-    return {'fresh_copy_accessible': True, 'trace': runtime_trace('reforward')}
-
+    return {'fresh_copy_actual_consumers': evidence, 'trace': runtime_trace('reforward')}
 
 
 def runtime_isolation_check():
     import socket
     require(Path('/.dockerenv').is_file() and os.geteuid() in {0, UID}
             and re.fullmatch(r'[a-f0-9]{32}', os.getenv('DAQ_NATIVE_PROBE_ATTEMPT', '')) is not None
+            and re.fullmatch(r'[a-z-]+-[0-9]+', os.getenv('DAQ_NATIVE_PROBE_PHASE', '')) is not None
             and all(os.environ.get(key) == value for key, value in synthetic_environment().items())
             and {name for _, name in socket.if_nameindex()} == {'lo'}, 'runtime_isolation_invalid')
+
+
+def runtime_observation():
+    path = Path('/proc/self')
+    status = {key: value.strip() for key, value in
+              (line.split(':', 1) for line in (path / 'status').read_text().splitlines() if ':' in line)}
+    if os.geteuid() == UID:
+        require(identity_valid(status), 'worker_process_identity_failed')
+    fields = next((line.split() for line in (path / 'mountinfo').read_text().splitlines()
+                   if line.split()[4] == '/tmp'), None)
+    require(fields is not None, 'tmp_mount_evidence_missing')
+    separator = fields.index('-')
+    require(fields[separator + 1] == 'tmpfs' and
+            {'noexec', 'nosuid', 'nodev'} <= set(fields[5].split(',')), 'tmp_kernel_flags_mismatch')
+    tmp = Path('/tmp').stat(); usage = os.statvfs('/tmp')
+    require(tmp.st_uid == os.geteuid() and stat.S_IMODE(tmp.st_mode) == 0o700
+            and usage.f_blocks * usage.f_frsize == 268435456, 'tmp_kernel_size_owner_mismatch')
+    return {'pid': os.getpid(), 'ppid': os.getppid(), 'starttime': (path / 'stat').read_text().rsplit(')', 1)[1].split()[19],
+            'namespace': {kind: os.readlink(path / 'ns' / kind) for kind in ('pid', 'net')},
+            'status': {key: status.get(key) for key in ('Uid', 'Gid', 'Groups', 'CapEff', 'CapPrm', 'CapBnd', 'NoNewPrivs')},
+            'tmpfs': {'bytes': usage.f_blocks * usage.f_frsize, 'uid': tmp.st_uid, 'gid': tmp.st_gid,
+                      'mode': oct(stat.S_IMODE(tmp.st_mode)), 'mount_flags': fields[5],
+                      'super_flags': fields[separator + 3]}}
 
 
 def runtime_main(args):
@@ -926,7 +1382,7 @@ def runtime_main(args):
     try:
         if args.phase in {'app', 'scripted-app'}:
             runtime_app(args.phase == 'scripted-app'); return 0
-        methods = {'migrate': runtime_migrate, 'seed': runtime_seed, 'startup': runtime_startup,
+        methods = {'migrate': runtime_migrate, 'seed': runtime_seed, 'migrated': runtime_migrated, 'startup': runtime_startup,
                    'auth': runtime_auth, 'filesystem': runtime_filesystem, 'keys': runtime_keys,
                    'upload': runtime_upload, 'task-first': lambda: runtime_task('first'),
                    'task-replay': lambda: runtime_task('replay'),
@@ -934,32 +1390,64 @@ def runtime_main(args):
                    'trace-before': lambda: runtime_trace('before'), 'trace-after': lambda: runtime_trace('after'),
                    'trace-negative': lambda: runtime_trace('negative', negative=True)}
         result = methods[args.phase]()
-        atomic_json(Path('/probe-output') / (args.phase + '.json'), {'status': 'PASS', 'evidence': result})
+        observation = runtime_observation()
+        atomic_json(Path('/probe-output') / (os.environ['DAQ_NATIVE_PROBE_PHASE'] + '.json'), {'status': 'PASS', 'evidence': result, 'runtime_observation': observation})
         return 0
     except BaseException as exc:
-        target = Path('/tmp/app-failure.json') if args.phase in {'app', 'scripted-app'} else Path('/probe-output') / (args.phase + '.json')
-        atomic_json(target, {'status': 'FAIL', 'category': error_category(exc), 'exception_type': type(exc).__name__})
+        target = Path('/tmp/app-failure.json') if args.phase in {'app', 'scripted-app'} else Path('/probe-output') / (os.environ['DAQ_NATIVE_PROBE_PHASE'] + '.json')
+        failure = {'status': 'FAIL', 'category': error_category(exc), 'exception_type': type(exc).__name__}
+        atomic_json(target, failure)
+        if args.phase in {'app', 'scripted-app'}:
+            atomic_json(Path('/app/data/attachments') / ('.probe-' + os.environ['DAQ_NATIVE_PROBE_PHASE'] + '-failure.json'), failure)
         return 1
 
 
+def copy_private_file(source, destination, *, uid, gid=UID, mode=0o600, trusted_source=False):
+    h = asset_helpers(); source = strict_path(source); destination = strict_path(destination)
+    src, name = h._parent(str(source), trusted=trusted_source)
+    dst, leaf = h._parent(str(destination), trusted=True)
+    try:
+        raw, st = h._read_regular(str(source), ASSET_FILE_LIMIT)
+        require(not trusted_source or (st.st_uid == 0 and not st.st_mode & 0o022), 'source_file_ownership_invalid')
+        return h._copy_file(src, name, dst, leaf,
+                            {'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}, uid, gid, mode, [0, 0])
+    finally:
+        os.close(src); os.close(dst)
+
+
 def set_tree_metadata(root, uid, gid=UID, directory_mode=0o700, file_mode=0o600):
-    for path in [root, *root.rglob('*')]:
-        require(not path.is_symlink(), 'synthetic_tree_symlink')
-        os.chown(path, uid, gid)
-        path.chmod(directory_mode if path.is_dir() else file_mode)
+    h = asset_helpers(); parent, name = h._parent(str(strict_path(root)), trusted=True)
+    fd = os.open(name, h.DIR_FLAGS, dir_fd=parent)
+    nodes = 0
+    def visit(current, depth):
+        nonlocal nodes
+        nodes += 1
+        require(nodes <= ASSET_NODE_LIMIT and depth <= ASSET_DEPTH_LIMIT, 'metadata_budget_exceeded')
+        for name in h._list_names(current):
+            before = os.stat(name, dir_fd=current, follow_symlinks=False)
+            flags = h.DIR_FLAGS if stat.S_ISDIR(before.st_mode) else h.FILE_FLAGS
+            child = os.open(name, flags, dir_fd=current)
+            try:
+                require(h._snapshot(before) == h._snapshot(os.fstat(child)) and
+                        (stat.S_ISDIR(before.st_mode) or (stat.S_ISREG(before.st_mode) and before.st_nlink == 1)),
+                        'metadata_identity_invalid')
+                if stat.S_ISDIR(before.st_mode): visit(child, depth + 1)
+                else:
+                    nodes += 1
+                    require(nodes <= ASSET_NODE_LIMIT, 'metadata_budget_exceeded')
+                    os.fchown(child, uid, gid); os.fchmod(child, file_mode)
+            finally: os.close(child)
+        os.fchown(current, uid, gid); os.fchmod(current, directory_mode)
+    try: visit(fd, 0)
+    finally: os.close(fd); os.close(parent)
 
 
 def copy_current(source, destination):
     require(not destination.exists(), 'copy_destination_exists')
-    # Caller must prove every writer container stopped before this function.
-    shutil.copytree(source, destination, copy_function=shutil.copyfile)
-    source_files = {str(p.relative_to(source)): hashlib.sha256(p.read_bytes()).hexdigest()
-                    for p in source.rglob('*') if p.is_file()}
-    copied_files = {str(p.relative_to(destination)): hashlib.sha256(p.read_bytes()).hexdigest()
-                    for p in destination.rglob('*') if p.is_file()}
-    require(source_files == copied_files, 'copy_bytes_mismatch')
-    set_tree_metadata(destination, UID)
-    return len(source_files)
+    # Caller has stopped all known writers. No copytree or path-based chown.
+    with BoundedTree(source, trusted=False) as tree:
+        tree.copy(destination, owner=UID, mode=0o600)
+        return len(tree.expected)
 
 
 class NativeController:
@@ -977,7 +1465,17 @@ class NativeController:
         self.current_gate = 'V01'
 
     def save(self):
+        self.verify_workroot()
         atomic_json(self.root / 'report.json', self.report)
+
+    def verify_workroot(self):
+        fd = getattr(self.args, 'workroot_fd', None)
+        if fd is not None:
+            actual = asset_helpers()._open_dir(str(self.root), trusted=True)
+            try:
+                left, right = os.fstat(fd), os.fstat(actual)
+                require((left.st_dev, left.st_ino) == (right.st_dev, right.st_ino), 'workroot_identity_changed')
+            finally: os.close(actual)
 
     def image_check(self, image):
         require(re.fullmatch(r'sha256:[a-f0-9]{64}', image), 'image_id_invalid')
@@ -1014,9 +1512,11 @@ class NativeController:
 
     def worker(self, phase, *, root_mode=False, trace_ro=False, attachments=None, share_pid=False):
         self.serial += 1
-        self.report['last_phase'] = phase; self.save()
+        phase_id = phase + '-' + str(self.serial)
+        self.report['last_phase'] = phase_id; self.save()
         flags = self.flags(root_mode) + self.mounts(root_mode=root_mode, worker=True,
                                                   trace_ro=trace_ro, attachments=attachments)
+        flags += ['--env', 'DAQ_NATIVE_PROBE_PHASE=' + phase_id]
         if share_pid:
             flags += ['--pid', 'container:' + self.app]
         cid = self.manager.create('work-' + str(self.serial), self.args.source_image, flags,
@@ -1024,17 +1524,26 @@ class NativeController:
         self.manager.start(cid)
         self.manager.wait(cid, timeout=180)
         self.manager.stop(cid)
-        evidence = self.root / 'output' / (phase + '.json')
+        evidence = self.root / 'output' / (phase_id + '.json')
         require(evidence.is_file(), 'worker_evidence_missing')
         result = json.loads(evidence.read_text())
         require(result['status'] == 'PASS', 'worker_report_failed')
+        self.report.setdefault('worker_observations', {})[phase_id] = result['runtime_observation']; self.save()
         # Only synthetic output, needed after the root seed/rollback workload.
         set_tree_metadata(self.root / 'output', UID)
         return result['evidence']
 
     def start_app(self, *, root_mode=False, scripted=False):
         self.serial += 1
+        self.app_phase = ('root' if root_mode else 'scripted' if scripted else 'app') + '-' + str(self.serial)
+        self.report.setdefault('phases', []).append({'id': self.app_phase, 'root_baseline': root_mode,
+            'provider_substitution': 'deterministic_adapter' if scripted else 'none',
+            'identity_substitution': 'synthetic_http', 'source_image': self.args.source_image})
+        if scripted and 'deterministic_provider_adapter_method_v10' not in self.report['substitutions']:
+            self.report['substitutions'].append('deterministic_provider_adapter_method_v10')
+        self.save()
         flags = self.flags(root_mode) + self.mounts(root_mode=root_mode)
+        flags += ['--env', 'DAQ_NATIVE_PROBE_PHASE=' + self.app_phase]
         self.app = self.manager.create('app-' + str(self.serial), self.args.source_image, flags,
                                        ['python', '/probe.py', '_runtime', 'scripted-app' if scripted else 'app'])
         self.manager.start(self.app)
@@ -1043,22 +1552,33 @@ class NativeController:
         return self.worker('startup', root_mode=root_mode, share_pid=True)
 
     def stop_app(self):
+        self.capture_app_evidence(require_clean=True)
         self.manager.stop(self.app)
+        self.capture_app_evidence(require_clean=True)
+
+    def capture_app_evidence(self, *, require_clean=False, removed=False):
+        if removed:
+            require(self.manager.item(self.app)['state'] == 'absent', 'app_removal_unconfirmed')
+        else:
+            obj = self.manager.inspect(self.app)
+            require(obj is not None, 'app_evidence_target_missing')
+            self.manager.owned(self.manager.item(self.app), obj)
+        summary = {}
+        for kind in ('failure', 'warnings'):
+            source = self.attachments / ('.probe-' + self.app_phase + '-' + kind + '.json')
+            if source.exists():
+                raw, _ = asset_helpers()._read_regular(str(source), 4096)
+                destination = self.root / (self.app_phase + '-app-' + kind + '.json')
+                atomic_json(destination, json.loads(raw))
+                summary['app-' + kind + '.json'] = json.loads(raw)
+        self.report.setdefault('app_summaries', {})[self.app_phase] = summary; self.save()
+        if require_clean:
+            require(summary.get('app-warnings.json', {}).get('warning_count') == 0
+                    and 'app-failure.json' not in summary, 'application_stop_warning_or_failure')
 
     def capture_failure(self):
-        if self.app is None:
-            return
-        obj = self.manager.inspect(self.app)
-        if obj is None:
-            return
-        self.manager.owned(self.manager.item(self.app), obj)
-        # Copy only these fixed, already redacted files out of an owned app.
-        # They survive cleanup of tmpfs and do not contain stdout or config.
-        for filename in ('app-failure.json', 'app-warnings.json'):
-            result = self.manager.run(['cp', self.app + ':/tmp/' + filename,
-                                       str(self.root / ('failure-' + filename))])
-            if result.returncode == 0:
-                (self.root / ('failure-' + filename)).chmod(0o600)
+        if self.app is not None:
+            self.capture_app_evidence()
 
     def complete(self, gate, checks, evidence=None, missing=()):
         self.report['gates'][gate] = {**gate_result(checks, missing), 'evidence': evidence or {}}
@@ -1068,18 +1588,19 @@ class NativeController:
         self.save()
         self.image_check(self.args.source_image); self.image_check(self.args.pg_image)
         prepare_synthetic_files(self.root)
-        before = {name: tree_digest(Path(getattr(self.args, name + '_root'))) for name in ('main', 'sdk')}
-        for name in ('main', 'sdk'):
-            shutil.copytree(getattr(self.args, name + '_root'), self.root / name, copy_function=shutil.copyfile)
-            set_tree_metadata(self.root / name, 0, directory_mode=0o750, file_mode=0o640)
-        public = Path(self.args.public_approval_key).read_bytes()
+        self.report['asset_dependency'] = {'commit': ASSET_HELPER_COMMIT, 'sha256': ASSET_HELPER_SHA}
+        self.report['asset_inventory'] = {}
+        for name, tree in self.args.asset_trees.items():
+            self.report['asset_inventory'][name] = tree.copy(self.root / name, owner=0, mode=0o640)
+        public, public_stat = asset_helpers()._read_regular(self.args.public_approval_key, 65536)
+        require(asset_helpers()._metadata(public_stat) == self.args.public_key_snapshot, 'public_key_identity_changed')
         require(hashlib.sha256(public).hexdigest() == PUBLIC_SHA, 'public_key_pin_mismatch')
         for folder in ('old-secrets', 'secrets'):
             path = self.root / folder / Path(PUBLIC_INTERNAL).name
-            path.write_bytes(public); path.chmod(0o640); os.chown(path, 0, UID)
-        shutil.copyfile(__file__, self.root / 'probe.py'); (self.root / 'probe.py').chmod(0o444)
-        self.report['source_assets_unchanged'] = before == {
-            name: tree_digest(Path(getattr(self.args, name + '_root'))) for name in ('main', 'sdk')}
+            copy_private_file(self.args.public_approval_key, path, uid=0, mode=0o640, trusted_source=True)
+        copy_private_file(__file__, self.root / 'probe.py', uid=0, mode=0o444, trusted_source=True)
+        for tree in self.args.asset_trees.values(): tree.verify()
+        self.report['source_assets_unchanged'] = True
         require(self.report['source_assets_unchanged'], 'source_assets_changed')
         self.save()
         pg_flags = ['--user', '999:999', '--read-only', '--cap-drop', 'ALL',
@@ -1095,8 +1616,8 @@ class NativeController:
         self.worker('migrate')
         self.trace = self.root / 'old-trace.jsonl'
         self.worker('seed', root_mode=True, attachments=self.root / 'old-attachments')
-        self.trace = self.root / 'trace.jsonl'
-        shutil.copyfile(self.root / 'old-trace.jsonl', self.trace)
+        self.trace = self.root / 'migrated-trace.jsonl'
+        copy_private_file(self.root / 'old-trace.jsonl', self.trace, uid=UID)
         require(self.trace.read_bytes() == (self.root / 'old-trace.jsonl').read_bytes(), 'initial_trace_copy_mismatch')
         # Seed workload has stopped; no app exists. Preserve old root snapshot.
         self.attachments.rmdir()
@@ -1133,9 +1654,12 @@ class NativeController:
             seed = json.loads((self.root / 'output/seed.json').read_text())
             require(not (self.attachments / seed['expired_id']).exists(), 'expired_gc_failed')
             require((self.attachments / seed['attachment_id'] / 'original.bin').is_file(), 'unexpired_gc_removed')
-            self.complete('V08', ['owner_other_http_read_delete', 'nonempty_migration', 'startup_partial_batch_cleanup',
-                                  'real_startup_expired_gc', 'unexpired_preserved'],
-                          {'copied_files': copied}, missing=['archive_protected_gc'])
+            migrated = self.worker('migrated')
+            self.report['optional_capabilities'] = {'archive_protection': {
+                'status': 'NOT_EXECUTED', 'applicability': 'disabled_by_source_configuration'}}
+            self.complete('V08', ['owner_other_http_read_delete', 'nonempty_migration_actual_store_tools',
+                                  'startup_partial_batch_cleanup', 'real_startup_expired_gc', 'unexpired_preserved'],
+                          {'copied_files': copied, 'consumers': migrated})
         if 'V09' in selected:
             self.current_gate = 'V09'
             first = self.worker('trace-before'); prefix = self.trace.read_bytes()
@@ -1151,8 +1675,7 @@ class NativeController:
             first = self.worker('task-first')
             self.stop_app(); self.start_app(scripted=True)
             second = self.worker('task-replay')
-            self.report['substitutions'].append('deterministic_provider_adapter_method_v10')
-            self.complete('V10', ['real_http_complete_task', 'real_pg_checkpoint_ledger_history',
+            self.complete('V10', ['real_http_complete_task', 'normal_success_real_pg_checkpoint_ledger_history',
                                   'same_idempotency_replay_restart', 'next_turn_attachment_read'],
                           {'first': first, 'replay': second})
         if 'V11' in selected:
@@ -1165,10 +1688,10 @@ class NativeController:
             # Every writer is stopped; make a FRESH forward copy. No online chown.
             self.attachments = self.root / 'reforward-attachments'
             copy_current(self.root / 'attachments', self.attachments)
+            source_trace = self.trace
             self.trace = self.root / 'reforward-trace.jsonl'
-            shutil.copyfile(self.root / 'trace.jsonl', self.trace)
-            require(self.trace.read_bytes() == (self.root / 'trace.jsonl').read_bytes(), 'trace_forward_copy_mismatch')
-            os.chown(self.trace, UID, UID); self.trace.chmod(0o600)
+            copy_private_file(source_trace, self.trace, uid=UID)
+            require(self.trace.read_bytes() == source_trace.read_bytes(), 'trace_forward_copy_mismatch')
             self.start_app()
             forward = self.worker('reforward')
             self.complete('V11', ['same_image_root_current_data', 'old_new_http_visibility',
@@ -1191,8 +1714,10 @@ def argument_parser():
                      help='Select affected gates; prerequisite evidence is explicit in report')
     cleanup = commands.add_parser('cleanup', help='reconcile only owned containers in existing journal')
     cleanup.add_argument('--workroot', required=True)
+    cleanup.add_argument('--after-host-reboot', action='store_true',
+                         help='Recovery only: kernel boot ID must differ from durable intent')
     runtime = commands.add_parser('_runtime', help=argparse.SUPPRESS)
-    runtime.add_argument('phase', choices=['app', 'scripted-app', 'migrate', 'seed', 'startup', 'auth',
+    runtime.add_argument('phase', choices=['app', 'scripted-app', 'migrate', 'seed', 'migrated', 'startup', 'auth',
                         'filesystem', 'keys', 'upload', 'trace-before', 'trace-after', 'trace-negative',
                         'task-first', 'task-replay', 'rollback', 'reforward'])
     return parser
@@ -1206,16 +1731,23 @@ def validate_inputs(args):
             and args.runtime_release == RUNTIME_RELEASE and args.main_internal == MAIN_INTERNAL
             and args.sdk_internal == SDK_INTERNAL, 'approved_identity_mismatch')
     require(re.fullmatch(r'sha256:[a-f0-9]{64}', args.pg_image), 'postgres_image_id_invalid')
-    roots = [Path(args.main_root), Path(args.sdk_root), Path(args.public_approval_key)]
+    roots = [strict_path(args.main_root), strict_path(args.sdk_root), strict_path(args.public_approval_key)]
+    strict_path(args.workroot)
     for path in roots:
         require(path.is_absolute() and not any(c in str(path) for c in ',\n\r')
                 and not any(part.is_symlink() for part in (path, *path.parents)), 'asset_path_invalid')
     for path in roots[:2]:
         require(path.is_dir() and (path / 'active.json').is_file(), 'prepared_release_root_invalid')
-        tree_digest(path)
+    args.asset_trees = {name: BoundedTree(path, trusted=True) for name, path in zip(('main', 'sdk'), roots[:2])}
+    require(sum(tree.total for tree in args.asset_trees.values()) <= ASSET_TOTAL_LIMIT, 'combined_asset_budget_exceeded')
+    for kind, tree in args.asset_trees.items(): validate_release_handoff(tree, kind)
     key = roots[2]
     require(key.is_file() and key.stat().st_nlink == 1, 'public_key_file_invalid')
-    raw = key.read_bytes()
+    keyparent, _ = asset_helpers()._parent(str(key), trusted=True)
+    os.close(keyparent)
+    raw, keystat = asset_helpers()._read_regular(str(key), 65536)
+    require(keystat.st_uid == 0 and not keystat.st_mode & 0o022, 'public_key_ownership_invalid')
+    args.public_key_snapshot = asset_helpers()._metadata(keystat)
     require(hashlib.sha256(raw).hexdigest() == PUBLIC_SHA, 'public_key_pin_mismatch')
     document = json.loads(raw)
     require(set(document) == {'format_version', 'keys'} and
@@ -1226,6 +1758,14 @@ def validate_inputs(args):
             and not any(c in str(root) for c in ',\n\r')
             and not any(part.is_symlink() for part in root.parents), 'exclusive_workroot_required')
     require(not any(root.is_relative_to(p) or p.is_relative_to(root) for p in roots), 'workroot_asset_overlap')
+    asset_helpers()._ensure_target_outside_sources({'paths': {'main': str(roots[0]), 'sdk': str(roots[1]),
+        'secrets': str(roots[2].parent), 'attachments': str(roots[0])}}, str(root))
+    parentfd, _ = asset_helpers()._parent(str(root), trusted=True)
+    try:
+        disk = os.fstatvfs(parentfd)
+        require(disk.f_bavail * disk.f_frsize >= ASSET_TOTAL_LIMIT + SYNTHETIC_DISK_BUDGET + DISK_RESERVE,
+                'disk_budget_insufficient')
+    finally: os.close(parentfd)
 
 
 def main(argv=None):
@@ -1245,12 +1785,19 @@ def main(argv=None):
     try:
         fcntl.flock(lockfd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         lease = control / 'active.json'
-        root = Path(args.workroot)
+        root = strict_path(args.workroot)
         if args.command == 'cleanup':
-            require(lease.is_file() and json.loads(lease.read_text())['workroot'] == str(root),
-                    'cleanup_lease_mismatch')
+            trusted_root_fd = asset_helpers()._open_dir(str(root), trusted=True)
+            os.close(trusted_root_fd)
+            if lease.is_file():
+                require(json.loads(lease.read_text())['workroot'] == str(root), 'cleanup_lease_mismatch')
+            else:
+                require(args.after_host_reboot, 'cleanup_lease_missing')
             manager = OwnedDocker(root, recover=True)
-            manager.cleanup()
+            if args.after_host_reboot:
+                require(bool(manager.data.get('boot_id')) and bool(boot_identity()) and
+                        manager.data['boot_id'] != boot_identity(), 'reboot_evidence_missing')
+            manager.cleanup(after_reboot=args.after_host_reboot)
             atomic_json(lease, {'workroot': str(root), 'released': True})
             print(json.dumps({'cleanup': 'released'})); return 0
         if lease.exists():
@@ -1258,7 +1805,8 @@ def main(argv=None):
         validate_inputs(args)
         residue = docker_command(['container', 'ls', '--all', '--filter', 'label=' + OWNER_LABEL, '--quiet'])
         require(residue.returncode == 0 and not residue.stdout.strip(), 'owned_daemon_residue_requires_recovery')
-        root.mkdir(mode=0o700)
+        rootfd = asset_helpers()._start(str(root))
+        args.workroot_fd = rootfd
         manager = OwnedDocker(root)
         atomic_json(lease, {'workroot': str(root), 'released': False, 'attempt': manager.data['attempt']})
         controller = NativeController(args, manager); controller.started = time.monotonic()
@@ -1286,6 +1834,14 @@ def main(argv=None):
             else:
                 controller.report['cleanup'] = 'released'
                 atomic_json(lease, {'workroot': str(root), 'released': True})
+                # Failure cleanup can itself stop the last app. Its tmpfs is
+                # gone, but phase-specific durable warning evidence remains.
+                if controller.app is not None:
+                    try:
+                        controller.capture_app_evidence(removed=True)
+                    except BaseException:
+                        failed = True
+                        controller.report['failure_capture_after_cleanup'] = 'unavailable'
             controller.save()
         statuses = [row['status'] for row in controller.report['gates'].values()]
         print(json.dumps({'report': str(root / 'report.json'), 'passed': statuses.count('PASS'),
@@ -1293,12 +1849,24 @@ def main(argv=None):
                           'not_executed': statuses.count('NOT_EXECUTED'), 'cleanup': controller.report['cleanup']}))
         return 1 if failed or 'PARTIAL' in statuses else 0
     finally:
+        for tree in getattr(args, 'asset_trees', {}).values(): tree.__exit__(None, None, None)
+        if getattr(args, 'workroot_fd', None) is not None: os.close(args.workroot_fd)
         os.close(lockfd)
+
+
+def entrypoint(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    # Uvicorn owns runtime shutdown signals. Controller cancellation must not
+    # turn its graceful SIGTERM shutdown into an application failure receipt.
+    if argv and argv[0] == '_runtime':
+        return main(argv)
+    with controlled_signals():
+        return main(argv)
 
 
 if __name__ == '__main__':
     try:
-        raise SystemExit(main())
+        raise SystemExit(entrypoint())
     except ProbeError as error:
         print(json.dumps({'status': 'FAIL', 'category': error_category(error)}))
         raise SystemExit(1)
