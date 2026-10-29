@@ -164,7 +164,9 @@ def test_render_pins_image_and_rollback_uses_new_data(setup):
     rollback = json.loads((root / 'configs/rollback.json').read_text())
     a = candidate['services']['ai-daq-fae-backend']
     b = rollback['services']['ai-daq-fae-backend']
-    assert a['image'] == b['image'] == assets.IMAGE
+    assert a['image'] == assets.CANDIDATE_IMAGE and b['image'] == assets.IMAGE
+    receipt = json.loads((root / 'configs/manifest.json').read_text())
+    assert receipt['image_declarations'] == {'source_rollback': assets.IMAGE, 'candidate': assets.CANDIDATE_IMAGE, 'recipe_commit': assets.IMAGE_RECIPE_COMMIT}
     assert a['pull_policy'] == b['pull_policy'] == 'never'
     assert a['environment']['SYNTHETIC_SETTING'] == b['environment']['SYNTHETIC_SETTING'] == 'present'
     assert a['mem_limit'] == b['mem_limit'] == '536870912'

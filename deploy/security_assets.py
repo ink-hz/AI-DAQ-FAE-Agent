@@ -20,6 +20,8 @@ from datetime import datetime, timezone
 from pathlib import PurePosixPath
 
 IMAGE = 'sha256:5ed10ead83ee10ad5ef668fad8ee6aa7d28e37bb8d217fd22daa84d6d5db5bf7'
+CANDIDATE_IMAGE = 'sha256:7360ead746ecef1303f27cc85b560ee13807af4a2245c8963f3eef94468586c7'
+IMAGE_RECIPE_COMMIT = '9439b21b95ded7530e2f4205bf19a53b667b52ac'
 SECRETS = ('session-keyring.json', 'content-keyring.json', 'entitlements.json', 'feedback-approval-keys-20261023.json')
 MAX_FILE = 64 * 1024**2
 MAX_TOTAL = 256 * 1024**2
@@ -1143,7 +1145,7 @@ def _config(runtime, rollback, source):
     # The private effective-model comparison must still prove equivalence.
     if isinstance(service.get('deploy'), dict) and service['deploy'].get('placement') == {}:
         service['deploy'].pop('placement')
-    service.update({'image': IMAGE, 'pull_policy': 'never', 'user': '0:0' if rollback else '21081:21081'})
+    service.update({'image': IMAGE if rollback else CANDIDATE_IMAGE, 'pull_policy': 'never', 'user': '0:0' if rollback else '21081:21081'})
     if not rollback:
         security = list(service.get('security_opt') or [])
         if 'no-new-privileges:true' not in security:
@@ -1183,7 +1185,7 @@ def _check_effective_policy(runtime, effective, rollback, desired):
         network = effective.get('networks', {}).get(key, {})
         if network.get('external') is not True or network.get('name') != expected_name:
             raise AssetError('effective network identity mismatch')
-    if (service.get('image') != IMAGE or service.get('pull_policy') != 'never'
+    if (service.get('image') != (IMAGE if rollback else CANDIDATE_IMAGE) or service.get('pull_policy') != 'never'
         or service.get('user') != ('0:0' if rollback else '21081:21081') or service.get('build')):
         raise AssetError('effective image or user policy mismatch')
     actual_mounts = service.get('volumes', [])
@@ -1359,6 +1361,13 @@ def _validate_runtime(spec):
     return runtime, candidate, rollback
 
 
+def _render_receipt(runtime):
+    return {'version': 1, 'stage': 'render', 'config_identity_controller_asserted': runtime['config_identity'],
+            'project': runtime['project'], 'environment_sha256': runtime['env_sha256'], 'matched': True,
+            'image_declarations': {'source_rollback': IMAGE, 'candidate': CANDIDATE_IMAGE,
+                                   'recipe_commit': IMAGE_RECIPE_COMMIT}}
+
+
 def render(spec, target):
     _check_spec(spec)
     _ensure_target_outside_sources(spec, target, include_prepared=True)
@@ -1368,7 +1377,7 @@ def render(spec, target):
         runtime, candidate, rollback = _validate_runtime(spec)
         _write_json(target_fd, 'runtime.json', candidate)
         _write_json(target_fd, 'rollback.json', rollback)
-        _write_json(target_fd, 'manifest.json', {'version': 1, 'stage': 'render', 'config_identity_controller_asserted': runtime['config_identity'], 'project': runtime['project'], 'environment_sha256': runtime['env_sha256'], 'matched': True})
+        _write_json(target_fd, 'manifest.json', _render_receipt(runtime))
         return {'matched': True}
     except Exception as exc:
         if target_fd is not None:
@@ -1398,7 +1407,7 @@ def verify(spec, target):
         if _private_json(str(target) + '/rollback.json') != rollback:
             raise AssetError('rollback configuration drift')
         receipt = _private_json(str(target) + '/manifest.json')
-        if receipt != {'version': 1, 'stage': 'render', 'config_identity_controller_asserted': runtime['config_identity'], 'project': runtime['project'], 'environment_sha256': runtime['env_sha256'], 'matched': True}:
+        if receipt != _render_receipt(runtime):
             raise AssetError('config manifest mismatch')
         return {'matched': True}
     except Exception as exc:

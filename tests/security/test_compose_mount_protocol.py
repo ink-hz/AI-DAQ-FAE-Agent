@@ -116,3 +116,15 @@ def test_author_declares_access_mode_explicitly(setup, rollback):
     del desired['services']['ai-daq-fae-backend']['volumes'][3]['read_only']
     with pytest.raises(assets.AssetError):
         assets._check_effective_policy(runtime, effective, rollback, desired)
+
+
+@pytest.mark.parametrize('rollback', [False, True])
+def test_effective_image_must_match_selected_phase(setup, rollback):
+    root, spec = setup
+    runtime, desired, effective = models(root, spec, rollback)
+    service = effective['services']['ai-daq-fae-backend']
+    assert service['image'] == (assets.IMAGE if rollback else assets.CANDIDATE_IMAGE)
+    assets._check_effective_policy(runtime, effective, rollback, desired)
+    service['image'] = assets.CANDIDATE_IMAGE if rollback else assets.IMAGE
+    with pytest.raises(assets.AssetError):
+        assets._check_effective_policy(runtime, effective, rollback, desired)

@@ -1,6 +1,6 @@
 services:
   ai-daq-fae-backend:
-    image: sha256:5ed10ead83ee10ad5ef668fad8ee6aa7d28e37bb8d217fd22daa84d6d5db5bf7
+    image: sha256:7360ead746ecef1303f27cc85b560ee13807af4a2245c8963f3eef94468586c7
     pull_policy: never
     container_name: ai-daq-fae-backend
     restart: unless-stopped

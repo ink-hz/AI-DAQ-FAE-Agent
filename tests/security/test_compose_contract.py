@@ -5,7 +5,7 @@ import yaml
 def test_nonroot_runtime_contract():
     config = yaml.safe_load(Path('deploy/compose.prod.yml').read_text())
     service = config['services']['ai-daq-fae-backend']
-    assert service['image'] == 'sha256:5ed10ead83ee10ad5ef668fad8ee6aa7d28e37bb8d217fd22daa84d6d5db5bf7'
+    assert service['image'] == 'sha256:7360ead746ecef1303f27cc85b560ee13807af4a2245c8963f3eef94468586c7'
     assert service['pull_policy'] == 'never'
     assert 'build' not in service
     assert service['user'] == '21081:21081'
