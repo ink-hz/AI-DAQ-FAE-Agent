@@ -64,13 +64,28 @@ def _read_hash(fd, st):
     return h.hexdigest()
 
 
+def _bounded_names(fd, limit):
+    names = []
+    with os.scandir(fd) as iterator:
+        for item in iterator:
+            if len(names) >= limit:
+                raise ValueError('node limit or directory membership changed')
+            names.append(item.name)
+    return sorted(names)
+
+
 def _scan(base, expected_uid):
     entries = {}
     total = 0
-    def examine(path, fd, mutable, depth):
-        nonlocal total
-        if depth > MAX_DEPTH or len(entries) >= MAX_NODES:
+    discovered = 0
+    def examine(path, fd, mutable, depth, reserved=False):
+        nonlocal total, discovered
+        if depth > MAX_DEPTH:
             raise ValueError('node/depth limit')
+        if not reserved:
+            if discovered >= MAX_NODES:
+                raise ValueError('node/depth limit')
+            discovered += 1
         st = os.fstat(fd)
         mode = stat.S_IMODE(st.st_mode)
         if not _owner_matches(st.st_uid, expected_uid) or mode & 0o7022:
@@ -88,16 +103,17 @@ def _scan(base, expected_uid):
             digest = _read_hash(fd, st)
         entries[path] = {'metadata': _metadata(st), 'digest': digest, 'mutable': mutable, 'dir': directory}
         if directory and mutable:
-            names = sorted(os.listdir(fd))
+            names = _bounded_names(fd, MAX_NODES - discovered)
+            discovered += len(names)
             for name in names:
                 if name in ('.', '..') or '/' in name:
                     raise ValueError('unsafe name')
                 child = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
                 try:
-                    examine(path + '/' + name, child, True, depth + 1)
+                    examine(path + '/' + name, child, True, depth + 1, reserved=True)
                 finally:
                     os.close(child)
-            if _metadata(os.fstat(fd)) != _metadata(st) or sorted(os.listdir(fd)) != names:
+            if _metadata(os.fstat(fd)) != _metadata(st) or _bounded_names(fd, len(names)) != names:
                 raise ValueError('directory changed during scan')
     for path in FENCE_DIRS + FENCE_FILES:
         fd = _open_path(base, path, directory=path in FENCE_DIRS)

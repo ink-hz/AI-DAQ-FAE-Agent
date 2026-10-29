@@ -177,3 +177,102 @@ def test_ancestor_replaced_after_preflight_is_refused(tree, monkeypatch):
     monkeypatch.setattr(m, '_apply_one', replace)
     with pytest.raises(ValueError):
         m.normalize(tree, apply=True, expected_uid=os.getuid())
+
+
+def test_bounded_wide_directory_stops_iterator_before_chmod(tree, monkeypatch):
+    m = module()
+    root = tree / 'app/daq_fae'
+    for i in range(30):
+        (root / ('wide%02d' % i)).write_bytes(b'x')
+    monkeypatch.setattr(m, 'MAX_NODES', 13)
+    original = m.os.scandir
+    seen = []
+    def counted(fd):
+        iterator = original(fd)
+        class Wrapper:
+            def __enter__(self):
+                iterator.__enter__()
+                return self
+            def __exit__(self, *args):
+                return iterator.__exit__(*args)
+            def __iter__(self):
+                for item in iterator:
+                    if os.fstat(fd).st_ino == root.stat().st_ino:
+                        seen.append(item.name)
+                    yield item
+        return Wrapper()
+    monkeypatch.setattr(m.os, 'scandir', counted)
+    chmods = []
+    monkeypatch.setattr(m.os, 'fchmod', lambda *a: chmods.append(a))
+    with pytest.raises(ValueError):
+        m.normalize(tree, apply=True, expected_uid=os.getuid())
+    assert len(seen) == 5  # 8 fences + root; 4 fit, fifth rejects
+    assert not chmods
+
+
+def test_bounded_pending_ancestors_consume_global_budget(tree, monkeypatch):
+    m = module()
+    root = tree / 'app/daq_fae'
+    nested = root / 'a_nested'
+    nested.mkdir()
+    for i in range(10):
+        (nested / str(i)).write_bytes(b'x')
+    (root / 'z_pending').write_bytes(b'x')
+    monkeypatch.setattr(m, 'MAX_NODES', 14)
+    original = m.os.scandir
+    seen = []
+    def counted(fd):
+        it = original(fd)
+        class Wrapper:
+            def __enter__(self): it.__enter__(); return self
+            def __exit__(self, *args): return it.__exit__(*args)
+            def __iter__(self):
+                for item in it:
+                    if os.fstat(fd).st_ino == nested.stat().st_ino: seen.append(item.name)
+                    yield item
+        return Wrapper()
+    monkeypatch.setattr(m.os, 'scandir', counted)
+    chmods = []
+    monkeypatch.setattr(m.os, 'fchmod', lambda *a: chmods.append(a))
+    with pytest.raises(ValueError):
+        m.normalize(tree, apply=True, expected_uid=os.getuid())
+    assert len(seen) == 3  # 8 fences + root + 3 reserved children leaves 2
+    assert not chmods
+
+
+def test_bounded_post_membership_rescan_stops_on_extra_entry(tree, monkeypatch):
+    m = module()
+    target = tree / 'app/daq_fae/private'
+    original = m.os.scandir
+    scans = []
+    seen = []
+    def counted(fd):
+        is_target = os.fstat(fd).st_ino == target.stat().st_ino
+        if is_target:
+            scans.append(1)
+            if len(scans) == 2:
+                for i in range(20): (target / ('new%02d' % i)).write_bytes(b'x')
+        it = original(fd)
+        class Wrapper:
+            def __enter__(self): it.__enter__(); return self
+            def __exit__(self, *args): return it.__exit__(*args)
+            def __iter__(self):
+                for item in it:
+                    if is_target and len(scans) == 2: seen.append(item.name)
+                    yield item
+        return Wrapper()
+    monkeypatch.setattr(m.os, 'scandir', counted)
+    chmods = []
+    monkeypatch.setattr(m.os, 'fchmod', lambda *a: chmods.append(a))
+    with pytest.raises(ValueError):
+        m.normalize(tree, apply=True, expected_uid=os.getuid())
+    assert len(scans) == 2
+    assert len(seen) == 3  # two original entries, one excess
+    assert not chmods
+
+
+def test_bounded_post_scan_succeeds_when_global_budget_exactly_full(tree, monkeypatch):
+    m = module()
+    monkeypatch.setattr(m, 'MAX_NODES', 32)  # eight fences plus six four-node trees
+    result = m.normalize(tree, apply=True, expected_uid=os.getuid())
+    assert result['before']['count'] == result['after']['count'] == 32
