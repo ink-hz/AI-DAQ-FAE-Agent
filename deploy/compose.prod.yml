@@ -1,16 +1,44 @@
 services:
   ai-daq-fae-backend:
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile.prod
-    image: ai-daq-fae-agent:${DAQ_IMAGE_TAG:?DAQ_IMAGE_TAG is required}
+    image: sha256:5ed10ead83ee10ad5ef668fad8ee6aa7d28e37bb8d217fd22daa84d6d5db5bf7
+    pull_policy: never
     container_name: ai-daq-fae-backend
     restart: unless-stopped
+    user: "21081:21081"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      TMPDIR: /tmp
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=256m,uid=21081,gid=21081,mode=0700
     env_file:
-      - ${DAQ_ENV_FILE:-/etc/ai-daq-fae-agent/env.production}
+      - ${DAQ_ENV_FILE:?DAQ_ENV_FILE is required}
     volumes:
-      - ${DAQ_DATA_DIR:-/opt/ai-daq-fae-agent/data}:/app/data
-      - ${DAQ_SECRETS_DIR:-/etc/ai-daq-fae-agent/secrets}:/run/daq-secrets:ro
+      - type: bind
+        source: ${DAQ_PREPARED_MAIN_ROOT:?DAQ_PREPARED_MAIN_ROOT is required}
+        target: /app/data/knowledge/reviewed-thinking-prefix-20261028
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${DAQ_PREPARED_SDK_ROOT:?DAQ_PREPARED_SDK_ROOT is required}
+        target: /app/data/knowledge/sdk-thinking-prefix-20261028
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${DAQ_PREPARED_SECRETS:?DAQ_PREPARED_SECRETS is required}
+        target: /run/daq-secrets
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${DAQ_PREPARED_ATTACHMENTS:?DAQ_PREPARED_ATTACHMENTS is required}
+        target: /app/data/attachments
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${DAQ_PREPARED_TRACE:?DAQ_PREPARED_TRACE is required}
+        target: /app/data/daq_traces.jsonl
+        bind: {create_host_path: false}
     ports:
       - 127.0.0.1:8081:8081
     networks:
