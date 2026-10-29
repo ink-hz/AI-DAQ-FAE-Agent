@@ -34,10 +34,12 @@ services:
       - type: bind
         source: ${DAQ_PREPARED_ATTACHMENTS:?DAQ_PREPARED_ATTACHMENTS is required}
         target: /app/data/attachments
+        read_only: false
         bind: {create_host_path: false}
       - type: bind
         source: ${DAQ_PREPARED_TRACE:?DAQ_PREPARED_TRACE is required}
         target: /app/data/daq_traces.jsonl
+        read_only: false
         bind: {create_host_path: false}
     ports:
       - 127.0.0.1:8081:8081
