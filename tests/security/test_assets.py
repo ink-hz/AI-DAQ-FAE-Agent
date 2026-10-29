@@ -1,0 +1,441 @@
+import hashlib
+import importlib.util
+import json
+import os
+import stat
+from pathlib import Path
+
+import pytest
+
+MODULE = Path('deploy/security_assets.py')
+if MODULE.exists():
+    spec = importlib.util.spec_from_file_location('security_assets', MODULE)
+    assets = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(assets)
+else:
+    assets = None
+
+SECRETS = ['session-keyring.json', 'content-keyring.json', 'entitlements.json', 'feedback-approval-keys-20261023.json']
+
+
+def identity(data):
+    return {'size': len(data), 'sha256': hashlib.sha256(data).hexdigest()}
+
+
+@pytest.fixture
+def setup(tmp_path, monkeypatch):
+    if assets is not None:
+        monkeypatch.setattr(assets, '_is_root', lambda: True)
+        monkeypatch.setattr(assets, '_trusted_parent', lambda st: True)
+        monkeypatch.setattr(assets.os, 'fchown', lambda *args: None)
+        monkeypatch.setattr(assets, '_owner_mode', lambda st, uid, gid, mode: stat.S_IMODE(st.st_mode) == mode)
+    paths = {}
+    expected = {}
+    for name in ['main', 'sdk', 'secrets', 'attachments']:
+        p = tmp_path / name
+        p.mkdir()
+        paths[name] = str(p)
+        files = SECRETS if name == 'secrets' else ['nested/file']
+        expected[name] = {}
+        for f in files:
+            content = (name + f).encode()
+            file = p / f
+            file.parent.mkdir(parents=True, exist_ok=True)
+            file.write_bytes(content)
+            expected[name][f] = identity(content)
+    trace = tmp_path / 'trace'
+    trace.write_bytes(b'old trace\n')
+    paths['trace'] = str(trace)
+    expected['trace'] = {'daq_traces.jsonl': identity(b'old trace\n')}
+    return tmp_path, {'paths': paths, 'expected': expected, 'uid': 21081, 'gid': 21081}
+
+
+
+def add_runtime_evidence(root, spec):
+    config = root / 'old-compose.yml'
+    config.write_text('services: {}\n')
+    labels = root / 'labels.json'
+    labels.write_text(json.dumps({'com.docker.compose.project': 'deploy', 'com.docker.compose.service': 'ai-daq-fae-backend', 'com.docker.compose.project.config_files': str(config)}))
+    labels.chmod(0o600)
+    spec['runtime'].update({'labels_file': str(labels), 'config_files': {str(config): hashlib.sha256(config.read_bytes()).hexdigest()}, 'config_identity': 'sha256:' + hashlib.sha256(labels.read_bytes()).hexdigest()})
+
+
+def test_staging_exact_scope_and_private_metadata(setup):
+    assert assets is not None, 'security asset implementation missing'
+    root, spec = setup
+    result = assets.stage_ro(spec, root / 'out')
+    assert result['matched'] is True
+    assert (root / 'out/main/nested/file').read_bytes() == b'mainnested/file'
+    assert set(p.name for p in (root / 'out/secrets').iterdir()) == set(SECRETS)
+    assert (root / 'out/secrets/session-keyring.json').stat().st_mode & 0o777 == 0o600
+    assert (root / 'out/secrets/entitlements.json').stat().st_mode & 0o777 == 0o640
+    assert (root / 'out/manifest.json').stat().st_mode & 0o777 == 0o600
+    assert b'secret' not in (root / 'out/manifest.json').read_bytes().lower().replace(b'secrets', b'')
+
+
+@pytest.mark.parametrize('kind', ['symlink', 'hardlink', 'fifo'])
+def test_refuses_unsafe_source_files(setup, kind):
+    assert assets is not None, 'security asset implementation missing'
+    root, spec = setup
+    path = root / 'main/nested/file'
+    if kind == 'hardlink':
+        os.link(path, root / 'hard')
+    else:
+        path.unlink()
+        if kind == 'symlink':
+            path.symlink_to(root / 'sdk/nested/file')
+        else:
+            os.mkfifo(path)
+    with pytest.raises(assets.AssetError):
+        assets.stage_ro(spec, root / 'out')
+    assert json.loads((root / 'out/failure.json').read_text())['status'] == 'failed'
+
+
+def test_refuses_target_collision_and_hash_drift(setup):
+    assert assets is not None, 'security asset implementation missing'
+    root, spec = setup
+    (root / 'out').mkdir()
+    with pytest.raises(assets.AssetError):
+        assets.stage_ro(spec, root / 'out')
+    (root / 'main/nested/file').write_bytes(b'modified')
+    with pytest.raises(assets.AssetError):
+        assets.stage_ro(spec, root / 'out2')
+
+
+def test_capture_requires_controller_evidence_and_preserves_bytes(setup):
+    assert assets is not None, 'security asset implementation missing'
+    root, spec = setup
+    with pytest.raises(assets.AssetError):
+        assets.capture_rw(spec, root / 'bad', {})
+    evidence = {'container_id': 'a' * 64, 'image_id': assets.IMAGE, 'stopped_at': '2026-10-29T00:00:00Z', 'quiescence_evidence': 'sha256:' + 'b' * 64}
+    result = assets.capture_rw(spec, root / 'out', evidence)
+    assert result['stopped_evidence']['verification'] == 'controller_asserted_not_verified'
+    assert (root / 'out/attachments/nested/file').read_bytes() == b'attachmentsnested/file'
+    assert (root / 'out/trace/daq_traces.jsonl').read_bytes() == b'old trace\n'
+
+
+def test_source_mutation_after_copy_refused(setup, monkeypatch):
+    assert assets is not None
+    root, spec = setup
+    original = assets._copy_file
+    changed = False
+    def copy_then_mutate(*args, **kwargs):
+        nonlocal changed
+        result = original(*args, **kwargs)
+        if not changed:
+            (root / 'main/nested/file').write_bytes(b'changed after copy')
+            changed = True
+        return result
+    monkeypatch.setattr(assets, '_copy_file', copy_then_mutate)
+    with pytest.raises(assets.AssetError):
+        assets.stage_ro(spec, root / 'out')
+
+
+def test_published_root_traversable_but_metadata_private(setup):
+    assert assets is not None
+    root, spec = setup
+    assets.stage_ro(spec, root / 'out')
+    assert (root / 'out').stat().st_mode & 0o777 == 0o750
+    assert (root / 'out/manifest.json').stat().st_mode & 0o777 == 0o600
+
+
+def test_render_pins_image_and_rollback_uses_new_data(setup):
+    assert assets is not None
+    root, spec = setup
+    assets.stage_ro(spec, root / 'ro')
+    evidence = {'container_id': 'a' * 64, 'image_id': assets.IMAGE, 'stopped_at': '2026-10-29T00:00:00Z', 'quiescence_evidence': 'sha256:' + 'b' * 64}
+    assets.capture_rw(spec, root / 'rw', evidence)
+    env = root / 'production.env'
+    env.write_text('\n'.join(f'{k}={v}' for k, v in assets.REQUIRED_ENV.items()) + '\nDAQ_KNOWLEDGE_APPROVAL_KEYS_SHA256=' + spec['expected']['secrets']['feedback-approval-keys-20261023.json']['sha256'] + '\n')
+    old = Path(spec['paths']['secrets'])
+    spec['runtime'] = {'ro_dir': str(root / 'ro'), 'rw_dir': str(root / 'rw'), 'env_file': str(env), 'env_sha256': hashlib.sha256(env.read_bytes()).hexdigest(), 'old_secrets_dir': str(old), 'project': 'deploy', 'config_identity': 'sha256:' + 'c' * 64}
+    add_runtime_evidence(root, spec)
+    assets.render(spec, root / 'configs')
+    candidate = json.loads((root / 'configs/runtime.json').read_text())
+    rollback = json.loads((root / 'configs/rollback.json').read_text())
+    a = candidate['services']['ai-daq-fae-backend']
+    b = rollback['services']['ai-daq-fae-backend']
+    assert a['image'] == b['image'] == assets.IMAGE
+    assert a['pull_policy'] == b['pull_policy'] == 'never'
+    assert a['user'] == '21081:21081' and b['user'] == '0:0'
+    assert 'cap_drop' not in b and 'read_only' not in b
+    mounts_a = {v['target']: v['source'] for v in a['volumes']}
+    mounts_b = {v['target']: v['source'] for v in b['volumes']}
+    for path in ['/app/data/attachments', '/app/data/daq_traces.jsonl']:
+        assert mounts_a[path] == mounts_b[path]
+    assert mounts_b['/run/daq-secrets'] == str(old)
+    assert '/app/data' not in mounts_a and '/app/data' not in mounts_b
+    assert assets.verify(spec, root / 'configs')['matched'] is True
+    a['cap_drop'] = []
+    (root / 'configs/runtime.json').write_text(json.dumps(candidate))
+    with pytest.raises(assets.AssetError):
+        assets.verify(spec, root / 'configs')
+
+
+def test_render_rejects_env_identity_drift(setup):
+    assert assets is not None
+    root, spec = setup
+    assets.stage_ro(spec, root / 'ro')
+    env = root / 'production.env'
+    env.write_text('DAQ_PLATFORM_IDENTITY_ENABLED=false\n')
+    spec['runtime'] = {'ro_dir': str(root / 'ro'), 'rw_dir': str(root / 'rw'), 'env_file': str(env), 'env_sha256': '0'*64, 'old_secrets_dir': str(root / 'old'), 'project': 'deploy', 'config_identity': 'sha256:' + 'c' * 64}
+    with pytest.raises(assets.AssetError):
+        assets.render(spec, root / 'configs')
+
+
+def test_trace_mutation_after_copy_refused(setup, monkeypatch):
+    assert assets is not None
+    root, spec = setup
+    original = assets._copy_file
+    def copy_then_mutate(*args, **kwargs):
+        result = original(*args, **kwargs)
+        if args[1] == 'trace':
+            (root / 'trace').write_bytes(b'new trace')
+        return result
+    monkeypatch.setattr(assets, '_copy_file', copy_then_mutate)
+    evidence = {'container_id': 'a' * 64, 'image_id': assets.IMAGE, 'stopped_at': '2026-10-29T00:00:00Z', 'quiescence_evidence': 'sha256:' + 'b' * 64}
+    with pytest.raises(assets.AssetError):
+        assets.capture_rw(spec, root / 'out', evidence)
+
+
+def test_render_rejects_manifest_drift_from_expected(setup):
+    assert assets is not None
+    root, spec = setup
+    assets.stage_ro(spec, root / 'ro')
+    evidence = {'container_id': 'a' * 64, 'image_id': assets.IMAGE, 'stopped_at': '2026-10-29T00:00:00Z', 'quiescence_evidence': 'sha256:' + 'b' * 64}
+    assets.capture_rw(spec, root / 'rw', evidence)
+    env = root / 'production.env'
+    env.write_text('\n'.join(f'{k}={v}' for k, v in assets.REQUIRED_ENV.items()) + '\nDAQ_KNOWLEDGE_APPROVAL_KEYS_SHA256=' + spec['expected']['secrets']['feedback-approval-keys-20261023.json']['sha256'] + '\n')
+    old = root / 'old-secrets'
+    old.mkdir()
+    spec['runtime'] = {'ro_dir': str(root / 'ro'), 'rw_dir': str(root / 'rw'), 'env_file': str(env), 'env_sha256': hashlib.sha256(env.read_bytes()).hexdigest(), 'old_secrets_dir': str(old), 'project': 'deploy', 'config_identity': 'sha256:' + 'c' * 64}
+    spec['expected']['main']['nested/file']['sha256'] = '0' * 64
+    add_runtime_evidence(root, spec)
+    with pytest.raises(assets.AssetError):
+        assets.render(spec, root / 'configs')
+
+
+def test_cli_reports_only_sanitized_result(setup, capsys):
+    assert assets is not None
+    root, spec = setup
+    path = root / 'spec.json'
+    path.write_text(json.dumps(spec))
+    path.chmod(0o600)
+    assert assets.main(['stage-ro', '--spec', str(path), '--target', str(root / 'out')]) == 0
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == {'stage': 'stage-ro', 'matched': True}
+    assert captured.err == ''
+    assert 'session-keyring' not in captured.out
+
+
+def test_cli_rejects_unprivate_spec(setup, capsys):
+    assert assets is not None
+    root, spec = setup
+    path = root / 'spec.json'
+    path.write_text(json.dumps(spec))
+    path.chmod(0o644)
+    assert assets.main(['stage-ro', '--spec', str(path), '--target', str(root / 'out')]) != 0
+    assert not (root / 'out').exists()
+    assert 'session-keyring' not in capsys.readouterr().err
+
+
+def test_env_validation_requires_production_and_approval_pin(setup):
+    assert assets is not None
+    root, spec = setup
+    env = root / 'env'
+    env.write_text('\n'.join(f'{k}={v}' for k, v in assets.REQUIRED_ENV.items()) + '\nDAQ_KNOWLEDGE_APPROVAL_KEYS_SHA256=' + '0' * 64 + '\n')
+    with pytest.raises(assets.AssetError):
+        assets._validate_env(str(env), hashlib.sha256(env.read_bytes()).hexdigest(), spec['expected']['secrets']['feedback-approval-keys-20261023.json']['sha256'])
+
+
+def test_target_mutation_before_publication_refused(setup, monkeypatch):
+    assert assets is not None
+    root, spec = setup
+    original = assets._copy_file
+    changed = False
+    def copy_then_corrupt(*args, **kwargs):
+        nonlocal changed
+        result = original(*args, **kwargs)
+        if not changed:
+            (root / 'out/main/nested/file').write_bytes(b'bad target')
+            changed = True
+        return result
+    monkeypatch.setattr(assets, '_copy_file', copy_then_corrupt)
+    with pytest.raises(assets.AssetError):
+        assets.stage_ro(spec, root / 'out')
+
+
+def test_rejects_untrusted_target_ancestor(setup, monkeypatch):
+    assert assets is not None
+    root, spec = setup
+    child = root / 'parent'
+    child.mkdir()
+    denied_inode = root.stat().st_ino
+    monkeypatch.setattr(assets, '_trusted_parent', lambda st: st.st_ino != denied_inode)
+    with pytest.raises(assets.AssetError):
+        assets.stage_ro(spec, child / 'out')
+    assert not (child / 'out').exists()
+
+
+def test_invalid_evidence_writes_private_failure_receipt(setup):
+    assert assets is not None
+    root, spec = setup
+    with pytest.raises(assets.AssetError):
+        assets.capture_rw(spec, root / 'out', {})
+    receipt = root / 'out/failure.json'
+    assert json.loads(receipt.read_text())['status'] == 'failed'
+    assert receipt.stat().st_mode & 0o777 == 0o600
+
+
+def test_render_validation_failure_writes_private_receipt(setup):
+    assert assets is not None
+    root, spec = setup
+    spec['runtime'] = {}
+    with pytest.raises(assets.AssetError):
+        assets.render(spec, root / 'configs')
+    assert json.loads((root / 'configs/failure.json').read_text())['status'] == 'failed'
+
+
+def test_stopped_evidence_rejects_fabricated_short_identity(setup):
+    assert assets is not None
+    root, spec = setup
+    evidence = {'container_id': 'abc', 'image_id': assets.IMAGE, 'stopped_at': 'not a time', 'quiescence_evidence': 'receipt'}
+    with pytest.raises(assets.AssetError):
+        assets.capture_rw(spec, root / 'out', evidence)
+
+
+def test_render_rejects_stage_with_failure_receipt(setup):
+    assert assets is not None
+    root, spec = setup
+    assets.stage_ro(spec, root / 'ro')
+    evidence = {'container_id': 'a' * 64, 'image_id': assets.IMAGE, 'stopped_at': '2026-10-29T00:00:00Z', 'quiescence_evidence': 'sha256:' + 'b' * 64}
+    assets.capture_rw(spec, root / 'rw', evidence)
+    (root / 'ro/failure.json').write_text('{}')
+    env = root / 'production.env'
+    env.write_text('\n'.join(f'{k}={v}' for k, v in assets.REQUIRED_ENV.items()) + '\nDAQ_KNOWLEDGE_APPROVAL_KEYS_SHA256=' + spec['expected']['secrets']['feedback-approval-keys-20261023.json']['sha256'] + '\n')
+    old = root / 'old-secrets'
+    old.mkdir()
+    spec['runtime'] = {'ro_dir': str(root / 'ro'), 'rw_dir': str(root / 'rw'), 'env_file': str(env), 'env_sha256': hashlib.sha256(env.read_bytes()).hexdigest(), 'old_secrets_dir': str(old), 'project': 'deploy', 'config_identity': 'sha256:' + 'c' * 64}
+    add_runtime_evidence(root, spec)
+    with pytest.raises(assets.AssetError):
+        assets.render(spec, root / 'configs')
+
+
+def test_render_rejects_different_rollback_secrets(setup):
+    assert assets is not None
+    root, spec = setup
+    assets.stage_ro(spec, root / 'ro')
+    evidence = {'container_id': 'a' * 64, 'image_id': assets.IMAGE, 'stopped_at': '2026-10-29T00:00:00Z', 'quiescence_evidence': 'sha256:' + 'b' * 64}
+    assets.capture_rw(spec, root / 'rw', evidence)
+    env = root / 'production.env'
+    env.write_text('\n'.join(f'{k}={v}' for k, v in assets.REQUIRED_ENV.items()) + '\nDAQ_KNOWLEDGE_APPROVAL_KEYS_SHA256=' + spec['expected']['secrets']['feedback-approval-keys-20261023.json']['sha256'] + '\n')
+    old = root / 'old-secrets'
+    old.mkdir()
+    spec['runtime'] = {'ro_dir': str(root / 'ro'), 'rw_dir': str(root / 'rw'), 'env_file': str(env), 'env_sha256': hashlib.sha256(env.read_bytes()).hexdigest(), 'old_secrets_dir': str(old), 'project': 'deploy', 'config_identity': 'sha256:' + 'c' * 64}
+    add_runtime_evidence(root, spec)
+    with pytest.raises(assets.AssetError):
+        assets.render(spec, root / 'configs')
+
+
+def test_deployment_identity_validates_labels_and_config_bytes(setup):
+    assert assets is not None
+    root, _ = setup
+    config = root / 'old-compose.yml'
+    config.write_text('services: {}\n')
+    labels = root / 'labels.json'
+    labels.write_text(json.dumps({'com.docker.compose.project': 'deploy', 'com.docker.compose.service': 'ai-daq-fae-backend', 'com.docker.compose.project.config_files': str(config)}))
+    labels.chmod(0o600)
+    runtime = {'project': 'deploy', 'labels_file': str(labels), 'config_files': {str(config): hashlib.sha256(config.read_bytes()).hexdigest()}}
+    assets._validate_deployment(runtime)
+    config.write_text('changed')
+    with pytest.raises(assets.AssetError):
+        assets._validate_deployment(runtime)
+
+
+def test_target_cannot_be_created_within_source_tree(setup):
+    assert assets is not None
+    root, spec = setup
+    with pytest.raises(assets.AssetError):
+        assets.stage_ro(spec, root / 'main/new-target')
+    assert not (root / 'main/new-target').exists()
+
+
+def test_symlink_in_source_root_path_rejected(setup):
+    assert assets is not None
+    root, spec = setup
+    alias = root / 'alias'
+    alias.symlink_to(root / 'main', target_is_directory=True)
+    spec['paths']['main'] = str(alias)
+    with pytest.raises(assets.AssetError):
+        assets.stage_ro(spec, root / 'out')
+
+
+def test_source_mode_change_after_copy_refused(setup, monkeypatch):
+    assert assets is not None
+    root, spec = setup
+    original = assets._copy_file
+    changed = False
+    def copy_then_chmod(*args, **kwargs):
+        nonlocal changed
+        result = original(*args, **kwargs)
+        if not changed:
+            (root / 'main/nested/file').chmod(0o600)
+            changed = True
+        return result
+    monkeypatch.setattr(assets, '_copy_file', copy_then_chmod)
+    with pytest.raises(assets.AssetError):
+        assets.stage_ro(spec, root / 'out')
+
+
+def test_source_directory_mode_change_after_copy_refused(setup, monkeypatch):
+    assert assets is not None
+    root, spec = setup
+    original = assets._copy_file
+    count = 0
+    def copy_then_chmod(*args, **kwargs):
+        nonlocal count
+        result = original(*args, **kwargs)
+        count += 1
+        if count == 2:
+            (root / 'main/nested').chmod(0o700)
+        return result
+    monkeypatch.setattr(assets, '_copy_file', copy_then_chmod)
+    with pytest.raises(assets.AssetError):
+        assets.stage_ro(spec, root / 'out')
+
+
+def test_ro_staging_does_not_require_live_runtime_data(setup):
+    assert assets is not None
+    root, spec = setup
+    spec['paths']['attachments'] = str(root / 'not-yet-captured')
+    spec['paths']['trace'] = str(root / 'missing-trace')
+    assert assets.stage_ro(spec, root / 'out')['matched'] is True
+
+
+def test_path_rejects_compose_interpolation_syntax():
+    assert assets is not None
+    with pytest.raises(assets.AssetError):
+        assets._parts('/tmp/${UNTRUSTED}/asset')
+
+
+def test_directory_depth_is_bounded(setup, monkeypatch):
+    assert assets is not None
+    root, spec = setup
+    deep = root / 'main/nested/deeper'
+    deep.mkdir()
+    (deep / 'file').write_bytes(b'x')
+    spec['expected']['main']['nested/deeper/file'] = identity(b'x')
+    monkeypatch.setattr(assets, 'MAX_DEPTH', 1, raising=False)
+    with pytest.raises(assets.AssetError):
+        assets.stage_ro(spec, root / 'out')
+
+
+def test_failure_receipt_explains_identity_mismatch_without_contents(setup):
+    assert assets is not None
+    root, spec = setup
+    (root / 'main/nested/file').write_bytes(b'synthetic confidential content')
+    with pytest.raises(assets.AssetError):
+        assets.stage_ro(spec, root / 'out')
+    receipt = (root / 'out/failure.json').read_text()
+    assert 'source identity mismatch' in receipt
+    assert 'synthetic confidential content' not in receipt
