@@ -61,12 +61,12 @@ def add_runtime_evidence(root, spec):
     config.write_text(json.dumps({'services': {'ai-daq-fae-backend': service}, 'networks': {'camera-db': {'external': True, 'name': 'deploy_default'}, 'platform-edge': {'external': True, 'name': 'orbbec-agent-platform-edge'}}}))
     override.write_text(json.dumps({'services': {'ai-daq-fae-backend': {'environment': {'SYNTHETIC_SETTING': 'present'}, 'mem_limit': '512m', 'logging': {'driver': 'json-file', 'options': {'max-size': '10m'}}}}}))
     labels = root / 'labels.json'
-    labels.write_text(json.dumps({'com.docker.compose.project': 'deploy', 'com.docker.compose.service': 'ai-daq-fae-backend', 'com.docker.compose.project.config_files': str(config) + ',' + str(override)}))
+    labels.write_text(json.dumps({'com.docker.compose.project': runtime['project'], 'com.docker.compose.service': 'ai-daq-fae-backend', 'com.docker.compose.project.config_files': str(config) + ',' + str(override), 'com.docker.compose.project.working_dir': str(root)}))
     labels.chmod(0o600)
     ctx = root / 'interpolation.env'
     ctx.write_text('')
     ctx.chmod(0o600)
-    runtime.update({'old_data_dir': str(root), 'labels_file': str(labels), 'config_files': {str(config): hashlib.sha256(config.read_bytes()).hexdigest(), str(override): hashlib.sha256(override.read_bytes()).hexdigest()}, 'config_identity': 'sha256:' + hashlib.sha256(labels.read_bytes()).hexdigest(), 'compose_binary': '/opt/homebrew/bin/docker-compose', 'compose_sha256': 'ignored-under-test', 'interpolation_file': str(ctx), 'interpolation_sha256': hashlib.sha256(ctx.read_bytes()).hexdigest()})
+    runtime.update({'project_directory': str(root), 'old_data_dir': str(root), 'labels_file': str(labels), 'config_files': {str(config): hashlib.sha256(config.read_bytes()).hexdigest(), str(override): hashlib.sha256(override.read_bytes()).hexdigest()}, 'config_identity': 'sha256:' + hashlib.sha256(labels.read_bytes()).hexdigest(), 'compose_binary': '/opt/homebrew/bin/docker-compose', 'compose_sha256': 'ignored-under-test', 'interpolation_file': str(ctx), 'interpolation_sha256': hashlib.sha256(ctx.read_bytes()).hexdigest()})
 
 
 def test_staging_exact_scope_and_private_metadata(setup):
@@ -355,9 +355,9 @@ def test_deployment_identity_validates_labels_and_config_bytes(setup):
     config = root / 'old-compose.yml'
     config.write_text('services: {}\n')
     labels = root / 'labels.json'
-    labels.write_text(json.dumps({'com.docker.compose.project': 'deploy', 'com.docker.compose.service': 'ai-daq-fae-backend', 'com.docker.compose.project.config_files': str(config)}))
+    labels.write_text(json.dumps({'com.docker.compose.project': 'deploy', 'com.docker.compose.service': 'ai-daq-fae-backend', 'com.docker.compose.project.config_files': str(config), 'com.docker.compose.project.working_dir': str(root)}))
     labels.chmod(0o600)
-    runtime = {'project': 'deploy', 'labels_file': str(labels), 'config_files': {str(config): hashlib.sha256(config.read_bytes()).hexdigest()}}
+    runtime = {'project': 'deploy', 'project_directory': str(root), 'labels_file': str(labels), 'config_files': {str(config): hashlib.sha256(config.read_bytes()).hexdigest()}}
     assets._validate_deployment(runtime)
     config.write_text('changed')
     with pytest.raises(assets.AssetError):

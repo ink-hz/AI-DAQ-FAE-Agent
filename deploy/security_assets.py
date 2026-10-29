@@ -747,7 +747,7 @@ def _check_compose_binary(runtime):
         os.close(parent)
 
 
-def _compose_model(runtime, resolve_env, config_files=None):
+def _compose_model(runtime, resolve_env, config_files=None, *, raw=False, project_directory=None, resolve_paths=False):
     before = _check_compose_binary(runtime)
     interpolation, st = _read_regular(runtime['interpolation_file'])
     if not _owner_mode(st, 0, 0, 0o600) or hashlib.sha256(interpolation).hexdigest() != runtime['interpolation_sha256']:
@@ -756,10 +756,17 @@ def _compose_model(runtime, resolve_env, config_files=None):
     if not paths or len(paths) > 8:
         raise AssetError('unsupported compose file count')
     args = [runtime['compose_binary'], '--project-name', runtime['project'], '--env-file', runtime['interpolation_file']]
+    project_directory = project_directory or runtime['project_directory']
+    _parts(project_directory)
+    args += ['--project-directory', project_directory]
     for path in paths:
         args += ['-f', path]
     args += ['config', '--format', 'json']
-    if not resolve_env:
+    if raw:
+        args.append('--no-interpolate')
+        if not resolve_paths:
+            args.append('--no-path-resolution')
+    elif not resolve_env:
         args.append('--no-env-resolution')
     try:
         proc = subprocess.Popen(args, cwd='/', env={}, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -821,6 +828,112 @@ def _compose_model(runtime, resolve_env, config_files=None):
     if not isinstance(model, dict):
         raise AssetError('invalid compose model')
     return model
+
+
+
+def _compose_source(runtime):
+    # ToModel (--no-interpolate) is the reference/explicit layer on both
+    # Compose 2.40 and 5.6. ToProject is the complete effective layer.
+    raw = _compose_model(runtime, False, raw=True)
+    raw_with_paths = _compose_model(runtime, False, raw=True, resolve_paths=True)
+    effective = _compose_model(runtime, True)
+    service_name = 'ai-daq-fae-backend'
+    raw_services = raw.get('services', {})
+    effective_services = effective.get('services', {})
+    if set(raw_services) != {service_name} or set(effective_services) != {service_name}:
+        raise AssetError('unsupported compose service scope')
+    raw_service = raw_services[service_name]
+    files = raw_service.get('env_file')
+    if isinstance(files, (str, dict)):
+        files = [files]
+    if not isinstance(files, list) or len(files) != 1:
+        raise AssetError('unsupported source env file scope')
+    references = []
+    for item in files:
+        if isinstance(item, str):
+            item = {'path': item}
+        if not isinstance(item, dict) or not isinstance(item.get('path'), str):
+            raise AssetError('invalid source env file reference')
+        if set(item) - {'path', 'required', 'format'}:
+            raise AssetError('unreviewed env file reference')
+        references.append(copy.deepcopy(item))
+    path_services = raw_with_paths.get('services', {})
+    if set(path_services) != {service_name}:
+        raise AssetError('unsupported resolved source service scope')
+    with_paths = path_services[service_name].get('env_file')
+    if isinstance(with_paths, (str, dict)):
+        with_paths = [with_paths]
+    if not isinstance(with_paths, list) or len(with_paths) != len(references):
+        raise AssetError('resolved source reference mismatch')
+    with_paths = [{'path': item} if isinstance(item, str) else item for item in with_paths]
+    if any(not isinstance(item, dict) or not isinstance(item.get('path'), str) for item in with_paths):
+        raise AssetError('invalid resolved source reference')
+    for original, resolved in zip(references, with_paths):
+        if {k: v for k, v in original.items() if k != 'path'} != {k: v for k, v in resolved.items() if k != 'path'}:
+            raise AssetError('source reference options changed')
+    explicit = raw_service.get('environment')
+    if explicit is not None and not isinstance(explicit, dict):
+        raise AssetError('invalid explicit environment layer')
+    raw_reference = references[0]['path']
+    raw_resolved_path = with_paths[0]['path']
+    if raw_reference.startswith('/'):
+        if os.path.normpath(raw_reference) != raw_resolved_path:
+            raise AssetError('source reference origin ambiguous')
+        base_directory = runtime['project_directory']
+    else:
+        suffix = '/' + raw_reference
+        if not raw_resolved_path.endswith(suffix):
+            raise AssetError('source reference origin ambiguous')
+        base_directory = raw_resolved_path[:-len(suffix)] or '/'
+    if base_directory != '/':
+        origin = _open_dir(base_directory)
+        os.close(origin)
+    with tempfile.TemporaryDirectory(prefix='daq-compose-refs-') as temp:
+        echo_path = os.path.join(temp, 'echo.json')
+        echo = {'services': {'reference-echo': {'image': 'synthetic', 'environment': {f'REFERENCE_{i}': item['path'] for i, item in enumerate(references)}}}}
+        _write_private_model(echo_path, echo)
+        echo_model = _compose_model(runtime, True, [echo_path], project_directory=base_directory)
+        echo_env = echo_model.get('services', {}).get('reference-echo', {}).get('environment')
+        if not isinstance(echo_env, dict) or set(echo_env) != {f'REFERENCE_{i}' for i in range(len(references))}:
+            raise AssetError('invalid resolved env file references')
+        for i, item in enumerate(references):
+            resolved = echo_env[f'REFERENCE_{i}']
+            if not isinstance(resolved, str) or not resolved or '$' in resolved:
+                raise AssetError('invalid interpolated env file reference')
+            item['path'] = resolved
+        resolve_path = os.path.join(temp, 'paths.json')
+        paths_model = {'services': {'reference-paths': {'image': 'synthetic', 'env_file': references}}}
+        _write_private_model(resolve_path, paths_model)
+        paths = _compose_model(runtime, False, [resolve_path], raw=True, project_directory=base_directory, resolve_paths=True)
+        references = paths.get('services', {}).get('reference-paths', {}).get('env_file')
+        if isinstance(references, (str, dict)):
+            references = [references]
+        if not isinstance(references, list) or len(references) != 1:
+            raise AssetError('invalid resolved env file references')
+        references = [{'path': item} if isinstance(item, str) else item for item in references]
+        for item in references:
+            if not isinstance(item, dict) or not isinstance(item.get('path'), str):
+                raise AssetError('invalid resolved env file reference')
+            _parts(item['path'])
+    source = copy.deepcopy(effective)
+    service = source['services'][service_name]
+    service.pop('environment', None)
+    if explicit is not None:
+        service['environment'] = copy.deepcopy(explicit)
+    service['env_file'] = references
+    return source, effective
+
+
+def _write_private_model(path, model):
+    data = json.dumps(model).encode()
+    if len(data) > MAX_MANIFEST:
+        raise AssetError('metadata size limit exceeded')
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        _write_all(fd, data)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
 def _validate_tree(root, records, owner, group, mode, secret=False):
@@ -906,7 +1019,7 @@ _FORBIDDEN_EXECUTION_FIELDS = frozenset({
 })
 
 
-def _execution_boundary(service, phase):
+def _execution_boundary(service, phase, *, effective=False):
     if not isinstance(service, dict) or phase not in ('source', 'runtime', 'rollback'):
         raise AssetError('invalid execution policy input')
     if set(service) - _ALLOWED_SERVICE_FIELDS - _FORBIDDEN_EXECUTION_FIELDS:
@@ -956,13 +1069,25 @@ def _execution_boundary(service, phase):
     if len(mounts) != len(expected_mounts) or {item.get('target') for item in mounts} != set(expected_mounts):
         raise AssetError('explicit mount scope mismatch')
     for item in mounts:
-        bind = item.get('bind') or {}
+        bind = item.get('bind')
+        if phase == 'source' and 'bind' not in item:
+            bind = {}
+        readonly = item.get('read_only', False)
         if (item.get('type') != 'bind' or not isinstance(bind, dict)
             or set(item) - {'type', 'source', 'target', 'read_only', 'bind'}
             or set(bind) - {'create_host_path'}
-            or bool(item.get('read_only', False)) != expected_mounts[item['target']]
-            or (phase != 'source' and bind.get('create_host_path') is not False)):
+            or type(readonly) is not bool or readonly != expected_mounts[item['target']]):
             raise AssetError('unreviewed explicit mount capability')
+        if phase != 'source':
+            if not effective and 'read_only' not in item:
+                raise AssetError('author must explicitly declare bind access mode')
+            if effective:
+                # compose-go 2.9.1 serializes the reviewed false boolean as
+                # an omitted field, but retains the long-format bind object.
+                if 'create_host_path' in bind and bind['create_host_path'] is not False:
+                    raise AssetError('unreviewed effective bind create policy')
+            elif bind.get('create_host_path') is not False:
+                raise AssetError('author must explicitly disable bind creation')
     networks = service.get('networks') or {}
     if (not isinstance(networks, dict) or set(networks) != {'camera-db', 'platform-edge'}
         or not isinstance(networks.get('platform-edge'), dict)
@@ -1047,8 +1172,13 @@ def _compare_effective(source, candidate, rollback):
 
 
 def _check_effective_policy(runtime, effective, rollback, desired):
+    phase = 'rollback' if rollback else 'runtime'
+    expected = desired['services']['ai-daq-fae-backend']
+    # The effective omitted-false interpretation is valid only when paired
+    # with this explicitly authored, independently reviewed long bind model.
+    _execution_boundary(expected, phase)
     service = effective['services']['ai-daq-fae-backend']
-    _execution_boundary(service, 'rollback' if rollback else 'runtime')
+    _execution_boundary(service, phase, effective=True)
     for key, expected_name in [('camera-db', 'deploy_default'), ('platform-edge', 'orbbec-agent-platform-edge')]:
         network = effective.get('networks', {}).get(key, {})
         if network.get('external') is not True or network.get('name') != expected_name:
@@ -1056,17 +1186,25 @@ def _check_effective_policy(runtime, effective, rollback, desired):
     if (service.get('image') != IMAGE or service.get('pull_policy') != 'never'
         or service.get('user') != ('0:0' if rollback else '21081:21081') or service.get('build')):
         raise AssetError('effective image or user policy mismatch')
-    expected = desired['services']['ai-daq-fae-backend']
     actual_mounts = service.get('volumes', [])
     wanted = expected['volumes']
+    approved_sources = {
+        REQUIRED_ENV['DAQ_KNOWLEDGE_RELEASE_ROOT']: runtime['ro_dir'] + '/main',
+        REQUIRED_ENV['DAQ_SDK_RELEASE_ROOT']: runtime['ro_dir'] + '/sdk',
+        '/run/daq-secrets': runtime['old_secrets_dir'] if rollback else runtime['ro_dir'] + '/secrets',
+        '/app/data/attachments': runtime['rw_dir'] + '/attachments',
+        '/app/data/daq_traces.jsonl': runtime['rw_dir'] + '/trace/daq_traces.jsonl',
+    }
+    if any(entry.get('source') != approved_sources[entry['target']] for entry in wanted):
+        raise AssetError('author mount source identity mismatch')
     if len(actual_mounts) != len(wanted):
         raise AssetError('effective mount count mismatch')
     actual_by_target = {entry.get('target'): entry for entry in actual_mounts}
     for entry in wanted:
         actual = actual_by_target.get(entry['target'], {})
         if (actual.get('type') != 'bind' or actual.get('source') != entry['source']
-            or bool(actual.get('read_only', False)) != entry['read_only']
-            or actual.get('bind', {}).get('create_host_path') is not False):
+            or actual.get('read_only', False) != entry['read_only']
+            or actual['bind'].get('create_host_path', False) is not False):
             raise AssetError('effective mount policy mismatch')
     if not rollback:
         if (service.get('read_only') is not True or service.get('cap_drop') != ['ALL']
@@ -1101,6 +1239,12 @@ def _validate_deployment(runtime):
     labels = json.loads(raw)
     if not isinstance(labels, dict) or labels.get('com.docker.compose.project') != runtime['project'] or labels.get('com.docker.compose.service') != 'ai-daq-fae-backend':
         raise AssetError('compose labels mismatch')
+    project_directory = runtime.get('project_directory')
+    _parts(project_directory)
+    if labels.get('com.docker.compose.project.working_dir') != project_directory:
+        raise AssetError('compose project directory identity mismatch')
+    directory = _open_dir(project_directory)
+    os.close(directory)
     files = runtime['config_files']
     if not isinstance(files, dict) or not files:
         raise AssetError('config file identities required')
@@ -1144,8 +1288,7 @@ def _validate_runtime(spec):
     expected_paths = {'main': data_root + '/knowledge/reviewed-thinking-prefix-20261028', 'sdk': data_root + '/knowledge/sdk-thinking-prefix-20261028', 'attachments': data_root + '/attachments', 'trace': data_root + '/daq_traces.jsonl'}
     if any(spec['paths'][key] != path for key, path in expected_paths.items()):
         raise AssetError('source data mount identity mismatch')
-    source = _compose_model(runtime, False)
-    effective_source = _compose_model(runtime, True)
+    source, effective_source = _compose_source(runtime)
     _execution_boundary(effective_source.get('services', {}).get('ai-daq-fae-backend'), 'source')
     effective_environment = effective_source.get('services', {}).get('ai-daq-fae-backend', {}).get('environment')
     _validate_env(runtime['env_file'], runtime['env_sha256'], spec['expected']['secrets']['feedback-approval-keys-20261023.json']['sha256'], effective_environment)
