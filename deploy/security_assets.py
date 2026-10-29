@@ -1019,7 +1019,7 @@ _FORBIDDEN_EXECUTION_FIELDS = frozenset({
 })
 
 
-def _execution_boundary(service, phase):
+def _execution_boundary(service, phase, *, effective=False):
     if not isinstance(service, dict) or phase not in ('source', 'runtime', 'rollback'):
         raise AssetError('invalid execution policy input')
     if set(service) - _ALLOWED_SERVICE_FIELDS - _FORBIDDEN_EXECUTION_FIELDS:
@@ -1069,13 +1069,25 @@ def _execution_boundary(service, phase):
     if len(mounts) != len(expected_mounts) or {item.get('target') for item in mounts} != set(expected_mounts):
         raise AssetError('explicit mount scope mismatch')
     for item in mounts:
-        bind = item.get('bind') or {}
+        bind = item.get('bind')
+        if phase == 'source' and 'bind' not in item:
+            bind = {}
+        readonly = item.get('read_only', False)
         if (item.get('type') != 'bind' or not isinstance(bind, dict)
             or set(item) - {'type', 'source', 'target', 'read_only', 'bind'}
             or set(bind) - {'create_host_path'}
-            or bool(item.get('read_only', False)) != expected_mounts[item['target']]
-            or (phase != 'source' and bind.get('create_host_path') is not False)):
+            or type(readonly) is not bool or readonly != expected_mounts[item['target']]):
             raise AssetError('unreviewed explicit mount capability')
+        if phase != 'source':
+            if not effective and 'read_only' not in item:
+                raise AssetError('author must explicitly declare bind access mode')
+            if effective:
+                # compose-go 2.9.1 serializes the reviewed false boolean as
+                # an omitted field, but retains the long-format bind object.
+                if 'create_host_path' in bind and bind['create_host_path'] is not False:
+                    raise AssetError('unreviewed effective bind create policy')
+            elif bind.get('create_host_path') is not False:
+                raise AssetError('author must explicitly disable bind creation')
     networks = service.get('networks') or {}
     if (not isinstance(networks, dict) or set(networks) != {'camera-db', 'platform-edge'}
         or not isinstance(networks.get('platform-edge'), dict)
@@ -1160,8 +1172,13 @@ def _compare_effective(source, candidate, rollback):
 
 
 def _check_effective_policy(runtime, effective, rollback, desired):
+    phase = 'rollback' if rollback else 'runtime'
+    expected = desired['services']['ai-daq-fae-backend']
+    # The effective omitted-false interpretation is valid only when paired
+    # with this explicitly authored, independently reviewed long bind model.
+    _execution_boundary(expected, phase)
     service = effective['services']['ai-daq-fae-backend']
-    _execution_boundary(service, 'rollback' if rollback else 'runtime')
+    _execution_boundary(service, phase, effective=True)
     for key, expected_name in [('camera-db', 'deploy_default'), ('platform-edge', 'orbbec-agent-platform-edge')]:
         network = effective.get('networks', {}).get(key, {})
         if network.get('external') is not True or network.get('name') != expected_name:
@@ -1169,17 +1186,25 @@ def _check_effective_policy(runtime, effective, rollback, desired):
     if (service.get('image') != IMAGE or service.get('pull_policy') != 'never'
         or service.get('user') != ('0:0' if rollback else '21081:21081') or service.get('build')):
         raise AssetError('effective image or user policy mismatch')
-    expected = desired['services']['ai-daq-fae-backend']
     actual_mounts = service.get('volumes', [])
     wanted = expected['volumes']
+    approved_sources = {
+        REQUIRED_ENV['DAQ_KNOWLEDGE_RELEASE_ROOT']: runtime['ro_dir'] + '/main',
+        REQUIRED_ENV['DAQ_SDK_RELEASE_ROOT']: runtime['ro_dir'] + '/sdk',
+        '/run/daq-secrets': runtime['old_secrets_dir'] if rollback else runtime['ro_dir'] + '/secrets',
+        '/app/data/attachments': runtime['rw_dir'] + '/attachments',
+        '/app/data/daq_traces.jsonl': runtime['rw_dir'] + '/trace/daq_traces.jsonl',
+    }
+    if any(entry.get('source') != approved_sources[entry['target']] for entry in wanted):
+        raise AssetError('author mount source identity mismatch')
     if len(actual_mounts) != len(wanted):
         raise AssetError('effective mount count mismatch')
     actual_by_target = {entry.get('target'): entry for entry in actual_mounts}
     for entry in wanted:
         actual = actual_by_target.get(entry['target'], {})
         if (actual.get('type') != 'bind' or actual.get('source') != entry['source']
-            or bool(actual.get('read_only', False)) != entry['read_only']
-            or actual.get('bind', {}).get('create_host_path') is not False):
+            or actual.get('read_only', False) != entry['read_only']
+            or actual['bind'].get('create_host_path', False) is not False):
             raise AssetError('effective mount policy mismatch')
     if not rollback:
         if (service.get('read_only') is not True or service.get('cap_drop') != ['ALL']
