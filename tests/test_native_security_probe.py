@@ -676,7 +676,7 @@ def test_provider_substitution_is_recorded_before_failing_app_create(tmp_path):
             assert report['phases'][-1]['provider_substitution'] == 'deterministic_adapter'
             assert 'deterministic_provider_adapter_method_v10' in report['substitutions']
             raise m.ProbeError('deliberate_create_failure')
-    controller = m.NativeController(SimpleNamespace(workroot=str(tmp_path), source_image=m.SOURCE_IMAGE,
+    controller = m.NativeController(SimpleNamespace(workroot=str(tmp_path), source_image=m.SOURCE_IMAGE, candidate_image=m.CANDIDATE_IMAGE,
                                  pg_image='sha256:' + '1' * 64, gate=['V10']), Manager())
     controller.pg = 'b' * 64
     with pytest.raises(m.ProbeError, match='deliberate_create_failure'):
@@ -749,7 +749,7 @@ def test_exact_descendant_alias_refuses_before_mutation(tmp_path, monkeypatch):
               (source / 'active.json').read_bytes(), sorted(source.iterdir()))
     monkeypatch.setattr(m.sys, 'platform', 'linux'); monkeypatch.setattr(m.os, 'geteuid', lambda: 0)
     monkeypatch.setattr(platform, 'machine', lambda: 'x86_64')
-    args = SimpleNamespace(source_image=m.SOURCE_IMAGE, expected_public_sha=m.PUBLIC_SHA,
+    args = SimpleNamespace(source_image=m.SOURCE_IMAGE, candidate_image=m.CANDIDATE_IMAGE, expected_public_sha=m.PUBLIC_SHA,
                            runtime_release=m.RUNTIME_RELEASE, main_internal=m.MAIN_INTERNAL, sdk_internal=m.SDK_INTERNAL,
                            pg_image='sha256:' + '1' * 64, main_root=str(source), sdk_root=str(source),
                            public_approval_key=str(tmp_path / 'public.json'),
@@ -789,7 +789,7 @@ def test_shutdown_warning_survives_stop_and_blocks_gate(tmp_path):
         def item(self, cid): return {}
         def owned(self, item, obj): pass
         def stop(self, cid): warning.write_text('{"warning_count":1}')
-    controller = m.NativeController(SimpleNamespace(workroot=str(tmp_path), source_image=m.SOURCE_IMAGE,
+    controller = m.NativeController(SimpleNamespace(workroot=str(tmp_path), source_image=m.SOURCE_IMAGE, candidate_image=m.CANDIDATE_IMAGE,
                                  pg_image='sha256:' + '1' * 64, gate=[]), Manager())
     controller.app = 'a' * 64; controller.app_phase = 'app-1'
     with pytest.raises(m.ProbeError, match='stop_warning'):
@@ -848,7 +848,7 @@ def test_cleanup_retains_final_phase_warning_after_owned_removal(tmp_path):
         data = {'attempt': 'a' * 32}
         def item(self, cid): return {'state': 'absent'}
         def inspect(self, cid): raise AssertionError('removed objects must not be re-inspected for file evidence')
-    controller = m.NativeController(SimpleNamespace(workroot=str(tmp_path), source_image=m.SOURCE_IMAGE,
+    controller = m.NativeController(SimpleNamespace(workroot=str(tmp_path), source_image=m.SOURCE_IMAGE, candidate_image=m.CANDIDATE_IMAGE,
                                  pg_image='sha256:' + '1' * 64, gate=[]), Manager())
     controller.app = 'a' * 64; controller.app_phase = 'scripted-9'
     controller.capture_app_evidence(removed=True)
@@ -905,7 +905,7 @@ def test_initial_startup_snapshot_precedes_side_effecting_consumer(tmp_path, mon
     output = tmp_path / 'output'; output.mkdir()
     (output / 'seed.json').write_text(json.dumps({'attachment_id': 'retained', 'disposable_id': 'disposable', 'expired_id': 'expired'}))
     manager = SimpleNamespace(data={'attempt': 'a' * 32})
-    controller = m.NativeController(SimpleNamespace(workroot=str(tmp_path), source_image=m.SOURCE_IMAGE,
+    controller = m.NativeController(SimpleNamespace(workroot=str(tmp_path), source_image=m.SOURCE_IMAGE, candidate_image=m.CANDIDATE_IMAGE,
                                    pg_image='sha256:' + '1' * 64, gate=[]), manager)
     def startup():
         # Only the simulated APP is allowed to perform this prerequisite work.
@@ -1066,3 +1066,103 @@ def test_runtime_missing_module_evidence_is_bounded_and_private(tmp_path, monkey
     else: assert 'missing_module' not in receipt
     assert 'private-token' not in raw and 'raw message' not in raw and 'traceback' not in raw
     assert capsys.readouterr().out == ''
+
+
+def _synthetic_images(m):
+    import copy
+    config = {'User': '', 'Labels': {'existing': 'yes'}, 'Env': ['SECRET=fixture'], 'Cmd': ['run']}
+    base = {'Id': m.SOURCE_IMAGE, 'Architecture': 'amd64', 'Os': 'linux',
+            'RootFS': {'Layers': ['sha256:old1', 'sha256:old2']}, 'Config': config}
+    candidate = copy.deepcopy(base)
+    candidate['Id'] = m.CANDIDATE_IMAGE
+    candidate['RootFS']['Layers'] += ['sha256:new1', 'sha256:new2']
+    candidate['Config']['User'] = '21081:21081'
+    candidate['Config']['Labels'].update(m.CANDIDATE_LABELS)
+    return base, candidate
+
+
+def test_dual_image_audit_preserves_layers_and_config_without_secret_output():
+    m = module(); base, candidate = _synthetic_images(m)
+    result = m.audit_image_pair(base, candidate)
+    assert result['base_layers_preserved'] and result['application_config_preserved']
+    assert 'SECRET=fixture' not in json.dumps(result)
+    assert result['candidate_image'] == m.CANDIDATE_IMAGE
+
+
+@pytest.mark.parametrize('mutation', ['layers', 'user', 'policy_label', 'base_label', 'recipe_label', 'env', 'architecture'])
+def test_dual_image_audit_rejects_wrong_ancestry_or_config(mutation):
+    m = module(); base, candidate = _synthetic_images(m)
+    if mutation == 'layers': candidate['RootFS']['Layers'][0] = 'sha256:foreign'
+    elif mutation == 'user': candidate['Config']['User'] = '0:0'
+    elif mutation.endswith('_label'):
+        key = {'policy_label': m.POLICY_LABEL, 'base_label': m.BASE_LABEL, 'recipe_label': m.RECIPE_LABEL}[mutation]
+        candidate['Config']['Labels'][key] = 'wrong'
+    elif mutation == 'env': candidate['Config']['Env'].append('CHANGED=value')
+    else: candidate['Architecture'] = 'arm64'
+    with pytest.raises(m.ProbeError): m.audit_image_pair(base, candidate)
+
+
+def test_candidate_argument_is_required_and_exact_before_mutation(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    m = module()
+    parser = m.argument_parser()
+    assert '--candidate-image' in parser._subparsers._group_actions[0].choices['run'].format_help()
+    run_args = ['run']
+    for key in ('main-root', 'sdk-root', 'public-approval-key', 'expected-public-sha',
+                'source-image', 'pg-image', 'workroot', 'runtime-release', 'main-internal', 'sdk-internal'):
+        run_args.extend(['--' + key, 'fixture'])
+    with pytest.raises(SystemExit): parser.parse_args(run_args)
+    run_args.extend(['--candidate-image', 'wrong'])
+    calls = []
+    monkeypatch.setattr(m, 'docker_command', lambda *a: calls.append(a))
+    with pytest.raises(m.ProbeError): m.main(run_args)
+    assert not calls
+    assert not list(tmp_path.iterdir())
+    with pytest.raises(m.ProbeError):
+        m.validate_image_arguments(SimpleNamespace(source_image=m.SOURCE_IMAGE, candidate_image='sha256:' + '0' * 64))
+    with pytest.raises(m.ProbeError):
+        m.validate_image_arguments(SimpleNamespace(source_image=m.SOURCE_IMAGE))
+    m.validate_image_arguments(SimpleNamespace(source_image=m.SOURCE_IMAGE, candidate_image=m.CANDIDATE_IMAGE))
+
+
+@pytest.mark.parametrize('root_mode', [False, True])
+@pytest.mark.parametrize('kind', ['worker', 'app'])
+def test_phase_selected_image_and_current_rw_mounts(tmp_path, monkeypatch, root_mode, kind):
+    from types import SimpleNamespace
+    m = module()
+    class Stop(Exception): pass
+    class Manager:
+        data = {'attempt': 'test'}
+        def create(self, role, image, flags, command):
+            observed.update(image=image, flags=flags)
+            raise Stop()
+    args = SimpleNamespace(workroot=str(tmp_path), source_image=m.SOURCE_IMAGE,
+                           candidate_image=m.CANDIDATE_IMAGE, pg_image='sha256:'+'1'*64, gate=[])
+    controller = m.NativeController(args, Manager()); controller.pg = 'a' * 64
+    monkeypatch.setattr(controller, 'save', lambda: None)
+    observed = {}
+    with pytest.raises(Stop):
+        if kind == 'worker': controller.worker('rollback' if root_mode else 'migrate', root_mode=root_mode)
+        else: controller.start_app(root_mode=root_mode)
+    assert observed['image'] == (m.SOURCE_IMAGE if root_mode else m.CANDIDATE_IMAGE)
+    flags = '\n'.join(observed['flags'])
+    assert str(controller.attachments) in flags and str(controller.trace) in flags
+    assert controller.report['phases'][-1]['image'] == observed['image']
+
+
+def test_dual_image_inspection_is_readonly_and_rejects_before_control_creation(monkeypatch):
+    m = module(); base, candidate = _synthetic_images(m)
+    pg = {'Id': 'sha256:' + '1'*64, 'Architecture': 'amd64', 'Os': 'linux'}
+    class Result:
+        returncode = 0
+        def __init__(self, obj): self.stdout = json.dumps([obj])
+    calls = []
+    def inspect(cmd):
+        calls.append(cmd)
+        return Result({m.SOURCE_IMAGE: base, m.CANDIDATE_IMAGE: candidate, pg['Id']: pg}[cmd[-1]])
+    result = m.inspect_image_inputs(m.SOURCE_IMAGE, m.CANDIDATE_IMAGE, pg['Id'], inspect)
+    assert len(calls) == 3 and all(cmd[:2] == ['image', 'inspect'] for cmd in calls)
+    assert result['base_layers_preserved']
+    candidate['Config']['User'] = '0:0'
+    with pytest.raises(m.ProbeError):
+        m.inspect_image_inputs(m.SOURCE_IMAGE, m.CANDIDATE_IMAGE, pg['Id'], inspect)

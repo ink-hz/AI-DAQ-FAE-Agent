@@ -4,7 +4,7 @@ This is Task2b tooling, not deployment approval. `probe_nonroot_runtime.py` acce
 only the explicitly prepared main/SDK roots, the pinned **public** approval key,
 exact local image IDs and a new private workroot. It has no production env-file,
 DSN, private-keyring, network, endpoint, Docker-context or container input. The
-source image is hard-pinned; `--pull never` is always used. No image is built.
+source and candidate images are hard-pinned; `--pull never` is always used. No image is built.
 
 Run only after parent review, as root on the authorized native Linux amd64 host
 with the exact application image and an explicitly reviewed official PostgreSQL
@@ -19,6 +19,7 @@ python3 deploy/probe_nonroot_runtime.py run \
   --public-approval-key /PRIVATE/PREPARED/feedback-approval-keys-20261023.json \
   --expected-public-sha d5e2f0c91431171aba2061c14734c1747eb66886f1a2aa26b99577121617fa38 \
   --source-image sha256:5ed10ead83ee10ad5ef668fad8ee6aa7d28e37bb8d217fd22daa84d6d5db5bf7 \
+  --candidate-image sha256:7360ead746ecef1303f27cc85b560ee13807af4a2245c8963f3eef94468586c7 \
   --pg-image sha256:REPLACE_WITH_REVIEWED_LOCAL_PG_IMAGE_ID \
   --workroot /opt/daq-native-probes/UNIQUE-ATTEMPT \
   --runtime-release daq-062f0a7ae744 \
@@ -27,9 +28,9 @@ python3 deploy/probe_nonroot_runtime.py run \
 ```
 
 Deploy this script together with `security_assets.py` from the **same checkout**.
-The reviewed dependency is commit `f03e98097e8f44e2ad49b379120710b55af3f066`;
+The reviewed dependency is commit `cfc1510e5a4a9b49d870195909cd560cbf32010c`;
 its required SHA-256 is
-`3c513406ae0336ac6e5c0bd8cae6dbc0e0c670b02b307b51726b3afb7190c2a8`.
+`3d94c1ac3b395cfb551ec31005df8cdae2b42312ba0533f8de9fef7057553eea`.
 The native branch merges that full approved branch and checks the helper bytes
 before using its descriptor-based copy/identity primitives. It neither imports a
 sibling worktree nor keeps a second copytree implementation.
@@ -65,7 +66,13 @@ exact full-ID network namespace; only private loopback exists. APP uses UID/GID
 noexec/nosuid/nodev private tmpfs. Only synthetic attachment/trace leaves are RW.
 Workers run in independently owned containers, never `docker exec`; their timeout
 causes cleanup of the owned containers. The root seed/rollback stages deliberately
-use the old root/default-capability baseline and are labelled separately.
+use the original source image and old root/default-capability baseline. Non-root
+APP and workers use the candidate image. Both phases use the current prepared
+RW attachments and trace where applicable. Before creating any controller
+resources, read-only image inspection checks both pinned IDs, amd64 Linux,
+candidate base-layer prefix plus two layers, default user, the three exact
+policy/base/recipe labels and all other application Config fields against the
+source. Reports retain only identities, digests and booleans, not Config.Env.
 
 `journal.json` is fsynced before each Docker create. A lost create result (including nonzero CLI exit) is
 reconciled only by exact unique name, owner/role labels and image ID. A current
@@ -162,7 +169,7 @@ never repeats a model call or an already-failed gate.
 | V08 | nonempty old-root copy, real startup expired/unexpired GC and partial/batch cleanup, owner/other HTTP read/delete | Mandatory normal GC/owner/migration can PASS; archive protection is separately NOT_EXECUTED |
 | V09 | real JsonlTraceSink, preserved prefix across restart, expected RO negative with captured warning and failed write gate | Health alone never passes this gate |
 | V10 | true HTTP minimal complete task through deterministic provider boundary, real PG normal persistence/restored context/revision/attachments/history, exact-event replay without provider calls, actual read receipts on both turns | Provider class method substituted before app import; app module bytes/config/signatures/repositories unchanged; no model/quality claim |
-| V11 | same-image old-root baseline, current old+new attachments/trace, root-created owner, stopped fresh-copy re-forward; PG never restored | Root history decrypt requires V10 in selected gates; otherwise explicit PARTIAL |
+| V11 | original-image old-root baseline, current old+new attachments/trace, root-created owner, stopped fresh-copy re-forward; PG never restored | Root history decrypt requires V10 in selected gates; otherwise explicit PARTIAL |
 
 Archive protection is separately `NOT_EXECUTED` with
 `disabled_by_source_configuration`: the pinned source has archive=false. It is

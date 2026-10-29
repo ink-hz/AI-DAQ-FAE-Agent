@@ -2,7 +2,7 @@
 """Isolated DAQ native probe. No production env/DSN/keyring/network inputs.
 
 Outer controller uses only Python stdlib and the local Docker daemon. Runtime
-subcommands execute the SAME file read-only in the exact source image. They are
+subcommands execute the SAME file read-only in the approved phase image. They are
 not application modules and never modify approved application/knowledge bytes.
 """
 from __future__ import annotations
@@ -24,6 +24,12 @@ import time
 import uuid
 
 SOURCE_IMAGE = 'sha256:5ed10ead83ee10ad5ef668fad8ee6aa7d28e37bb8d217fd22daa84d6d5db5bf7'
+CANDIDATE_IMAGE = 'sha256:7360ead746ecef1303f27cc85b560ee13807af4a2245c8963f3eef94468586c7'
+RECIPE_COMMIT = '9439b21b95ded7530e2f4205bf19a53b667b52ac'
+POLICY_LABEL = 'org.ai-daq.permission-policy'
+BASE_LABEL = 'org.ai-daq.base-image-id'
+RECIPE_LABEL = 'org.ai-daq.recipe-commit'
+CANDIDATE_LABELS = {POLICY_LABEL: 'daq-immutable-code-permissions-v1', BASE_LABEL: SOURCE_IMAGE, RECIPE_LABEL: RECIPE_COMMIT}
 PUBLIC_SHA = 'd5e2f0c91431171aba2061c14734c1747eb66886f1a2aa26b99577121617fa38'
 PUBLIC_INTERNAL = '/run/daq-secrets/feedback-approval-keys-20261023.json'
 MAIN_INTERNAL = '/app/data/knowledge/reviewed-thinking-prefix-20261028'
@@ -385,8 +391,8 @@ def audit_candidate(obj, pg_id):
     require(actual == expected, 'daemon_mount_policy_mismatch')
 
 
-ASSET_HELPER_SHA = '3c513406ae0336ac6e5c0bd8cae6dbc0e0c670b02b307b51726b3afb7190c2a8'
-ASSET_HELPER_COMMIT = 'f03e98097e8f44e2ad49b379120710b55af3f066'
+ASSET_HELPER_SHA = '3d94c1ac3b395cfb551ec31005df8cdae2b42312ba0533f8de9fef7057553eea'
+ASSET_HELPER_COMMIT = 'cfc1510e5a4a9b49d870195909cd560cbf32010c'
 ASSET_FILE_LIMIT = 16 * 1024**2
 ASSET_TOTAL_LIMIT = 32 * 1024**2
 ASSET_NODE_LIMIT = 4096
@@ -1491,6 +1497,55 @@ def copy_current(source, destination):
         return len(tree.expected)
 
 
+def validate_image_arguments(args):
+    require(getattr(args, 'source_image', None) == SOURCE_IMAGE
+            and getattr(args, 'candidate_image', None) == CANDIDATE_IMAGE,
+            'approved_image_identity_mismatch')
+
+
+def audit_image_pair(base, candidate):
+    for obj, image in ((base, SOURCE_IMAGE), (candidate, CANDIDATE_IMAGE)):
+        require(obj.get('Id') == image and obj.get('Architecture') == 'amd64'
+                and obj.get('Os') == 'linux', 'native_image_identity_mismatch')
+    source_layers = base.get('RootFS', {}).get('Layers')
+    candidate_layers = candidate.get('RootFS', {}).get('Layers')
+    require(isinstance(source_layers, list) and len(source_layers) > 0
+            and isinstance(candidate_layers, list)
+            and len(candidate_layers) == len(source_layers) + 2
+            and candidate_layers[:len(source_layers)] == source_layers, 'candidate_layer_mismatch')
+    source_config = base.get('Config'); candidate_config = candidate.get('Config')
+    require(isinstance(source_config, dict) and isinstance(candidate_config, dict), 'image_config_invalid')
+    require(candidate_config.get('User') == '21081:21081', 'candidate_user_mismatch')
+    labels = source_config.get('Labels') or {}
+    require(isinstance(labels, dict), 'image_labels_invalid')
+    labels = {**labels, **CANDIDATE_LABELS}
+    require(candidate_config.get('Labels') == labels, 'candidate_labels_mismatch')
+    require({k: v for k, v in source_config.items() if k not in {'User', 'Labels'}} ==
+            {k: v for k, v in candidate_config.items() if k not in {'User', 'Labels'}},
+            'candidate_config_mismatch')
+    def digest(value):
+        return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    return {'source_image': SOURCE_IMAGE, 'candidate_image': CANDIDATE_IMAGE,
+            'recipe_commit': RECIPE_COMMIT, 'base_layers_preserved': True,
+            'application_config_preserved': True, 'candidate_labels_match': True,
+            'candidate_user_match': True, 'source_config_sha256': digest(source_config),
+            'candidate_config_sha256': digest(candidate_config), 'base_layers_sha256': digest(source_layers)}
+
+
+def inspect_image_inputs(source, candidate, pg, run):
+    validate_image_arguments(argparse.Namespace(source_image=source, candidate_image=candidate))
+    images = []
+    for image in (source, candidate, pg):
+        require(re.fullmatch(r'sha256:[a-f0-9]{64}', image), 'image_id_invalid')
+        result = run(['image', 'inspect', image])
+        require(result.returncode == 0, 'local_image_missing')
+        obj = json.loads(result.stdout)[0]
+        require(obj['Id'] == image and obj['Architecture'] == 'amd64' and obj['Os'] == 'linux',
+                'native_image_identity_mismatch')
+        images.append(obj)
+    return audit_image_pair(images[0], images[1])
+
+
 class NativeController:
     def __init__(self, args, manager):
         self.args, self.manager = args, manager
@@ -1501,6 +1556,7 @@ class NativeController:
         self.report = fresh_report()
         self.report['attempt'] = manager.data['attempt']
         self.report['source_image'] = args.source_image
+        self.report['candidate_image'] = args.candidate_image
         self.report['pg_image'] = args.pg_image
         self.report['gates_requested'] = args.gate or list(GATES)
         self.current_gate = 'V01'
@@ -1517,14 +1573,6 @@ class NativeController:
                 left, right = os.fstat(fd), os.fstat(actual)
                 require((left.st_dev, left.st_ino) == (right.st_dev, right.st_ino), 'workroot_identity_changed')
             finally: os.close(actual)
-
-    def image_check(self, image):
-        require(re.fullmatch(r'sha256:[a-f0-9]{64}', image), 'image_id_invalid')
-        result = self.manager.run(['image', 'inspect', image])
-        require(result.returncode == 0, 'local_image_missing')
-        value = json.loads(result.stdout)[0]
-        require(value['Id'] == image and value['Architecture'] == 'amd64' and value['Os'] == 'linux',
-                'native_image_identity_mismatch')
 
     def mounts(self, *, root_mode=False, worker=False, trace_ro=False, attachments=None):
         flags = []
@@ -1554,13 +1602,16 @@ class NativeController:
     def worker(self, phase, *, root_mode=False, trace_ro=False, attachments=None, share_pid=False):
         self.serial += 1
         phase_id = phase + '-' + str(self.serial)
-        self.report['last_phase'] = phase_id; self.save()
+        selected_image = self.args.source_image if root_mode else self.args.candidate_image
+        self.report['last_phase'] = phase_id
+        self.report.setdefault('phases', []).append({'id': phase_id, 'root_baseline': root_mode, 'image': selected_image})
+        self.save()
         flags = self.flags(root_mode) + self.mounts(root_mode=root_mode, worker=True,
                                                   trace_ro=trace_ro, attachments=attachments)
         flags += ['--env', 'DAQ_NATIVE_PROBE_PHASE=' + phase_id]
         if share_pid:
             flags += ['--pid', 'container:' + self.app]
-        cid = self.manager.create('work-' + str(self.serial), self.args.source_image, flags,
+        cid = self.manager.create('work-' + str(self.serial), selected_image, flags,
                                   ['python', '/probe.py', '_runtime', phase])
         self.manager.start(cid)
         self.manager.wait(cid, timeout=180)
@@ -1577,15 +1628,16 @@ class NativeController:
     def start_app(self, *, root_mode=False, scripted=False):
         self.serial += 1
         self.app_phase = ('root' if root_mode else 'scripted' if scripted else 'app') + '-' + str(self.serial)
+        selected_image = self.args.source_image if root_mode else self.args.candidate_image
         self.report.setdefault('phases', []).append({'id': self.app_phase, 'root_baseline': root_mode,
             'provider_substitution': 'deterministic_adapter' if scripted else 'none',
-            'identity_substitution': 'synthetic_http', 'source_image': self.args.source_image})
+            'identity_substitution': 'synthetic_http', 'image': selected_image})
         if scripted and 'deterministic_provider_adapter_method_v10' not in self.report['substitutions']:
             self.report['substitutions'].append('deterministic_provider_adapter_method_v10')
         self.save()
         flags = self.flags(root_mode) + self.mounts(root_mode=root_mode)
         flags += ['--env', 'DAQ_NATIVE_PROBE_PHASE=' + self.app_phase]
-        self.app = self.manager.create('app-' + str(self.serial), self.args.source_image, flags,
+        self.app = self.manager.create('app-' + str(self.serial), selected_image, flags,
                                        ['python', '/probe.py', '_runtime', 'scripted-app' if scripted else 'app'])
         self.manager.start(self.app)
         if not root_mode:
@@ -1652,7 +1704,8 @@ class NativeController:
 
     def run(self):
         self.save()
-        self.image_check(self.args.source_image); self.image_check(self.args.pg_image)
+        self.report['image_audit'] = self.args.image_audit
+        self.save()
         prepare_synthetic_files(self.root)
         self.report['asset_dependency'] = {'commit': ASSET_HELPER_COMMIT, 'sha256': ASSET_HELPER_SHA}
         self.report['asset_inventory'] = {}
@@ -1756,7 +1809,7 @@ class NativeController:
             require(self.trace.read_bytes() == source_trace.read_bytes(), 'trace_forward_copy_mismatch')
             self.start_app()
             forward = self.worker('reforward')
-            self.complete('V11', ['same_image_root_current_data', 'old_new_http_visibility',
+            self.complete('V11', ['original_image_root_current_data', 'old_new_http_visibility',
                                   'root_new_owner_recorded', 'stopped_fresh_copy_reforward', 'pg_never_restored'],
                           {'rollback': rollback, 'reforward': forward},
                           missing=[] if 'V10' in selected else ['root_history_decryption_requires_vten'])
@@ -1770,7 +1823,7 @@ def argument_parser():
     commands = parser.add_subparsers(dest='command', required=True)
     run = commands.add_parser('run', help='native Linux amd64 only; creates exclusively synthetic state')
     for name in ('main-root', 'sdk-root', 'public-approval-key', 'expected-public-sha',
-                 'source-image', 'pg-image', 'workroot', 'runtime-release', 'main-internal', 'sdk-internal'):
+                 'source-image', 'candidate-image', 'pg-image', 'workroot', 'runtime-release', 'main-internal', 'sdk-internal'):
         run.add_argument('--' + name, required=True)
     run.add_argument('--gate', action='append', choices=GATES,
                      help='Select affected gates; prerequisite evidence is explicit in report')
@@ -1786,6 +1839,7 @@ def argument_parser():
 
 
 def validate_inputs(args):
+    validate_image_arguments(args)
     import platform
     require(sys.platform == 'linux' and os.geteuid() == 0 and platform.machine() in {'x86_64', 'amd64'},
             'native_root_controller_required')
@@ -1835,7 +1889,11 @@ def main(argv=None):
     if args.command == '_runtime':
         return runtime_main(args)
     import fcntl
+    if args.command == 'run':
+        validate_image_arguments(args)
     require(sys.platform == 'linux' and os.geteuid() == 0, 'native_root_controller_required')
+    if args.command == 'run':
+        args.image_audit = inspect_image_inputs(args.source_image, args.candidate_image, args.pg_image, docker_command)
     # Global per-host lease persists across process death, workroot names and
     # failed cleanup. Only explicit cleanup can release an existing attempt.
     control = Path('/run/daq-native-probe')
