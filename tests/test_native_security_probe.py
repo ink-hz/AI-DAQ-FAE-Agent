@@ -960,3 +960,50 @@ def test_startup_readiness_worker_has_no_attachment_maintenance(tmp_path, monkey
     monkeypatch.setenv('DAQ_DATABASE_URL', 'synthetic')
     assert m.runtime_startup()['runtime_release'] == m.RUNTIME_RELEASE
     assert (tmp_path / '.partial-synthetic').is_dir() and (tmp_path / '.batch-synthetic').is_dir()
+
+
+@pytest.mark.parametrize('after_reboot', [False, True])
+@pytest.mark.parametrize('other_failure', ['none', 'unknown', 'inspect', 'stop'])
+def test_continuous_journal_failure_never_skips_known_cleanup(tmp_path, monkeypatch, after_reboot, other_failure):
+    m = module(); daemon = Daemon(); base = daemon.__call__
+    monkeypatch.setattr(m, 'boot_identity', lambda: 'old-boot')
+    manager = m.OwnedDocker(tmp_path, daemon)
+    pg = add_known_running(m, manager, daemon, 'postgres', 'b')
+    app = add_known_running(m, manager, daemon, 'app', 'c')
+    bad = None
+    if other_failure != 'none':
+        bad = add_known_running(m, manager, daemon, 'worker', 'd')
+        if other_failure == 'unknown':
+            daemon.objects.pop(bad['name']); daemon.objects.pop(bad['id']); bad['id'] = None
+            manager.save()
+    durable_before = (tmp_path / 'journal.json').read_bytes()
+    def run(args, timeout=30):
+        if bad and ((other_failure == 'inspect' and args[:2] == ['container', 'inspect'] and args[-1] == bad['name'])
+                    or (other_failure == 'stop' and args[0] == 'stop' and args[-1] == bad['id'])):
+            raise subprocess.TimeoutExpired('docker', timeout)
+        return base(args, timeout)
+    manager.run = run
+    if after_reboot: monkeypatch.setattr(m, 'boot_identity', lambda: 'new-boot')
+    writes = []
+    def unavailable():
+        writes.append(manager.data['state'])
+        raise OSError('synthetic continuous journal unavailable')
+    monkeypatch.setattr(manager, 'save', unavailable)
+    with pytest.raises(m.ProbeError, match='journal_persistence_failed'):
+        manager.cleanup(after_reboot=after_reboot)
+    assert len(writes) >= 3
+    assert manager.data['state'] == 'blocked'
+    assert manager.data['journal_persistence_errors']
+    assert all(row['category'] == 'journal_persistence_failed' and row['exception_type'] == 'OSError'
+               for row in manager.data['journal_persistence_errors'])
+    if after_reboot:
+        assert manager.data['journal_persistence_errors'][0]['stage'] == 'reboot_evidence'
+    assert pg['state'] == app['state'] == 'absent'
+    assert all(any(call[0] == 'stop' and call[-1] == item['id'] for call in daemon.calls) for item in (pg, app))
+    assert pg['id'] not in daemon.objects and app['id'] not in daemon.objects
+    if other_failure in {'inspect', 'stop'}:
+        assert bad['cleanup_error'] == 'command_timeout'
+    if other_failure == 'unknown' and not after_reboot:
+        assert bad['cleanup_error'] == 'unresolved_create'
+    assert (tmp_path / 'journal.json').read_bytes() == durable_before
+    assert json.loads(durable_before)['state'] != 'released'

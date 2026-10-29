@@ -242,14 +242,27 @@ class OwnedDocker:
         item['state'] = 'stopped'; self.save()
 
     def cleanup(self, *, after_reboot=False):
+        errors = []
+        persistence_errors = []
+        self.data['cleanup_errors'] = errors
+        self.data['journal_persistence_errors'] = persistence_errors
+
+        def persist(stage, item=None):
+            # Evidence IO has a separate failure boundary from already-owned
+            # resource termination. A write failure never authorizes release.
+            try:
+                self.save()
+            except BaseException as exc:
+                persistence_errors.append({'stage': stage, 'name': item['name'] if item else None,
+                    'category': 'journal_persistence_failed', 'exception_type': type(exc).__name__})
+                self.data['state'] = 'blocked'
+
         changed_boot = bool(after_reboot and self.data.get('boot_id') and boot_identity()
                             and self.data['boot_id'] != boot_identity())
         if changed_boot:
             self.data['recovery_evidence'] = {'prior_boot_id': self.data['boot_id'],
                 'observed_boot_id': boot_identity(), 'basis': 'kernel_boot_changed'}
-            self.save()
-        errors = []
-        self.data['cleanup_errors'] = errors
+            persist('reboot_evidence')
         for item in reversed(self.data['containers']):
             try:
                 obj = self.inspect(item['name'])
@@ -260,10 +273,11 @@ class OwnedDocker:
                     # recorded full ID, or that ID also is absent.
                     if item['id'] and self.inspect(item['id']) is not None:
                         raise ProbeError('ownership_mismatch')
-                    item['state'] = 'absent'; item['cleanup_status'] = 'absent'; item.pop('cleanup_error', None); self.save(); continue
+                    item['state'] = 'absent'; item['cleanup_status'] = 'absent'; item.pop('cleanup_error', None)
+                    persist('absence', item); continue
                 self.owned(item, obj)
                 cid = obj['Id']
-                item['id'] = cid; self.save()
+                item['id'] = cid; persist('resolved_identity', item)
                 if obj['State']['Running']:
                     self.run(['stop', '--time', '10', cid], timeout=20)
                 stopped = self.inspect(cid)
@@ -275,7 +289,8 @@ class OwnedDocker:
                 self.run(['rm', cid])
                 if self.inspect(cid) is not None or self.inspect(item['name']) is not None:
                     raise ProbeError('absence_unconfirmed')
-                item['state'] = 'absent'; item['cleanup_status'] = 'absent'; item.pop('cleanup_error', None); self.save()
+                item['state'] = 'absent'; item['cleanup_status'] = 'absent'; item.pop('cleanup_error', None)
+                persist('removed_absence', item)
             except BaseException as exc:
                 # One ambiguous object blocks release, not independently safe
                 # cleanup of earlier owned writers/PG. Never widen ownership.
@@ -283,14 +298,14 @@ class OwnedDocker:
                 item['cleanup_error'] = error_category(exc)
                 errors.append({'name': item['name'], 'category': item['cleanup_error']})
                 self.data['state'] = 'blocked'
-                try:
-                    self.save()
-                except BaseException:
-                    # Continue stopping other known writers even if persistence
-                    # itself failed. The unreleased global lease remains intact.
-                    pass
-        self.data['state'] = 'blocked' if errors else 'released'
-        self.save()
+                persist('object_failure', item)
+        self.data['state'] = 'blocked' if errors or persistence_errors else 'released'
+        persist('final_state')
+        if persistence_errors:
+            # Even when every workload stopped, incomplete durable evidence
+            # must return failure so the caller cannot release the global lease.
+            self.data['state'] = 'blocked'
+            raise ProbeError('cleanup_journal_persistence_failed')
         if errors:
             raise ProbeError('cleanup_' + errors[0]['category'])
 

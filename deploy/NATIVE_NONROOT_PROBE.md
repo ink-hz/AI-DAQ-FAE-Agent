@@ -78,7 +78,13 @@ starting another workroot is refused. Cleanup walks all journaled objects in
 reverse dependency order even when one is unresolved or fails inspection,
 ownership, stop or removal. Each independently confirmed owned object is still
 stopped/removed and absence checked; fixed per-object errors are persisted and
-aggregated only after traversal. Any unresolved object keeps the lease blocked.
+aggregated only after traversal. Journal writes have their own failure boundary,
+including initial reboot bookkeeping: persistent IO failure cannot skip an
+independently confirmed owned object's stop/absence checks. Operation errors and
+journal-persistence errors retain separate categories. Any failed journal write
+keeps the attempt blocked and returns nonzero even if all workloads were removed;
+when storage cannot accept evidence, the existing unreleased lease is retained.
+Any unresolved object likewise keeps the lease blocked.
 Retain all files and use only:
 
 ```sh
