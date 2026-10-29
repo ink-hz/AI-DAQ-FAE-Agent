@@ -884,24 +884,108 @@ def _mount(source, target, readonly):
     return {'type': 'bind', 'source': source, 'target': target, 'read_only': readonly, 'bind': {'create_host_path': False}}
 
 
+
+# Explicitly classify normalized Compose service fields. New unreviewed
+# fields fail closed instead of inheriting a future execution capability.
+_ALLOWED_SERVICE_FIELDS = frozenset({
+    'image', 'build', 'pull_policy', 'container_name', 'restart', 'env_file',
+    'environment', 'volumes', 'ports', 'networks', 'healthcheck', 'command',
+    'entrypoint', 'logging', 'labels', 'working_dir', 'hostname', 'domainname',
+    'dns', 'dns_search', 'dns_opt', 'extra_hosts', 'expose', 'platform',
+    'init', 'tty', 'stdin_open', 'stop_grace_period', 'stop_signal', 'deploy',
+    'mem_limit', 'mem_reservation', 'memswap_limit', 'mem_swappiness',
+    'cpus', 'cpuset', 'cpu_count', 'cpu_percent', 'cpu_shares', 'cpu_quota',
+    'cpu_period', 'cpu_rt_period', 'cpu_rt_runtime', 'pids_limit', 'ulimits',
+    'shm_size', 'oom_score_adj', 'oom_kill_disable', 'user', 'read_only',
+    'cap_drop', 'security_opt', 'tmpfs',
+})
+_FORBIDDEN_EXECUTION_FIELDS = frozenset({
+    'volumes_from', 'secrets', 'configs', 'use_api_socket', 'devices',
+    'device_cgroup_rules', 'gpus', 'group_add', 'cap_add', 'privileged',
+    'pid', 'ipc', 'uts', 'userns_mode', 'network_mode', 'post_start', 'pre_stop',
+})
+
+
+def _execution_boundary(service, phase):
+    if not isinstance(service, dict) or phase not in ('source', 'runtime', 'rollback'):
+        raise AssetError('invalid execution policy input')
+    if set(service) - _ALLOWED_SERVICE_FIELDS - _FORBIDDEN_EXECUTION_FIELDS:
+        raise AssetError('unreviewed compose service field')
+    for field in sorted(_FORBIDDEN_EXECUTION_FIELDS):
+        if service.get(field):
+            raise AssetError('unauthorized compose execution capability: ' + field)
+    deploy = service.get('deploy') or {}
+    if not isinstance(deploy, dict) or set(deploy) - {'resources', 'placement'} or deploy.get('placement'):
+        raise AssetError('unreviewed deploy capability')
+    resources = deploy.get('resources') or {}
+    if not isinstance(resources, dict) or set(resources) - {'limits', 'reservations'}:
+        raise AssetError('unreviewed deploy resources')
+    for category in ('limits', 'reservations'):
+        values = resources.get(category) or {}
+        allowed = {'cpus', 'memory', 'pids'} if category == 'limits' else {'cpus', 'memory'}
+        if not isinstance(values, dict):
+            raise AssetError('invalid deploy resources')
+        if 'devices' in values:
+            raise AssetError('unauthorized deploy resource capability: devices')
+        if set(values) - allowed:
+            raise AssetError('unreviewed deploy resource capability')
+    options = service.get('security_opt') or []
+    if not isinstance(options, list) or any(option != 'no-new-privileges:true' for option in options):
+        raise AssetError('unreviewed security option')
+    if phase == 'runtime':
+        if (service.get('user') != '21081:21081' or service.get('read_only') is not True
+            or service.get('cap_drop') != ['ALL'] or 'no-new-privileges:true' not in options
+            or service.get('tmpfs') != ['/tmp:rw,noexec,nosuid,nodev,size=256m,uid=21081,gid=21081,mode=0700']):
+            raise AssetError('runtime execution policy mismatch')
+    else:
+        expected_users = (None, '', '0', '0:0', 'root') if phase == 'source' else ('0:0',)
+        if service.get('user') not in expected_users or service.get('read_only') or service.get('cap_drop') or service.get('tmpfs'):
+            raise AssetError('original root execution policy mismatch')
+    mounts = service.get('volumes') or []
+    if not isinstance(mounts, list) or any(not isinstance(item, dict) for item in mounts):
+        raise AssetError('invalid explicit mount policy')
+    if phase == 'source':
+        expected_mounts = {'/app/data': False, '/run/daq-secrets': True}
+    else:
+        expected_mounts = {
+            '/app/data/knowledge/reviewed-thinking-prefix-20261028': True,
+            '/app/data/knowledge/sdk-thinking-prefix-20261028': True,
+            '/run/daq-secrets': True, '/app/data/attachments': False,
+            '/app/data/daq_traces.jsonl': False,
+        }
+    if len(mounts) != len(expected_mounts) or {item.get('target') for item in mounts} != set(expected_mounts):
+        raise AssetError('explicit mount scope mismatch')
+    for item in mounts:
+        bind = item.get('bind') or {}
+        if (item.get('type') != 'bind' or not isinstance(bind, dict)
+            or set(item) - {'type', 'source', 'target', 'read_only', 'bind'}
+            or set(bind) - {'create_host_path'}
+            or bool(item.get('read_only', False)) != expected_mounts[item['target']]
+            or (phase != 'source' and bind.get('create_host_path') is not False)):
+            raise AssetError('unreviewed explicit mount capability')
+    networks = service.get('networks') or {}
+    if (not isinstance(networks, dict) or set(networks) != {'camera-db', 'platform-edge'}
+        or not isinstance(networks.get('platform-edge'), dict)
+        or networks['platform-edge'].get('ipv4_address') != '172.31.0.9'):
+        raise AssetError('execution network boundary mismatch')
+    if set(networks.get('camera-db') or {}) or set(networks['platform-edge']) != {'ipv4_address'}:
+        raise AssetError('unreviewed network endpoint capability')
+    ports = service.get('ports') or []
+    if (len(ports) != 1 or (ports[0].get('host_ip'), str(ports[0].get('published')),
+         ports[0].get('target'), ports[0].get('protocol', 'tcp'), ports[0].get('mode', 'ingress'))
+        != ('127.0.0.1', '8081', 8081, 'tcp', 'ingress')
+        or set(ports[0]) - {'mode', 'host_ip', 'target', 'published', 'protocol'}):
+        raise AssetError('execution port boundary mismatch')
+
+
 def _config(runtime, rollback, source):
     model = copy.deepcopy(source)
     services = model.get('services', {})
     if set(services) != {'ai-daq-fae-backend'}:
         raise AssetError('unsupported compose service scope')
     service = services['ai-daq-fae-backend']
-    if any(service.get(k) for k in ('privileged', 'cap_add', 'group_add', 'devices', 'use_api_socket', 'cap_drop', 'tmpfs', 'read_only')):
-        raise AssetError('unsupported source security policy')
-    if any(str(opt).replace('=', ':').lower() == 'no-new-privileges:false' for opt in service.get('security_opt', [])):
-        raise AssetError('unsupported source security option')
-    if service.get('user') not in (None, '', '0', '0:0', 'root'):
-        raise AssetError('unsupported original user')
+    _execution_boundary(service, 'source')
     old_mounts = service.get('volumes', [])
-    if len(old_mounts) != 2 or {v.get('target') for v in old_mounts} != {'/app/data', '/run/daq-secrets'}:
-        raise AssetError('unsupported source mount scope')
-    if any(v.get('type') != 'bind' or set(v) - {'type', 'source', 'target', 'read_only', 'bind'}
-           or set(v.get('bind') or {}) - {'create_host_path'} for v in old_mounts):
-        raise AssetError('unsupported source mount semantics')
     mounts_by_target = {v['target']: v for v in old_mounts}
     if (mounts_by_target['/app/data'].get('source') != runtime['old_data_dir']
         or mounts_by_target['/app/data'].get('read_only', False)
@@ -911,12 +995,6 @@ def _config(runtime, rollback, source):
     files = service.get('env_file', [])
     if len(files) != 1 or files[0].get('path') != runtime['env_file']:
         raise AssetError('unsupported source env file scope')
-    ports = service.get('ports', [])
-    if len(ports) != 1 or (ports[0].get('host_ip'), str(ports[0].get('published')), ports[0].get('target'), ports[0].get('protocol', 'tcp')) != ('127.0.0.1', '8081', 8081, 'tcp'):
-        raise AssetError('source port mismatch')
-    networks = service.get('networks', {})
-    if set(networks) != {'camera-db', 'platform-edge'} or networks['platform-edge'].get('ipv4_address') != '172.31.0.9':
-        raise AssetError('source network mismatch')
     for key, expected_name in [('camera-db', 'deploy_default'), ('platform-edge', 'orbbec-agent-platform-edge')]:
         network = model.get('networks', {}).get(key, {})
         if network.get('external') is not True or network.get('name') != expected_name:
@@ -935,6 +1013,11 @@ def _config(runtime, rollback, source):
         _mount(rw + '/trace/daq_traces.jsonl', '/app/data/daq_traces.jsonl', False),
     ]
     service.pop('build', None)
+    # Compose 5.6 can synthesize an empty placement object while normalizing
+    # resource-only deploy settings; writing it back triggers a warning.
+    # The private effective-model comparison must still prove equivalence.
+    if isinstance(service.get('deploy'), dict) and service['deploy'].get('placement') == {}:
+        service['deploy'].pop('placement')
     service.update({'image': IMAGE, 'pull_policy': 'never', 'user': '0:0' if rollback else '21081:21081'})
     if not rollback:
         security = list(service.get('security_opt') or [])
@@ -943,6 +1026,7 @@ def _config(runtime, rollback, source):
         environment = dict(service.get('environment') or {})
         environment.update({'PYTHONDONTWRITEBYTECODE': '1', 'TMPDIR': '/tmp'})
         service.update({'read_only': True, 'cap_drop': ['ALL'], 'security_opt': security, 'environment': environment, 'tmpfs': ['/tmp:rw,noexec,nosuid,nodev,size=256m,uid=21081,gid=21081,mode=0700']})
+    _execution_boundary(service, 'rollback' if rollback else 'runtime')
     return model
 
 
@@ -964,6 +1048,11 @@ def _compare_effective(source, candidate, rollback):
 
 def _check_effective_policy(runtime, effective, rollback, desired):
     service = effective['services']['ai-daq-fae-backend']
+    _execution_boundary(service, 'rollback' if rollback else 'runtime')
+    for key, expected_name in [('camera-db', 'deploy_default'), ('platform-edge', 'orbbec-agent-platform-edge')]:
+        network = effective.get('networks', {}).get(key, {})
+        if network.get('external') is not True or network.get('name') != expected_name:
+            raise AssetError('effective network identity mismatch')
     if (service.get('image') != IMAGE or service.get('pull_policy') != 'never'
         or service.get('user') != ('0:0' if rollback else '21081:21081') or service.get('build')):
         raise AssetError('effective image or user policy mismatch')
@@ -1057,6 +1146,7 @@ def _validate_runtime(spec):
         raise AssetError('source data mount identity mismatch')
     source = _compose_model(runtime, False)
     effective_source = _compose_model(runtime, True)
+    _execution_boundary(effective_source.get('services', {}).get('ai-daq-fae-backend'), 'source')
     effective_environment = effective_source.get('services', {}).get('ai-daq-fae-backend', {}).get('environment')
     _validate_env(runtime['env_file'], runtime['env_sha256'], spec['expected']['secrets']['feedback-approval-keys-20261023.json']['sha256'], effective_environment)
     candidate = _config(runtime, False, source)
