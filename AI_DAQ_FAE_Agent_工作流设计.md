@@ -6,6 +6,14 @@
 
 本文是当前 DAQ 工作流的维护入口，包含实际实现、已知边界和坏例改进流程。历史任务书中的设计目标、已经部署的能力和未完成的能力分别说明。本批针对真实反馈的修复、候选身份及逐题结果见[修复记录](docs/reviews/2026-10-23-daq-real-feedback-repair.md)。**不得针对题目原文、测试编号或某个答案添加固定回复、推荐映射、补写结论或静默降级。**
 
+### 2026-10-30 提问人身份到平台观测（发布状态见回执）
+
+触发：平台能看到 DAQ 问答却不能确认提问人。实际源代码和生产正常 DSN 只读核验：17 个会话均有企业 owner、匹配 user_id 和 platform_enterprise 模式；最早失效在下游身份投影，原 cloud_sync 的 DAQ 分支不产生 verified_subject，后续 wire scope、姓名授权解析及列表组件仅认相机 Agent。
+
+沿现有约 10 秒 cloud-direct 同步补齐 opaque enterprise_member 引用，不同步昵称充当归属。引用仅来自验证登录上下文写入的 owner/type、匹配 user_id 和认证模式；缺失或冲突的历史保持未知。平台按 Agent 分组调用受限 DB 身份投影，每次核验当前管理会话与该 Agent 的 observation scope；有可信引用但缺姓名档案保留引用并显示姓名不可用。列表、详情和每轮共用该解析。DAQ 原有 session/turn/user HMAC 输入保持原样，问答、反馈、复审不改。
+
+相邻负例：切换账号不能读取或续写他人会话，相机/DAQ/SDK 管理权限互不代替；metadata 自报引用与昵称不能建立归属；缺 profile 不应让整页 503，外部坏密文仍显式失败。真实 Cookie/CSRF/DAQ PG 落库、独立 DatabaseAgentSource→CloudSyncWorker→加密副本→登录态列表/详情门已通过；提供方验证和回答模型在 Dev 为明确测试边界，未调用真实模型。此任务不改 DAQ 回答实现、固定共享 src、相机仓、知识或模型配置。实际平台/worker 发布、历史回填和可核验会话见[接入回执](docs/reviews/2026-10-30-questioner-identity-integration.md)。
+
 ### Thinking 前缀兼容（已发布）
 
 触发：相机侧真实 trace `28e9dd065ed3ab4800ceee8480672823` 为上游 HTTP 400，实际请求 ID 已取回；该次细分错误原文尚缺，不能把代码机制直接当作历史归因实证。DAQ 固定内核同样在收尾/纠错收缩 tools 并保留旧 thinking。严格本地假网关在真实序列化/fold 后复现前缀变化 400；不是业务知识缺证。
