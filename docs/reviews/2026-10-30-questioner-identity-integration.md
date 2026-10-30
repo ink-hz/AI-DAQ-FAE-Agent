@@ -27,3 +27,5 @@ Dev证据：DAQ新增真实Cookie/CSRF和PG持久化测试1通过（2账号、2�
 首候选发布前遇到并行UI切换，保护检查在改库前停止，重新核验最新86f5d9a2基线并保留其组合静态来源后才发布c134。worker重建一次后的后置检查曾拒绝正常Compose replace标签；经严格派生值、独立RED/GREEN及只读完整复核后完成收据，未重复重启健康worker。所有旧失败材料保留。
 
 备份集`20261030T011956089325Z-2da42c88`三个密文校验通过。原API/worker镜像及选择保留；worker重建后API回退需要fresh受审事务，不能强跑旧CID基线rollback，不恢复共享DB覆盖新记录。回滚未实际演练。完整实际版本、验证与回退见相邻平台仓`docs/operations/2026-10-30-daq-session-identity.md`及本机`tmp/daq-session-identity-20261030/retarget-v2/`。
+
+最终复核时，另一Session展示任务基于本次048e90d5发布纯静态层，当前API页面版本为`c6ee87f25e4562ee9ce84a4508491a3a089dbd4e`、镜像`sha256:15ad498db1afce24eb8064b72e64465643141dc6f745a44ebe12398053edc773`。worker仍为c134/048e90d5；5个身份后端文件实际摘要不变，DAQ身份相关3项显示组件检查通过。该后续版本继承本修复，不代表再次修改DAQ回答或重跑已通过的模型场景。
