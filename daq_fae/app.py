@@ -51,6 +51,7 @@ from daq_fae.response_language import localize_answer
 from daq_fae.api_transport import ChatRequest, LocalRequestRegistry, RequestRecord, is_local_peer
 from src.agent.session import SessionStore
 from src.api.stream import StreamHeartbeat, iter_with_heartbeat, sse_event
+from src.provider.session import provider_session_scope
 from src.api.concurrency import ChatConcurrencyGate
 from src.agent.tracing import TraceConfig, build_recorder, install_trace_ctx
 from src.agent.protocol import RUNTIME_FAILURE_OUTCOMES
@@ -795,7 +796,9 @@ def create_app(*, provider_mode: str | None = None, adapter=None,
                 def opening_events():
                     yield "session", {"session_id": session.session_id, "agent_id": AGENT_ID,
                                       "client_request_id": request.client_request_id}
-                    yield from runtime_events()
+                    # Every provider request of this conversation shares one gateway upstream.
+                    with provider_session_scope(session.session_id):
+                        yield from runtime_events()
 
                 for name, payload in opening_events():
                     encoded = sse_event(name, payload)

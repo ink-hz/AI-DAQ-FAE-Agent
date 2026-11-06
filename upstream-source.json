@@ -1,7 +1,7 @@
 {
   "repository": "AI-FAE-Agent",
-  "revision": "6bad94591dc4c40c29ad054b526c0ec526478607",
+  "revision": "7d906ea6a327ef4e12b6b577429c6ed4ffa13217",
   "deployed_basis_revision": "a6234f6be546efebb230ffc74bd9a00bebdc2814",
-  "source": "tracked git archive of src/ and requirements.txt at camera commit 6bad94591dc4c40c29ad054b526c0ec526478607, currently reachable from origin/feat/daq-delivery-units-20261020",
+  "source": "tracked git archive of src/ and requirements.txt at camera commit 7d906ea6a327ef4e12b6b577429c6ed4ffa13217 (6bad945 plus gateway session affinity), reachable from origin/daq-runtime/session-affinity-20261106",
   "purpose": "exact reviewed shared runtime snapshot with the opt-in DAQ answer delivery contract; camera defaults remain unchanged; replace with a protected pinned dependency when branch protection is verified"
 }

@@ -12,6 +12,7 @@ import httpx
 
 from src.agent.anthropic_transport import _gateway_error_diagnostic
 from src.config import ResolvedVisionConfig
+from src.provider.session import current_provider_metadata
 
 
 class VisionError(RuntimeError):
@@ -317,6 +318,7 @@ class AnthropicVisionAdapter(_BaseVisionAdapter):
                 "description": "提交图片中可核验的视觉观察和不确定性。",
                 "input_schema": observation_schema,
             }],
+            **({"metadata": metadata} if (metadata := current_provider_metadata()) else {}),
             "messages": [{
                 "role": "user",
                 "content": [

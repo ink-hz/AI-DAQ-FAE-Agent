@@ -12,6 +12,7 @@ from pathlib import Path
 import httpx
 import psycopg
 
+from src.provider.session import provider_session_scope
 from src.agent.anthropic_transport import AnthropicTransportError
 from src.agent.guardrails import categorize_refusal
 from daq_fae.thinking_prefix import DaqLoopRuntime as LoopRuntime
@@ -79,12 +80,17 @@ class DaqTaskOrchestrator:
                 include_answer = False
         return history
 
-    def handle_stream(self, *, session_id, user_message,
-                      planning_message=None,
-                      context_hints=None,
-                      required_attachment_source_ids=None,
-                      required_image_source_ids=None,
-                      continuation_guard=None, knowledge_role=None):
+    def handle_stream(self, *, session_id, **kwargs):
+        # Every provider request of this conversation shares one gateway upstream.
+        with provider_session_scope(session_id):
+            yield from self._handle_stream(session_id=session_id, **kwargs)
+
+    def _handle_stream(self, *, session_id, user_message,
+                       planning_message=None,
+                       context_hints=None,
+                       required_attachment_source_ids=None,
+                       required_image_source_ids=None,
+                       continuation_guard=None, knowledge_role=None):
         if required_attachment_source_ids or required_image_source_ids:
             raise ValueError("daq_task_attachments_not_available")
         session = self._sessions.get(session_id)

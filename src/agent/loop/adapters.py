@@ -23,6 +23,7 @@ import httpx
 
 from src.agent.anthropic_transport import request_buffered_anthropic_message
 from src.agent.provider_identity import normalize_provider_model
+from src.provider.session import current_provider_metadata
 
 _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 
@@ -256,6 +257,13 @@ class AnthropicAdapter:
             payload["output_config"] = {"effort": self.effort}
         if system:
             payload["system"] = system
+        metadata = current_provider_metadata()
+        if metadata is not None:
+            # Pins one conversation to one gateway upstream; outside the bound prefix.
+            payload["metadata"] = metadata
+        # The tool loop resends an append-only prefix every round; the marker
+        # is outside the thinking-bound prefix.
+        payload["cache_control"] = {"type": "ephemeral"}
         if tools is not None:
             payload["tools"] = [{
                 "name": t["function"]["name"],
